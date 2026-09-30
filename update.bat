@@ -3,16 +3,28 @@ rem Updates this folder to the latest version from GitHub (branch claude/elegant
 rem Keeps your .env, kalshi.key and trades.jsonl. Throws away any other edits you made to the code.
 title Arb Scanner - update
 cd /d "%~dp0"
-where git >nul 2>nul || (echo Git was not found on PATH. Install it from git-scm.com. & pause & exit /b 1)
+
+rem Find git: on PATH, or where Git for Windows installs it (Git Bash has it even when PATH does not).
+set "GIT=git"
+git --version >nul 2>nul && goto found
+for %%G in ("%ProgramFiles%\Git\cmd\git.exe" "%ProgramFiles(x86)%\Git\cmd\git.exe" "%LocalAppData%\Programs\Git\cmd\git.exe" "%ProgramFiles%\Git\bin\git.exe") do if exist %%G (set "GIT=%%~G" & goto found)
+echo Git was not found. Install it from https://git-scm.com/download/win and run this again.
+pause
+exit /b 1
+
+:found
 set BRANCH=claude/elegant-bell-qeagk3
 echo Close the dashboard window first if it is running.
 echo.
 echo Getting the latest changes from %BRANCH% ...
-git fetch origin %BRANCH% || (echo Could not reach GitHub. Check your internet connection. & pause & exit /b 1)
-git checkout -q -f main || (echo Could not switch to main. & pause & exit /b 1)
-git reset -q --hard FETCH_HEAD || (echo Update failed. & pause & exit /b 1)
+"%GIT%" fetch origin %BRANCH%
+if errorlevel 1 (echo Could not download from GitHub. Check your internet connection. & pause & exit /b 1)
+"%GIT%" checkout -q -f main
+if errorlevel 1 (echo Could not switch to main. & pause & exit /b 1)
+"%GIT%" reset -q --hard FETCH_HEAD
+if errorlevel 1 (echo Update failed. & pause & exit /b 1)
 echo.
-git log -1 --format="Up to date: %%h %%s (%%cr)"
+"%GIT%" log -1 --format="Up to date: %%h %%s (%%cr)"
 echo.
 echo Next: run run-tests.bat, then start-dashboard.bat.
 pause
