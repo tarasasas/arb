@@ -4,9 +4,10 @@ import base64
 import time
 
 
-def load_signer(key_id, key_path):
+def load_signer(key_id, key_path=None, key_pem=None):
     """Return sign(method, path) -> auth headers. `path` is the full URL path without the
-    query string, e.g. /trade-api/v2/markets."""
+    query string, e.g. /trade-api/v2/markets. The key comes from `key_pem` (PEM text) or the
+    file at `key_path`."""
     try:
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import padding
@@ -14,8 +15,12 @@ def load_signer(key_id, key_path):
     except ImportError as e:
         raise SystemExit("Kalshi API keys need the 'cryptography' package: pip install cryptography") from e
 
-    with open(key_path, "rb") as f:
-        key = serialization.load_pem_private_key(f.read(), password=None)
+    if key_pem:
+        pem = key_pem.encode()
+    else:
+        with open(key_path, "rb") as f:
+            pem = f.read()
+    key = serialization.load_pem_private_key(pem, password=None)
 
     def sign(method, path):
         ts = str(int(time.time() * 1000))

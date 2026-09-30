@@ -25,6 +25,9 @@ _load_env_file()
 KALSHI_API_KEY_ID = os.environ.get("KALSHI_API_KEY_ID", "").strip()
 _key_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "").strip()
 KALSHI_PRIVATE_KEY_PATH = str((PROJECT_ROOT / _key_path).resolve()) if _key_path else ""
+# Or the key itself (PEM text) in one variable, for hosts where a file is awkward, e.g. a cloud
+# environment's settings. Line breaks may be real newlines or written as \n.
+KALSHI_PRIVATE_KEY = os.environ.get("KALSHI_PRIVATE_KEY", "").strip().replace("\\n", "\n")
 KALSHI_BUDGET_FRACTION = 0.85      # leave headroom below the account's read budget
 
 # Optional Polymarket US API key (polymarket.us/developer). Needed only for "Make trade".

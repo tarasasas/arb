@@ -32,6 +32,15 @@ class SigningTests(unittest.TestCase):
                                 hashes.SHA256())
         self.assertEqual(h["KALSHI-ACCESS-KEY"], "key-id")
 
+    def test_key_given_as_text_verifies(self):
+        # KALSHI_PRIVATE_KEY: the PEM itself, e.g. from a cloud environment's settings.
+        key = ed25519.Ed25519PrivateKey.generate()
+        pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption()).decode()
+        h = load_signer("key-id", key_pem=pem)("GET", "/trade-api/v2/markets")
+        msg = f"{h['KALSHI-ACCESS-TIMESTAMP']}GET/trade-api/v2/markets".encode()
+        key.public_key().verify(base64.b64decode(h["KALSHI-ACCESS-SIGNATURE"]), msg)
+
     def test_ed25519_signature_verifies(self):
         key = ed25519.Ed25519PrivateKey.generate()
         sign = load_signer("key-id", self._write(key, serialization.PrivateFormat.PKCS8))

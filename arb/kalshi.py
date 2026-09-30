@@ -124,7 +124,9 @@ class KalshiClient:
     def __init__(self):
         signer = None
         self.auth_info = "public data, no API key"
-        if config.KALSHI_API_KEY_ID and config.KALSHI_PRIVATE_KEY_PATH:
+        if config.KALSHI_API_KEY_ID and config.KALSHI_PRIVATE_KEY:
+            signer = load_signer(config.KALSHI_API_KEY_ID, key_pem=config.KALSHI_PRIVATE_KEY)
+        elif config.KALSHI_API_KEY_ID and config.KALSHI_PRIVATE_KEY_PATH:
             if not os.path.exists(config.KALSHI_PRIVATE_KEY_PATH):
                 raise SystemExit(f"KALSHI_PRIVATE_KEY_PATH not found: {config.KALSHI_PRIVATE_KEY_PATH}")
             signer = load_signer(config.KALSHI_API_KEY_ID, config.KALSHI_PRIVATE_KEY_PATH)
