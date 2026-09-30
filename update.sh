@@ -10,4 +10,4 @@ git fetch origin "$BRANCH"
 git checkout -q -f main
 git reset -q --hard FETCH_HEAD
 git log -1 --format="Up to date: %h %s (%cr)"
-echo "Next: run-tests.bat, then start-dashboard.bat (or: python -m arb)"
+echo "Next: run-tests.bat, then start-dashboard.bat."

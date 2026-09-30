@@ -1,0 +1,3 @@
+# Keep line endings right on Windows checkouts: bash needs LF, cmd is happiest with CRLF.
+*.sh text eol=lf
+*.bat text eol=crlf

@@ -18,8 +18,7 @@ On Windows, double-click these files in this folder:
 | `scan-once.bat` | Runs one scan and prints the results in the window. |
 | `run-tests.bat` | Runs the unit tests. |
 | `setup.bat` | One-time setup for the Kalshi API key: installs `cryptography` and creates `.env`. |
-| `update.bat` | Gets the latest code from GitHub. Keeps your `.env`, `kalshi.key` and trade log, and throws away any other edits to the code. |
-| `update.sh` | The same as `update.bat`, for the terminal where `git` works (Git Bash, VS Code): `./update.sh`. |
+| `update.bat` | Gets the latest code from GitHub by running `update.sh` in Git Bash. Keeps your `.env`, `kalshi.key` and trade log, and throws away any other edits to the code. |
 
 Or run from a terminal:
 
