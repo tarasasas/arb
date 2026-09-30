@@ -8,7 +8,11 @@ rem Find git: on PATH, or where Git for Windows installs it (Git Bash has it eve
 set "GIT=git"
 git --version >nul 2>nul && goto found
 for %%G in ("%ProgramFiles%\Git\cmd\git.exe" "%ProgramFiles(x86)%\Git\cmd\git.exe" "%LocalAppData%\Programs\Git\cmd\git.exe" "%ProgramFiles%\Git\bin\git.exe") do if exist %%G (set "GIT=%%~G" & goto found)
-echo Git was not found. Install it from https://git-scm.com/download/win and run this again.
+rem GitHub Desktop ships its own git.
+for /d %%D in ("%LocalAppData%\GitHubDesktop\app-*") do if exist "%%~D\resources\app\git\cmd\git.exe" set "GIT=%%~D\resources\app\git\cmd\git.exe"
+if not "%GIT%"=="git" goto found
+echo Git was not found from here. Either run ./update.sh in the terminal where git works,
+echo or install Git from https://git-scm.com/download/win and run this again.
 pause
 exit /b 1
 
