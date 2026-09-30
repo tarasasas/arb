@@ -96,9 +96,11 @@ POLYMARKET_DEFAULT_COEF = 0.0695
 CATALOG_REFRESH_SECS = 300     # full market lists + game matching
 SUGGEST_REFRESH_SECS = 1800    # rebuild non-sports match suggestions
 CRYPTO_REFRESH_SECS = 20       # look for new 15-minute crypto Up/Down windows
-AUTO_ACCEPT_MATCHES = True     # scan confident non-sports matches without waiting for approval
-AUTO_MIN_EVENT_SCORE = 0.5     # question-level match score needed to auto-accept
-AUTO_MIN_OUTCOME_SCORE = 0.3   # outcome-level match score needed to auto-accept
+AUTO_ACCEPT_MATCHES = True     # scan non-sports matches without waiting for approval
+# Match scores needed to auto-accept. 0 accepts every suggestion; pairs whose prices mirror each other,
+# sit 25+ points apart, or settle on different data providers still wait for review (always fake arbs).
+AUTO_MIN_EVENT_SCORE = 0.0
+AUTO_MIN_OUTCOME_SCORE = 0.0
 FULL_SWEEP_SECS = 5            # pause between full sweeps of every watched contract (a sweep takes 10-40s)
 HOT_PAUSE_SECS = 0.5           # pause between re-checks of the near-arb "hot list" (a re-check takes ~1-2s)
 MIN_PROFIT_DOLLARS = 0.01      # hide opportunities below this guaranteed profit

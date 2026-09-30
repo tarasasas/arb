@@ -71,14 +71,24 @@ class MatcherTests(unittest.TestCase):
         bad = [("Republican Party 6%+", "Democrats, ≥6%"), ("Democrat 3%+", "Lamb, 5+ pts"),
                ("Flavio Bolsonaro", "Jair Bolsonaro"), ("By December 31, 2027", "Before March, 2027"),
                ("By December 31, 2026", "Before December"), ("Above 0.4%", "Above -0.4%"),
-               ("D House, R Senate", "R-House, D-Senate"), ("Billie Jean - Michael Jackson", "Billie Eilish")]
+               ("D House, R Senate", "R-House, D-Senate"), ("Billie Jean - Michael Jackson", "Billie Eilish"),
+               ("12+", "Above 12")]
         for a, b in bad:
             self.assertFalse(nonsports.outcomes_compatible(a, b), (a, b))
         good = [("By December 31, 2026", "Before 2027"), ("Mark Takano (D)", "Mark Takano"),
+                ("14+", "14 and above"), ("Democratic Party 16%+", "Democrats, 16% and above"),
                 ("Volodymyr Zelensky", "Volodymyr Zelenskyy"), ("20-25%", "20-25%"),
                 ("Sudans Emergency Response Rooms (ERRs)", "Sudan’s Emergency Response Rooms")]
         for a, b in good:
             self.assertTrue(nonsports.outcomes_compatible(a, b), (a, b))
+
+    def test_company_is_not_a_deadline_in_multi_outcome_questions(self):
+        pm = [pm_market("p-z", "Which Company Has #1 AI Model end of October?", "Z.ai", 0.02, 0.03, category="technology"),
+              pm_market("p-g", "Which Company Has #1 AI Model end of October?", "Google", 0.5, 0.52, category="technology")]
+        ev = [{"event_ticker": "KXBESTLLMCHINA-27", "title": "Will a Chinese AI model be #1 AI model this year?",
+               "sub_title": "", "category": "Science and Technology",
+               "markets": [k_market("KXBESTLLMCHINA-27", "KXBESTLLMCHINA-27", "Before 2027", 0.05, 0.06)]}]
+        self.assertEqual(nonsports.suggest(pm, ev, set(), set()), [])
 
     def test_at_large_and_cities(self):
         self.assertIn("alaska", nonsports.tokens("AK-AL House Election Winner"))

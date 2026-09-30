@@ -39,6 +39,7 @@ class Contract:
     winner: bool = False     # "X wins" market: margin > 0 is a plain win/loss, never a push
     game_label: str = ""     # human-readable, e.g. "ATL vs NO, Oct 5"
     note: str = ""           # "auto" for non-sports pairs matched automatically (not yet verified)
+    trade_until: str = ""    # ISO time trading stops (crypto windows); stale quotes after it are ignored
     # Top of book for buying each side: price per contract and size (None if unknown).
     ask: dict = field(default_factory=lambda: {YES: None, NO: None})
     ask_size: dict = field(default_factory=lambda: {YES: None, NO: None})

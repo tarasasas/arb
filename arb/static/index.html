@@ -56,7 +56,8 @@
   .leg { display: grid; grid-template-columns: 86px 1fr; gap: 2px 8px; margin-bottom: 4px; }
   .ex { font-size: 11.5px; font-weight: 600; letter-spacing: .02em; }
   .ex.kalshi { color: var(--kalshi); } .ex.poly { color: var(--poly); }
-  .leg .what { font-size: 13px; } .leg .id { font-size: 11.5px; color: var(--text-muted); word-break: break-all; }
+  .leg .what { font-size: 13px; } .leg .mkt { font-size: 12px; color: var(--text-secondary); display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } .leg .id { font-size: 11.5px; color: var(--text-muted); word-break: break-all; }
   .warn { display: inline-flex; gap: 4px; align-items: center; font-size: 12.5px; color: var(--text-secondary); white-space: nowrap; }
   .warn svg { flex: none; }
   .details td { background: var(--surface-0); }
@@ -64,6 +65,20 @@
   .bet { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
   .bet b { color: var(--text-primary); }
   .math { margin: 6px 0 14px; }
+  .callout { border-left: 3px solid var(--warning); background: var(--surface-1); border-radius: 6px;
+             padding: 6px 10px; margin: 2px 0 12px; font-size: 13px; }
+  .callout ul { margin: 2px 0 0 16px; padding: 0; } .callout li { margin: 2px 0; }
+  .callout.bad { border-left-color: var(--critical); }
+  .sumgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 760px; margin: 2px 0 10px; }
+  @media (max-width: 640px) { .sumgrid { grid-template-columns: 1fr; } }
+  .sumcard { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface-1); }
+  .sumcard .label { font-size: 12px; color: var(--text-secondary); }
+  .sumcard .big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0; }
+  .sumcard .sub { font-size: 12px; color: var(--text-secondary); }
+  table.steps { width: auto; min-width: 560px; border: 1px solid var(--border); border-radius: 8px; margin: 0 0 6px; }
+  table.steps th, table.steps td { padding: 5px 10px; font-size: 12.5px; }
+  details.sec { margin: 8px 0 0; } details.sec > summary { margin: 6px 0; font-size: 13.5px; }
+  details.sec > summary .muted { font-weight: 400; }
   .math .eq { font-variant-numeric: tabular-nums; margin: 2px 0; }
   .math table { width: auto; min-width: 520px; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
   .math th, .math td { padding: 5px 10px; font-size: 12.5px; }
@@ -80,6 +95,10 @@
   button { font: inherit; font-size: 12.5px; color: var(--text-primary); background: var(--surface-0);
            border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
   button:disabled { opacity: .6; cursor: default; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+  .tabs button { padding: 5px 12px; border-radius: 999px; font-size: 13px; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .tabs .n { opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
   button.trade { margin-top: 8px; font-weight: 600; border-color: var(--accent); color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 6px 16px; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start;
@@ -147,6 +166,7 @@
   </div>
 
   <h2>Opportunities</h2>
+  <div class="tabs" id="tabs-bar" role="tablist"></div>
   <div class="table-wrap">
     <table>
       <thead><tr>
@@ -170,8 +190,9 @@
   </div>
 
   <h2>Politics, economics, culture &amp; more <span class="muted" id="m-sub" style="font-weight:400"></span></h2>
-  <p class="caveat" style="margin-top:0">Confident matches are scanned automatically; when one shows up as an arb it's marked
-    <b>Auto-matched</b> with Correct / Wrong buttons. Below are the lower-confidence pairs for you to review.
+  <p class="caveat" style="margin-top:0">Every suggested match is scanned automatically; when one shows up as an arb it's marked
+    <b>Auto-matched</b> with Correct / Wrong buttons, so check it there. Only pairs that can't be the same outcome
+    wait below: prices that mirror each other, prices 25+ points apart, or rules naming different data providers.
     <b>Same</b> = YES on both sites is the same outcome; <b>Opposite</b> = Polymarket YES is Kalshi NO.
     A wrong match can look like a guaranteed arb and lose on both sides.</p>
   <div class="filters">
@@ -219,7 +240,8 @@ const OK_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="tr
 let state = null; const open = new Set();
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const money = v => v == null ? "–" : "$" + (Math.abs(v) < 0.005 ? 0 : Number(v)).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const cents = p => (p * 100).toFixed(p * 100 < 10 ? 2 : 1) + "¢";
 const pct = v => v == null ? "–" : (v * 100).toFixed(v * 100 >= 100 ? 0 : 2) + "%";
 const compact = n => n == null ? "–" : Number(n).toLocaleString(undefined, {notation: n >= 10000 ? "compact" : "standard", maximumFractionDigits: 1});
 const ago = iso => { if (!iso) return ""; const s = Math.round((Date.now() - new Date(iso)) / 1000);
@@ -252,24 +274,14 @@ function sizeFor(r, budget) {
   return calc(r, lo);
 }
 
-function betText(l, s) {
-  if (!s.n) return "";
-  if (l.exchange === "Polymarket" && l.side === "no") {
-    const bid = 1 - s.avg;                         // fills are stored as cost per contract (1 - bid)
-    return `Short <b>${s.n.toLocaleString()}</b> at avg bid ${bid.toFixed(3)}: receive ${money(s.n * bid)},
-      ${money(s.n)} locked → <b>${money(s.cost)}</b> cash + ${money(s.fee)} fee`;
-  }
-  return `Buy <b>${s.n.toLocaleString()}</b> ${l.side.toUpperCase()} at avg ${s.avg.toFixed(3)} = <b>${money(s.cost)}</b> + ${money(s.fee)} fee`;
-}
-function legHtml(l, s, depth) {
+// "Buy YES" / "Short" (Polymarket has no NO shares: taking NO means selling YES at the bid).
+const doText = l => l.exchange === "Polymarket" && l.side === "no" ? "Short YES" : `Buy ${l.side.toUpperCase()}`;
+function legHtml(l, s) {
   const cls = l.exchange === "Kalshi" ? "kalshi" : "poly";
-  const avail = depth && depth.length
-    ? `<div class="bet">Available now: <b>${compact(depth[0][1])}</b> at ${depth[0][0].toFixed(3)}` +
-      (depth.length > 1 ? `, ${compact(depth.slice(0, 3).reduce((a, [, q]) => a + q, 0))} up to ${depth[Math.min(2, depth.length - 1)][0].toFixed(3)}` : "") +
-      ` <span class="muted">(last scan)</span></div>` : "";
+  const what = s && s.n ? `<b>${doText(l)}</b> ${s.n.toLocaleString()} @ ${cents(s.avg)} = <b>${money(s.cost + s.fee)}</b>`
+                        : `<b>${doText(l)}</b> @ ${cents(l.price)}`;
   return `<div class="leg"><span class="ex ${cls}">${esc(l.exchange.toUpperCase())}</span>
-    <span class="what">${esc(l.action)} @ <b>${l.price.toFixed(3)}</b> · ${esc(l.title)}
-      ${s ? `<div class="bet">${betText(l, s)}</div>` : ""}${avail}<div class="id">${esc(l.market_id)}</div></span></div>`;
+    <span class="what">${what}<span class="mkt" title="${esc(l.title)}">${esc(l.title)}</span></span></div>`;
 }
 
 // ---- order-book depth + "match your fill" --------------------------------------------------
@@ -325,22 +337,31 @@ function hedgeResult(r, key) {
   return out;
 }
 
+function booksHtml(r, key) {
+  const u = uiFor(key);
+  return `<div class="depth"><div class="depth-head">
+      <button data-action="live" data-key="${esc(key)}" ${u.loading ? "disabled" : ""}>${u.loading ? "Checking…" : "Check live depth"}</button>
+      ${u.err ? `<span style="color:var(--critical)">${esc(u.err)}</span>` : ""}
+      <span class="muted">${esc(r.legs[0].market_id)} · ${esc(r.legs[1].market_id)}</span></div>
+      <div class="depth-grid">${depthTable(r, key, "kalshi")}${depthTable(r, key, "polymarket")}</div></div>`;
+}
 function tradeHelperHtml(r, key) {
   const u = uiFor(key);
   const opt = ex => `<option value="${ex}" ${u.first === ex ? "selected" : ""}>${EXNAME[ex]} (${r.legs[legIdx(ex)].side.toUpperCase()})</option>`;
-  return `<div class="helper">
-    <div class="depth"><div class="depth-head"><b>Order book right now</b>
-      <button data-action="live" data-key="${esc(key)}" ${u.loading ? "disabled" : ""}>${u.loading ? "Checking…" : "Check live depth"}</button>
-      ${u.err ? `<span style="color:var(--critical)">${esc(u.err)}</span>` : ""}</div>
-      <div class="depth-grid">${depthTable(r, key, "kalshi")}${depthTable(r, key, "polymarket")}</div></div>
-    <div class="fill"><b>Match your fill</b> <span class="muted">after the first leg fills, size the second one to it</span>
+  return `<div class="fill">
       <div class="fill-form">
         <label>First leg <select data-key="${esc(key)}" data-field="first">${opt("kalshi")}${opt("polymarket")}</select></label>
         <label>Shares filled <input data-key="${esc(key)}" data-field="shares" type="number" min="0" step="0.01" value="${esc(u.shares)}" placeholder="e.g. 101.3"></label>
         <label>Total paid incl. fees $ <input data-key="${esc(key)}" data-field="paid" type="number" min="0" step="0.01" value="${esc(u.paid)}" placeholder="e.g. 95.62"></label>
         ${pinned.has(key) ? `<button data-action="unpin" data-key="${esc(key)}">Done – unpin</button>` : ""}
       </div>
-      <div class="fill-result" data-result="${esc(key)}">${hedgeResult(r, key)}</div></div></div>`;
+      <div class="fill-result" data-result="${esc(key)}">${hedgeResult(r, key)}</div></div>`;
+}
+// Collapsible section whose open/closed state survives the table re-rendering every 2 seconds.
+function section(key, name, title, hint, body, openByDefault) {
+  const u = uiFor(key), isOpen = u.sec?.[name] ?? openByDefault;
+  return `<details class="sec" data-key="${esc(key)}" data-sec="${name}" ${isOpen ? "open" : ""}>
+    <summary>${title} <span class="muted">${hint}</span></summary>${body}</details>`;
 }
 
 // ---- make trade -------------------------------------------------------------------------------
@@ -565,23 +586,35 @@ async function checkLive(key) {
 
 function mathHtml(r, z) {
   if (!z.n) return `<div class="math">Too small to trade at this budget.</div>`;
-  const perK = (z.k.cost + z.k.fee) / z.n, perP = (z.p.cost + z.p.fee) / z.n, per = perK + perP;
-  const [lk, lp] = r.legs;
-  const rows = r.scenarios.map(s => {
-    const pl = s.total * z.n - z.capital;
-    return `<tr><td>${esc(s.outcome)}</td><td class="num">${money(s.kalshi)}</td><td class="num">${money(s.polymarket)}</td>
-      <td class="num">${money(s.total)}</td><td class="num">${money(s.total * z.n)}</td>
-      <td class="num profit">${pl >= 0 ? "+" : ""}${money(pl)}</td></tr>`; }).join("");
-  return `<div class="math"><b>The math</b>
-    <div class="eq">Cost per pair: Kalshi ${lk.side.toUpperCase()} ${z.k.avg.toFixed(4)} + fee ${(z.k.fee / z.n).toFixed(4)}
-      &nbsp;+&nbsp; Polymarket ${lp.side === "no" ? "short (1 − bid)" : "YES"} ${z.p.avg.toFixed(4)} + fee ${(z.p.fee / z.n).toFixed(4)}
-      &nbsp;=&nbsp; <b>$${per.toFixed(4)}</b></div>
-    <div class="eq">Worst-case payout per pair: <b>$${r.payout.toFixed(2)}</b> (every outcome below pays at least this)</div>
-    <div class="eq">Profit per pair: $${r.payout.toFixed(2)} − $${per.toFixed(4)} = <b>$${(r.payout - per).toFixed(4)}</b>
-      &nbsp;×&nbsp; ${z.n.toLocaleString()} pairs = <b class="profit">${money(z.profit)}</b> on ${money(z.capital)} invested (${pct(z.roi)})</div>
-    <table><thead><tr><th>If the game ends…</th><th class="num">Kalshi leg pays</th><th class="num">Polymarket leg pays</th>
-      <th class="num">Per pair</th><th class="num">× ${z.n.toLocaleString()}</th><th class="num">Your P&amp;L</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
+  const [lk, lp] = r.legs, n = z.n;
+  const step = (i, l, leg) => {
+    const short = l.exchange === "Polymarket" && l.side === "no";
+    const price = short ? `${cents(1 - leg.avg)} bid <span class="muted">(costs ${cents(leg.avg)})</span>` : cents(leg.avg);
+    return `<tr><td class="num">${i}</td><td>${l.exchange}</td><td><b>${doText(l)}</b></td>
+      <td class="num">${n.toLocaleString()}</td><td class="num">${price}</td><td class="num">${money(leg.cost)}</td>
+      <td class="num">${money(leg.fee)}</td><td class="num"><b>${money(leg.cost + leg.fee)}</b></td></tr>`;
+  };
+  const same = r.scenarios.every(sc => Math.abs(sc.total - r.payout) < 1e-9);
+  const back = same
+    ? `<div class="sub">$${r.payout.toFixed(2)} × ${n.toLocaleString()} pairs, whatever happens</div>`
+    : `<div class="sub">at least $${r.payout.toFixed(2)} × ${n.toLocaleString()}; more in some results (below)</div>`;
+  const outcomes = same ? "" : `<table class="steps"><thead><tr><th>If…</th><th class="num">Kalshi pays</th>
+      <th class="num">Polymarket pays</th><th class="num">You get back</th><th class="num">Profit</th></tr></thead><tbody>${
+      r.scenarios.map(sc => { const pl = sc.total * n - z.capital;
+        return `<tr><td>${esc(sc.outcome)}</td><td class="num">${money(sc.kalshi)}</td><td class="num">${money(sc.polymarket)}</td>
+          <td class="num">${money(sc.total * n)}</td><td class="num profit">${pl >= 0 ? "+" : ""}${money(pl)}</td></tr>`; }).join("")}</tbody></table>`;
+  return `<div class="math">
+    <div class="sumgrid">
+      <div class="sumcard"><div class="label">You pay</div><div class="big">${money(z.capital)}</div>
+        <div class="sub">${money(z.k.cost + z.k.fee)} Kalshi + ${money(z.p.cost + z.p.fee)} Polymarket, fees included</div></div>
+      <div class="sumcard"><div class="label">You get back</div><div class="big">${money(r.payout * n)}</div>${back}</div>
+      <div class="sumcard"><div class="label">Profit</div><div class="big profit">${money(z.profit)}</div>
+        <div class="sub">${pct(z.roi)}${z.annualized != null ? ` · ${pct(z.annualized)} a year` : ""} · paid out ${esc(localTime(r.closes))}</div></div>
+    </div>
+    <table class="steps"><thead><tr><th class="num">Step</th><th>Where</th><th>Do</th><th class="num">Shares</th>
+      <th class="num">Avg price</th><th class="num">Cost</th><th class="num">Fee</th><th class="num">Total</th></tr></thead>
+      <tbody>${step(1, lk, z.k)}${step(2, lp, z.p)}</tbody></table>
+    ${outcomes}</div>`;
 }
 function checksHtml(r) {
   const w = r.suspicious ? `<span class="warn alert">${WARN_ICON}Too good to be true</span>` : r.warnings.length
@@ -599,6 +632,26 @@ function checksHtml(r) {
   return w + simple + match + `<div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
     title="${on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
 }
+// ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
+const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
+let currentTab = "All";
+try { currentTab = localStorage.getItem("arb-tab") || "All"; } catch (e) {}
+const inTab = r => currentTab === "All" || (r.tab || "Other") === currentTab;
+function renderTabs(rows) {
+  const counts = { All: rows.length };
+  for (const r of rows) counts[r.tab || "Other"] = (counts[r.tab || "Other"] || 0) + 1;
+  document.getElementById("tabs-bar").innerHTML = TAB_ORDER
+    .filter(t => t === "All" || counts[t] || t === currentTab || t === "Sports")
+    .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
+    .join("");
+}
+document.getElementById("tabs-bar").addEventListener("click", e => {
+  const b = e.target.closest("button[data-tab]"); if (!b) return;
+  currentTab = b.dataset.tab;
+  try { localStorage.setItem("arb-tab", currentTab); } catch (e) {}
+  render(true);
+});
+
 function passes(r) {
   const lg = document.getElementById("f-league").value, q = document.getElementById("f-search").value.toLowerCase();
   if (lg && r.league !== lg) return false;
@@ -624,8 +677,10 @@ function render(force) {
 
   const minP = +document.getElementById("f-min").value || 0, minR = (+document.getElementById("f-roi").value || 0) / 100;
   const budget = +document.getElementById("f-budget").value || 0;
-  const opps = s.opportunities.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
-    .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR)
+  const sized = s.opportunities.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
+    .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR);
+  renderTabs(sized.map(o => o.r));
+  const opps = sized.filter(o => inTab(o.r))
     .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || b.z.profit - a.z.profit);
   // Rows you're mid-trade on: refresh their snapshot while the arb exists, keep showing it after.
   const live = new Set(s.opportunities.map(rowKey));
@@ -667,20 +722,24 @@ function render(force) {
         <div class="secondary">${esc(r.quantity)}</div>
         <div class="muted">closes ${esc(localTime(r.closes))}</div>
         ${stale ? `<div class="warn">${WARN_ICON}No longer an arb at current prices; numbers are from when it was</div>` : ""}</td>
-      <td>${legHtml(r.legs[0], z.k, r.depth?.kalshi)}${legHtml(r.legs[1], z.p, r.depth?.polymarket)}</td><td>${checksHtml(r)}</td></tr>`;
+      <td>${legHtml(r.legs[0], z.k)}${legHtml(r.legs[1], z.p)}</td><td>${checksHtml(r)}</td></tr>`;
     const det = open.has(key) || isPinned || document.getElementById("f-expand").checked ? `<tr class="details"><td colspan="8">
-      ${r.warnings.length ? `<b>Warnings</b><ul>${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-      ${tradeHelperHtml(r, key)}
+      ${r.warnings.length ? `<div class="callout ${r.suspicious ? "bad" : ""}"><b>Check before trading</b><ul>${
+        r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${mathHtml(r, z)}
-      <div class="rules"><div><b>Kalshi rules</b><pre>${esc(r.rules.kalshi)}</pre></div>
-        <div><b>Polymarket rules</b><pre>${esc(r.rules.polymarket)}</pre></div></div></td></tr>` : "";
+      ${section(key, "rules", "Rules on both sites", r.pair ? "read these: this pair was matched by wording" : "",
+        `<div class="rules"><div><b>Kalshi</b><pre>${esc(r.rules.kalshi)}</pre></div>
+         <div><b>Polymarket</b><pre>${esc(r.rules.polymarket)}</pre></div></div>`, !!(r.pair && r.pair.auto))}
+      ${section(key, "books", "Order books", "prices and depth for both legs", booksHtml(r, key), false)}
+      ${section(key, "fill", "Match your fill", "after the first leg fills, size the second one to it",
+        tradeHelperHtml(r, key), isPinned)}</td></tr>` : "";
     return row + det;
   }).join("") : `<tr><td colspan="8" class="empty">${s.last_prices ? "No opportunities match right now. The scanner keeps checking." : "Waiting for the first scan…"}</td></tr>`;
   renderRest(s);
 }
 
 function renderRest(s) {
-  document.getElementById("near").innerHTML = s.near_misses.filter(passes).slice(0, 25).map(r =>
+  document.getElementById("near").innerHTML = s.near_misses.filter(r => passes(r) && inTab(r)).slice(0, 25).map(r =>
     `<tr><td class="num">${(r.edge_per_contract * 100).toFixed(2)}¢</td>
       <td><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span><div class="secondary">${esc(r.quantity)}</div></td>
       <td>${r.legs.map(l => legHtml(l)).join("")}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">–</td></tr>`;
@@ -700,6 +759,10 @@ function renderRest(s) {
 }
 
 const opps = document.getElementById("opps");
+opps.addEventListener("toggle", e => {             // toggle doesn't bubble: listen in the capture phase
+  const d = e.target; if (!d.matches || !d.matches("details.sec")) return;
+  const u = uiFor(d.dataset.key); (u.sec ??= {})[d.dataset.sec] = d.open;
+}, true);
 opps.addEventListener("click", e => {
   const btn = e.target.closest("button[data-action]");
   if (btn) {

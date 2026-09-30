@@ -23,9 +23,14 @@ def screen(groups, min_edge):
     """Top-of-book screen. Returns candidates with per-contract edge > min_edge, best first.
     Edge = guaranteed payout - both prices - both unrounded taker fees."""
     out = []
+    now = datetime.now(timezone.utc)
     for (game_key, var), g in groups.items():
         for k in g["kalshi"]:
+            if _ended(k, now):
+                continue
             for p in g["polymarket"]:
+                if _ended(p, now):
+                    continue
                 for sk in SIDES:
                     ak = k.ask[sk]
                     if ak is None or ak <= 0 or ak >= 1:
@@ -45,6 +50,12 @@ def screen(groups, min_edge):
                                         "ak": ak, "ap": ap})
     out.sort(key=lambda c: -c["edge"])
     return out
+
+
+def _ended(c, now):
+    """True once a contract's trading window is over: its outcome is known and old quotes are stale."""
+    t = _parse_time(c.trade_until) if c.trade_until else None
+    return bool(t and t <= now)
 
 
 def _take(levels, n):
@@ -259,9 +270,9 @@ def leg_text(c, side, price):
             "side": side, "action": action, "price": round(price, 4)}
 
 
-def describe_var(var):
+def describe_var(var, note=""):
     if var[0] == "event":
-        return "Your approved match"
+        return {"structural": "Paired by contract terms", "auto": "Auto-matched by wording"}.get(note, "Your approved match")
     kind, period = var[0], var[1]
     per = "" if period == "FG" else f" ({period})"
     if kind == "margin":
@@ -336,6 +347,18 @@ def outcome_table(k, sk, p, sp):
              "total": r["pay"][0] + r["pay"][1]} for r in regions]
 
 
+# Dashboard tabs, from the Polymarket category of a non-sports pair.
+TABS = {"politics": "Politics", "geopolitics": "Politics", "culture": "Culture", "macro": "Economics",
+        "finance": "Finance", "technology": "Tech & science", "science": "Tech & science", "climate": "Weather",
+        "crypto": "Crypto"}
+
+
+def row_tab(k):
+    if k.var[0] != "event":
+        return "Sports"
+    return TABS.get(k.game_key.split(":", 1)[0].lower(), "Other")
+
+
 SUSPICIOUS_EDGE = 0.10    # per contract; real cross-exchange arbs are usually a cent or two
 
 
@@ -368,11 +391,13 @@ def to_row(cand, sizing, now):
     close = max(closes) if k.var[0] == "event" and closes else (closes[0] if closes else None)
     row = {
         "game": k.game_label or k.game_key.split(":", 1)[1], "league": k.game_key.split(":", 1)[0],
-        "quantity": describe_var(k.var), "payout": cand["payout"], "edge_per_contract": round(cand["edge"], 4),
+        "quantity": describe_var(k.var, k.note), "payout": cand["payout"], "edge_per_contract": round(cand["edge"], 4),
         "legs": [leg_text(k, cand["sk"], cand["ak"]), leg_text(p, cand["sp"], cand["ap"])],
         "rules": {"kalshi": k.rules, "polymarket": p.rules},
         "warnings": (explain_suspicious(cand, now) if too_good else []) + trade_warnings(cand) + warnings_for(k, p, now),
+        "tab": row_tab(k),
         "pm_short": cand["sp"] == NO,
+        "trade_until": k.trade_until or p.trade_until or None,
         "not_simple": not_simple_reasons(cand),
         "suspicious": too_good, "closes": close.isoformat() if close else None,
         "depth": cand.get("depth"),

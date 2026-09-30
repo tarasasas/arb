@@ -6,7 +6,7 @@ close, and a tie counts as Up/Yes on both. A pair needs the same coin, the same 
 and the same price to beat (the open value), so there is nothing to approve by hand.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Kalshi series listing 15-minute up/down windows, by coin symbol as Polymarket writes it.
 KALSHI_UPDOWN_15M = {"btc": "KXBTC15M", "eth": "KXETH15M", "sol": "KXSOL15M", "xrp": "KXXRP15M",
@@ -46,8 +46,10 @@ def kalshi_series_for(pm_markets):
     return sorted(KALSHI_UPDOWN_15M[c] for c in coins if c in KALSHI_UPDOWN_15M)
 
 
-def pairs(pm_markets, kalshi_markets):
-    """Rows in the approved-pair format for every identical Up/Down window on both exchanges."""
+def pairs(pm_markets, kalshi_markets, now=None):
+    """Rows in the approved-pair format for every identical Up/Down window on both exchanges that is
+    still trading. After the window closes the result is known and leftover quotes are stale."""
+    now = now or datetime.now(timezone.utc)
     by_window = {}
     for k in kalshi_markets:
         if k.get("strike_type") != "greater_or_equal" or k.get("status") not in ("active", "open", None):
@@ -65,8 +67,11 @@ def pairs(pm_markets, kalshi_markets):
         if strike is None or abs(beat - strike) > 0.005:
             continue                         # different open value: not the same window after all
         start, end = _time(t["windowStart"]), _time(t["windowEnd"])
+        if not end or end <= now:
+            continue
         out.append({"pm": m["slug"], "kalshi": k["ticker"], "relation": "same", "structural": True,
                     "label": f"{coin.upper()} Up or Down 15 min, {start:%b %d %H:%M}–{end:%H:%M} UTC",
+                    "trade_until": t["windowEnd"],
                     "question": m.get("question") or "", "pm_label": f"Up from ${beat:,.2f}",
                     "k_label": k.get("yes_sub_title") or "", "k_title": k.get("title") or ""})
     return out

@@ -63,6 +63,9 @@ More filters above the table (the browser remembers them):
   - an auto-matched pair you haven't verified;
   - too good to be true.
 - **Settles within N days:** hides anything that ties money up longer.
+- **Tabs above the table** (All, Sports, Politics, Economics, Crypto, Culture, Weather, Tech &
+  science, Finance) split the opportunities by category and show a count on each. The browser
+  remembers the tab you picked.
 
 The opportunity size is the smaller of the two legs' available shares at profitable prices.
 Each leg shows how many shares are available at its best price. The details panel adds:
@@ -94,10 +97,22 @@ about 17 market-data requests per second.
 `.env` and `*.key` are git-ignored. The key is only used to sign read requests, and the
 scanner never places orders. The dashboard header shows which access mode is active.
 
-## Politics, economics, culture & more (you approve the matches)
+## Politics, economics, culture & more (matched automatically, you check them)
 
-Non-sports markets have no team codes, so small wording differences can change what a
-market means. The scanner therefore suggests pairs and scans only the ones you approve.
+Non-sports markets have no team codes, so the scanner matches them by wording. Every match
+it finds is scanned right away. When one shows up as an opportunity it's marked
+**Auto-matched** with **Correct match** / **Wrong match** buttons: read both rules there
+before trading.
+
+Three kinds of pair are never scanned automatically, because they are always fake arbs:
+
+- prices that mirror each other;
+- prices 25 or more points apart;
+- rules that name different data providers.
+
+These wait for you in the review list instead. To go back to approving only confident
+matches, raise `AUTO_MIN_EVENT_SCORE` and `AUTO_MIN_OUTCOME_SCORE` in `arb/config.py`
+(0.5 and 0.3 were the old values).
 
 1. **Suggestions.** Every 30 minutes, every open Polymarket non-sports question is compared
    with Kalshi's events. Matching uses rare shared words, numbers, and state and district
@@ -105,14 +120,14 @@ market means. The scanner therefore suggests pairs and scans only the ones you a
    types ("margin" vs "winner").
 2. **Outcome pairing.** Within a matched question, outcomes such as candidates or price
    thresholds are paired. A range ("20–25%") is never paired with a threshold ("25+").
-3. **Review on the dashboard.** The *Politics, economics, culture & more* section shows each
-   pair with both prices, a hint, and both rules. The hint says "prices agree → likely Same"
+3. **Review on the dashboard.** The *Politics, economics, culture & more* section shows the
+   pairs held back for review, with both prices, a hint, and both rules. The hint says "prices agree → likely Same"
    or "prices mirror → likely Opposite". For each pair, click one of:
    - **Same:** YES on both sites is the same outcome.
    - **Opposite:** Polymarket YES is Kalshi NO.
    - **Reject.**
    - **Not the same question:** hides the whole card.
-4. **Scanning.** Approved pairs join the normal scan within seconds. The opportunities
+4. **Scanning.** Auto-matched and approved pairs join the normal scan within seconds. The opportunities
    table, the math, "Match your fill" and Make trade all work on them.
 
 Decisions are saved in `matches.json`. Remove an approved pair from the *Approved pairs*

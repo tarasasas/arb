@@ -14,6 +14,15 @@ from .polymarket import PolymarketClient
 DEPTH_LEVELS = 25      # order-book price levels kept per leg for the dashboard
 
 
+def _cand_key(cand):
+    return (cand["k"].market_id, cand["sk"], cand["p"].market_id, cand["sp"])
+
+
+def _row_key(row):
+    k, p = row["legs"]
+    return (k["market_id"], k["side"], p["market_id"], p["side"])
+
+
 class Scanner:
     def __init__(self, log_to_console=True):
         self.kalshi = KalshiClient()
@@ -211,7 +220,7 @@ class Scanner:
                                                         if e.get("category") != "Sports")}
         self.suggest_time = time.time()
         self.log(f"Non-sports: {len(auto)} pairs auto-matched and scanned; {sum(len(g['pairs']) for g in groups)} "
-                 f"lower-confidence pairs left for review ({time.time() - t0:.0f}s)")
+                 f"held back for review (prices mirror or far apart, or different data providers) ({time.time() - t0:.0f}s)")
         self.refresh_pairs()
 
     def matching_snapshot(self, q="", category="", offset=0, limit=20):
@@ -290,11 +299,14 @@ class Scanner:
         now = engine.now_utc()
         opportunities, near = [], []
         book_budget = 15 if hot else 60        # Polymarket book fetches per cycle
-        fetched = set()
+        fetched, unchecked = set(), set()
         for cand in cands:
-            if cand["edge"] > 0 and book_budget > 0:
+            pm_slug = cand["p"].market_id
+            if cand["edge"] > 0 and book_budget <= 0 and pm_slug not in fetched:
+                unchecked.add(_cand_key(cand))  # out of book fetches: keep its last row rather than drop it
+            if cand["edge"] > 0 and (book_budget > 0 or pm_slug in fetched):
                 km = source[("kalshi", cand["k"].market_id)]
-                pm = source[("polymarket", cand["p"].market_id)]
+                pm = source[("polymarket", pm_slug)]
                 if pm.slug not in fetched:
                     fetched.add(pm.slug)
                     book_budget -= 1
@@ -315,9 +327,21 @@ class Scanner:
                 if sizing and sizing["profit"] >= config.MIN_PROFIT_DOLLARS:
                     opportunities.append(engine.to_row(cand, sizing, now))
                     continue
-            if len(near) < config.MAX_NEAR_MISSES:
+            if len(near) < config.MAX_NEAR_MISSES and _cand_key(cand) not in unchecked:
                 near.append(engine.to_row(cand, None, now))
 
+        # A pass only replaces the rows it actually re-checked. The hot pass covers a few markets and
+        # fetches at most 15 books, so without this the table dropped from ~50 rows to 15 between sweeps.
+        covered = {(c.exchange, c.market_id) for c in contracts}
+        with self.lock:
+            previous = self.state["opportunities"]
+        found = {_row_key(r) for r in opportunities}
+        for r in previous:
+            key = _row_key(r)
+            if key in found or (r.get("trade_until") and r["trade_until"].replace("Z", "+00:00") <= now.isoformat()):
+                continue
+            if key in unchecked or (hot and not {("kalshi", key[0]), ("polymarket", key[2])} <= covered):
+                opportunities.append(r)
         opportunities.sort(key=lambda r: -r["profit"])
         secs = round(time.time() - t0, 1)
         with self.lock:

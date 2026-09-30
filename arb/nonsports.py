@@ -13,6 +13,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
+from .crypto import KALSHI_UPDOWN_15M
 from .engine import source_mismatch
 from .kalshi import KalshiMarket
 from .model import Contract
@@ -71,6 +72,7 @@ HARD_CONCEPTS = {"nomination", "core", "goods", "services", "shelter", "energy",
 INDICATORS = {"cpi", "ppi", "pce", "gdp", "unemployment", "payrolls", "jobless", "claims", "retail"}
 TOP_N_RE = re.compile(r"\btop[- ](\d+)\b", re.I)
 MONTH_NAMES = set(MONTHS.values()) | {"may"}
+UPDOWN_SERIES = set(KALSHI_UPDOWN_15M.values())
 MONTHS_ORDER = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 PRICE_THRESHOLD_WORDS = {"above", "below", "over", "under", "reach", "hit", "dip", "range", "between"}
 OFFICES = {"house", "senate", "governor", "mayor", "president", "parliament", "minister"}
@@ -195,14 +197,22 @@ def _deadline_months(label):
     return out
 
 
-INCLUSIVE_RE = re.compile(r"\+|≥|\bor (?:more|above|higher|greater)\b|\bat least\b", re.I)
-STRICT_RE = re.compile(r"\b(?:above|over|more than|greater than)\b|>(?!=)", re.I)
+INCLUSIVE_RE = re.compile(r"\+|≥|\b(?:or|and) (?:more|above|higher|greater|up|over)\b|\bat least\b", re.I)
+STRICT_RE = re.compile(r"(?<!or )(?<!and )\b(?:above|over|more than|greater than)\b|>(?!=)", re.I)
 
 
 def _bound(label):
     """'inclusive' ('90+', 'at least 16'), 'strict' ('Above 90'), or None."""
     inc, strict = bool(INCLUSIVE_RE.search(label or "")), bool(STRICT_RE.search(label or ""))
     return "inclusive" if inc and not strict else "strict" if strict and not inc else None
+
+
+DEADLINE_RE = re.compile(r"^\s*(?:before|by|in|on or before|no later than)\b.*\d|^\s*20[2-4]\d\s*$", re.I)
+
+
+def _is_deadline(label):
+    """'Before 2027', 'By December 31, 2026', 'In 2026': a date outcome rather than a who/what/how-much."""
+    return bool(DEADLINE_RE.search(label or ""))
 
 
 def outcomes_compatible(pm_label, k_label):
@@ -333,6 +343,8 @@ def pm_questions(pm_markets):
     for m in pm_markets:
         if m.get("closed") or not m.get("active") or m.get("category") == "sports":
             continue
+        if m.get("assetPriceTerms"):
+            continue                  # automated crypto markets are paired by contract terms (crypto.py), never by wording
         groups[(m.get("question") or m["slug"], str(m.get("endDate"))[:10])].append(m)
     out = []
     for (question, end), ms in groups.items():
@@ -344,7 +356,7 @@ def pm_questions(pm_markets):
 def kalshi_questions(events):
     out = []
     for e in events:
-        if e.get("category") == "Sports":
+        if e.get("category") == "Sports" or (e.get("series_ticker") or e["event_ticker"].split("-")[0]) in UPDOWN_SERIES:
             continue
         ms = [m for m in e.get("markets") or [] if m.get("status") in ("active", "open", None)]
         if ms:
@@ -492,6 +504,8 @@ def _pair_outcomes(q, k, score, decided):
                     continue                    # "20-25%" bucket is not the same market as "25+"
                 if not outcomes_compatible(_pm_outcome_text(q, pm), km.get("yes_sub_title") or km.get("title") or ""):
                     continue
+                if len(pms) > 1 and _is_deadline(km.get("yes_sub_title")) and not _is_deadline(_pm_label(pm)):
+                    continue                    # "Which company…? Z.ai" (who) is not "Before 2027" (when)
                 ky, py = years(km.get("yes_sub_title") or ""), pm_years(f"{q['question']} {_pm_label(pm)}")
                 if ky and py and not ky & py:
                     continue                    # "Hike in 2026?" is not "Next hike before 2028"
@@ -623,9 +637,10 @@ def approved_contracts(approved, kalshi_markets, pm_markets, conflicts=None):
         k_op = ">"                                  # Kalshi YES = the event
         p_op = ">" if a["relation"] == "same" else "<"
         note = "structural" if a.get("structural") else "auto" if a.get("auto") else ""
+        until = a.get("trade_until", "")
         contracts.append(Contract("kalshi", km.ticker, key, var, k_op, 0.5, km.title, km.rules, False, km.fee_coef,
-                                  km.close_time, False, True, label, note))
+                                  km.close_time, False, True, label, note, trade_until=until))
         contracts.append(Contract("polymarket", pm.slug, key, var, p_op, 0.5, pm.title, pm.rules, False, pm.fee_coef,
-                                  pm.start_time, False, True, label, note))
+                                  pm.start_time, False, True, label, note, trade_until=until))
         source[("kalshi", km.ticker)], source[("polymarket", pm.slug)] = km, pm
     return contracts, source
