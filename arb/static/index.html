@@ -252,7 +252,9 @@ const localTime = iso => iso ? new Date(iso).toLocaleString(undefined, {weekday:
 const take = (levels, n) => { const out = []; let left = n;
   for (const [p, q] of levels) { if (left <= 0) break; const t = Math.min(q, left); out.push([p, t]); left -= t; } return out; };
 const feeRaw = (fills, coef) => fills.reduce((s, [p, q]) => s + coef * q * p * (1 - p), 0);
-const kalshiFee = (f, c) => Math.ceil(feeRaw(f, c) * 100 - 1e-7) / 100;                 // round up to the cent
+// Kalshi rounds cost + fee up to the cent (sub-cent prices like 12.3¢ exist); the rounding counts as fee.
+const kalshiFee = (f, c) => { const cost = f.reduce((s, [p, q]) => s + p * q, 0);
+  return Math.ceil((cost + feeRaw(f, c)) * 100 - 1e-7) / 100 - cost; };
 const pmFee = (f, c) => { const x = feeRaw(f, c) * 100, fl = Math.floor(x);              // banker's rounding
   return (Math.abs(x - fl - 0.5) < 1e-7 ? (fl % 2 === 0 ? fl : fl + 1) : Math.round(x)) / 100; };
 const sum = f => f.reduce((s, [p, q]) => s + p * q, 0);

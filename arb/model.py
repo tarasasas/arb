@@ -110,8 +110,12 @@ def _exact_fee(fills, coef):
 
 
 def kalshi_fee(fills, coef):
-    """fills: [(price, qty)]. Kalshi rounds the order's fee up to the cent."""
-    return float(_exact_fee(fills, coef).quantize(CENT, rounding=ROUND_CEILING))
+    """fills: [(price, qty)]. Kalshi rounds the order's balance change (cost + fee) up to the cent
+    (docs.kalshi.com, Fee Rounding), so on sub-cent prices like 12.3c the rounding lands in the fee.
+    Returned as the fee on top of the exact cost."""
+    cost = sum((Decimal(str(p)) * Decimal(str(q)) for p, q in fills), Decimal(0))
+    total = (cost + _exact_fee(fills, coef)).quantize(CENT, rounding=ROUND_CEILING)
+    return float(total - cost)
 
 
 def polymarket_fee(fills, coef):

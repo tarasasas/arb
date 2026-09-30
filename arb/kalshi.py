@@ -3,8 +3,10 @@
 import os
 import re
 import urllib.error
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .http import RateLimitedClient
@@ -120,6 +122,36 @@ def parse_market(m, series_info, fee_coef):
     return km
 
 
+def _ts(s):
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def effective_multiplier(series_mult, changes, now, horizon_secs):
+    """Fee multiplier for one event: the series' own, replaced by the latest event override already
+    in effect (None clears it). Overrides scheduled within `horizon_secs` also count, and the higher
+    rate wins, because fees are only re-read that often (e.g. a playoff game going from 0.5x to 1x)."""
+    current, soon = series_mult, []
+    for ts, mult in sorted(changes, key=lambda c: c[0] or datetime.min.replace(tzinfo=timezone.utc)):
+        value = series_mult if mult is None else float(mult)
+        if ts is None or ts <= now:
+            current = value
+        elif ts <= now + timedelta(seconds=horizon_secs):
+            soon.append(value)
+    return max([current] + soon)
+
+
+def apply_fee_overrides(markets, overrides, now, horizon_secs):
+    """Set each market's taker coefficient from its event's fee override, if it has one."""
+    for m in markets:
+        changes = overrides.get(m.event_ticker)
+        if changes:
+            series_mult = m.fee_coef / config.KALSHI_TAKER_COEF
+            m.fee_coef = config.KALSHI_TAKER_COEF * effective_multiplier(series_mult, changes, now, horizon_secs)
+
+
 class KalshiClient:
     def __init__(self):
         signer = None
@@ -170,6 +202,22 @@ class KalshiClient:
             mult = s.get("fee_multiplier")
             out[s["ticker"]] = config.KALSHI_TAKER_COEF * (1.0 if mult is None else float(mult))
         return out
+
+    def event_fee_overrides(self):
+        """{event_ticker: [(scheduled time, multiplier or None)]}: per-event fee overrides layered on
+        top of the series fee (GET /events/fee_changes)."""
+        out, cursor = defaultdict(list), None
+        while True:
+            params = {"limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            d = self.http.get("/events/fee_changes", params)
+            changes = d.get("event_fee_changes") or []
+            for c in changes:
+                out[c["event_ticker"]].append((_ts(c.get("scheduled_ts")), c.get("fee_multiplier_override")))
+            cursor = d.get("cursor")
+            if not cursor or not changes:
+                return dict(out)
 
     def open_events(self, log=print):
         """Every open event with its markets nested (the endpoint excludes combos)."""
@@ -244,14 +292,20 @@ class KalshiClient:
                     m = by_ticker[t]
                     m.levels, m.yes_ask, m.no_ask = {}, None, None
                 continue
+            seen = set()
             for ob in d.get("orderbooks", []):
                 m = by_ticker.get(ob.get("ticker"))
                 if not m:
                     continue
+                seen.add(m.ticker)
                 m.levels = buy_levels(ob.get("orderbook_fp") or {})
                 buy_yes, buy_no = m.levels["yes"], m.levels["no"]
                 m.yes_ask, m.yes_ask_size = buy_yes[0] if buy_yes else (None, None)
                 m.no_ask, m.no_ask_size = buy_no[0] if buy_no else (None, None)
+            for t in chunk:
+                if t not in seen:            # not in the reply (closed, halted): don't keep last cycle's book
+                    m = by_ticker[t]
+                    m.levels, m.yes_ask, m.no_ask = {}, None, None
 
     def live_levels(self, ticker):
         """Current depth for buying each side of one market: {"yes": [...], "no": [...]}."""

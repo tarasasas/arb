@@ -6,7 +6,7 @@ import traceback
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 
-from . import config, crypto, engine, matching, nonsports
+from . import config, crypto, engine, kalshi, matching, nonsports
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
 from .polymarket import PolymarketClient
@@ -37,6 +37,7 @@ class Scanner:
         self.store = MatchStore()
         self.sports_cat, self.pairs_cat = ([], {}), ([], {})
         self.series_fees = {}
+        self.fee_overrides = {}         # Kalshi per-event fee overrides (e.g. playoff games)
         self.suggestions, self.suggest_time = [], 0.0
         self.suggest_state = {"status": "waiting"}
         self._pairs_pending = False
@@ -82,10 +83,16 @@ class Scanner:
     def refresh_catalog(self):
         t0 = time.time()
         self.log("Loading sports markets from both exchanges...")
-        with ThreadPoolExecutor(2) as pool:
+        with ThreadPoolExecutor(3) as pool:
             pm_job = pool.submit(self.pm.load_sports_markets, self.log)
             k_job = pool.submit(self.kalshi.load_sports_markets, self.log)
+            fee_job = pool.submit(self.kalshi.event_fee_overrides)
             pmarkets, kmarkets = pm_job.result(), k_job.result()
+            try:
+                self.fee_overrides = fee_job.result()
+            except Exception as e:           # keep the last known overrides rather than none
+                self.log(f"Couldn't load Kalshi event fee overrides: {e!r}")
+        kalshi.apply_fee_overrides(kmarkets, self.fee_overrides, engine.now_utc(), config.CATALOG_REFRESH_SECS + 60)
         self.log(f"Polymarket: {len(pmarkets)} spread/total/winner markets in configured leagues")
         self.log(f"Kalshi: {len(kmarkets)} spread/total/winner markets in configured leagues")
 
@@ -141,6 +148,8 @@ class Scanner:
                    for t, m in raw_k.items() if m.get("status") in ("active", "open")}
             pms = {s: nonsports.pm_market_obj(m, config.POLYMARKET_DEFAULT_COEF)
                    for s, m in raw_p.items() if m.get("active") and not m.get("closed")}
+            kalshi.apply_fee_overrides(kms.values(), self.fee_overrides, engine.now_utc(),
+                                       config.CATALOG_REFRESH_SECS + 60)
             contracts, source = nonsports.approved_contracts(approved, kms, pms, conflicts)
             for c in conflicts:
                 self.log(f"Not scanning {c['pm']} ↔ {c['kalshi']}: {c['why']}. Remove it under Approved pairs.")

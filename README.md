@@ -245,7 +245,10 @@ trigger orders. The server listens on localhost only.
 ## Things the numbers assume
 
 - **Taker fees only.**
-  - Kalshi: `0.07 × series fee_multiplier × C × P × (1−P)`.
+  - Kalshi: `0.07 × fee_multiplier × C × P × (1−P)`. The multiplier is the series' own, unless
+    Kalshi overrides it for one event (playoff games often go from 0.5× to 1×). The scanner loads
+    these overrides and uses the higher rate if one starts before the next reload. Kalshi rounds
+    the order's cost + fee up to the cent, which matters on sub-cent prices such as 12.3¢.
   - Polymarket: `feeCoefficient × C × p × (1−p)` (currently 0.0695).
 - **Buy NO on Polymarket US is a short of YES.** You receive the bid and $1 is held as margin, so
   each share costs `1 − bid`, the same as buying NO. The dashboard shows it as Buy NO at `1 − bid`.
