@@ -1,0 +1,11 @@
+# Secrets
+.env
+*.key
+*.pem
+
+# Trade log (your account activity)
+trades.jsonl
+
+# Python
+__pycache__/
+*.pyc

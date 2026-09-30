@@ -1,0 +1,508 @@
+{
+ "approved": [
+  {
+   "pm": "tac-nobel-peace-2026-10-09-tamham",
+   "kalshi": "KXNOBELPEACE-26-TAM",
+   "relation": "same",
+   "at": "2026-09-30T17:46:36.326020+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Tamim bin Hamad Al Thani",
+   "k_label": "Tamim bin Hamad Al Thani",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-icj",
+   "kalshi": "KXNOBELPEACE-26-ICJ",
+   "relation": "same",
+   "at": "2026-09-30T17:46:36.727724+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "International Court of Justice (ICJ)",
+   "k_label": "International Court of Justice (ICJ)",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-popleo",
+   "kalshi": "KXNOBELPEACE-27-PLEO",
+   "relation": "same",
+   "at": "2026-09-30T17:46:37.058909+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Pope Leo XIV",
+   "k_label": "Pope Leo XIV",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-chd",
+   "kalshi": "KXNOBELPEACE-26-CE",
+   "relation": "same",
+   "at": "2026-09-30T17:46:37.743222+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Centre for Humanitarian Dialogue",
+   "k_label": "Centre for Humanitarian Dialogue",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-dwb",
+   "kalshi": "KXNOBELPEACE-26-DOC",
+   "relation": "same",
+   "at": "2026-09-30T17:46:38.077271+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Doctors Without Borders",
+   "k_label": "Doctors Without Borders",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-yulnav",
+   "kalshi": "KXNOBELPEACE-27-YNAV",
+   "relation": "same",
+   "at": "2026-09-30T17:46:38.380387+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Yulia Navalnaya",
+   "k_label": "Yulia Navalnaya",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-elomus",
+   "kalshi": "KXNOBELPEACE-26-ELO",
+   "relation": "same",
+   "at": "2026-09-30T17:46:39.020952+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Elon Musk",
+   "k_label": "Elon Musk",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-dontru",
+   "kalshi": "KXNOBELPEACE-26-DJT",
+   "relation": "same",
+   "at": "2026-09-30T17:46:39.495264+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Donald Trump",
+   "k_label": "Donald Trump",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-fraalb",
+   "kalshi": "KXNOBELPEACE-26-FRA",
+   "relation": "same",
+   "at": "2026-09-30T17:46:40.323519+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Francesca Albanese",
+   "k_label": "Francesca Albanese",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-narmoh",
+   "kalshi": "KXNOBELPEACE-26-NAR",
+   "relation": "same",
+   "at": "2026-09-30T17:46:42.244935+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Narges Mohammadi",
+   "k_label": "Narges Mohammadi",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-shesha",
+   "kalshi": "KXNOBELPEACE-27-SSHA",
+   "relation": "same",
+   "at": "2026-09-30T17:46:42.570100+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Shehbaz Sharif",
+   "k_label": "Shehbaz Sharif",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-stc",
+   "kalshi": "KXNOBELPEACE-27-STC",
+   "relation": "same",
+   "at": "2026-09-30T17:46:42.881199+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Save the Children",
+   "k_label": "Save the Children",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-unrwa",
+   "kalshi": "KXNOBELPEACE-27-UNRWA",
+   "relation": "same",
+   "at": "2026-09-30T17:46:43.597900+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "UNRWA",
+   "k_label": "UNRWA",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-cpj",
+   "kalshi": "KXNOBELPEACE-27-CPJ",
+   "relation": "same",
+   "at": "2026-09-30T17:46:44.606444+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Committee to Protect Journalists (CPJ)",
+   "k_label": "Committee to Protect Journalists",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-icc",
+   "kalshi": "KXNOBELPEACE-27-ICC",
+   "relation": "same",
+   "at": "2026-09-30T17:46:45.581705+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "International Criminal Court (ICC)",
+   "k_label": "International Criminal Court",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-mykkul",
+   "kalshi": "KXNOBELPEACE-27-MKUL",
+   "relation": "same",
+   "at": "2026-09-30T17:46:49.543998+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Mykola Kuleba",
+   "k_label": "Mykola Kuleba / Save Ukraine",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-serr",
+   "kalshi": "KXNOBELPEACE-26-SUD",
+   "relation": "same",
+   "at": "2026-09-30T17:46:51.120955+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Sudans Emergency Response Rooms (ERRs)",
+   "k_label": "Sudan\u2019s Emergency Response Rooms",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "tac-nobel-peace-2026-10-09-volzel",
+   "kalshi": "KXNOBELPEACE-26-VOL",
+   "relation": "opposite",
+   "at": "2026-09-30T17:46:53.509856+00:00",
+   "question": "2026 Nobel Peace Prize Winner",
+   "pm_label": "Volodymyr Zelensky",
+   "k_label": "Volodymyr Zelenskyy",
+   "k_title": "Who will win the Nobel Peace Prize?"
+  },
+  {
+   "pm": "aaagaspc-usgas-high-2026-12-31-gt5pt60",
+   "kalshi": "KXAAAGASMAX-26DEC31-5.60",
+   "relation": "same",
+   "at": "2026-09-30T17:47:51.668237+00:00",
+   "question": "How High Will US Gas Prices Get in 2026?",
+   "pm_label": "Above $5.60",
+   "k_label": "Above $5.60",
+   "k_title": "Will average **gas prices** be above $5.60 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-high-2026-12-31-gt5pt40",
+   "kalshi": "KXAAAGASMAX-26DEC31-5.40",
+   "relation": "same",
+   "at": "2026-09-30T17:47:54.210242+00:00",
+   "question": "How High Will US Gas Prices Get in 2026?",
+   "pm_label": "Above $5.40",
+   "k_label": "Above $5.40",
+   "k_title": "Will average **gas prices** be above $5.40 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-high-2026-12-31-gt5pt20",
+   "kalshi": "KXAAAGASMAX-26DEC31-5.20",
+   "relation": "same",
+   "at": "2026-09-30T17:47:55.238552+00:00",
+   "question": "How High Will US Gas Prices Get in 2026?",
+   "pm_label": "Above $5.20",
+   "k_label": "Above $5.20",
+   "k_title": "Will average **gas prices** be above $5.20 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-high-2026-12-31-gt5pt00",
+   "kalshi": "KXAAAGASMAX-26DEC31-5.00",
+   "relation": "same",
+   "at": "2026-09-30T17:47:55.854855+00:00",
+   "question": "How High Will US Gas Prices Get in 2026?",
+   "pm_label": "Above $5.00",
+   "k_label": "Above $5.00",
+   "k_title": "Will average **gas prices** be above $5.00 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-high-2026-12-31-gt4pt80",
+   "kalshi": "KXAAAGASMAX-26DEC31-4.80",
+   "relation": "same",
+   "at": "2026-09-30T17:47:56.355272+00:00",
+   "question": "How High Will US Gas Prices Get in 2026?",
+   "pm_label": "Above $4.80",
+   "k_label": "Above $4.80",
+   "k_title": "Will average **gas prices** be above $4.80 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-high-2026-12-31-gt4pt60",
+   "kalshi": "KXAAAGASMAX-26DEC31-4.60",
+   "relation": "same",
+   "at": "2026-09-30T17:47:57.080998+00:00",
+   "question": "How High Will US Gas Prices Get in 2026?",
+   "pm_label": "Above $4.60",
+   "k_label": "Above $4.60",
+   "k_title": "Will average **gas prices** be above $4.60 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-low-2026-12-31-lt3pt00",
+   "kalshi": "KXAAAGASMIN-26DEC31-3.00",
+   "relation": "same",
+   "at": "2026-09-30T17:48:02.849787+00:00",
+   "question": "How Low Will US Gas Prices Get in 2026?",
+   "pm_label": "Below $3.00",
+   "k_label": "Below $3.00",
+   "k_title": "Will average **gas prices** be below $3.00 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-low-2026-12-31-lt3pt20",
+   "kalshi": "KXAAAGASMIN-26DEC31-3.20",
+   "relation": "same",
+   "at": "2026-09-30T17:48:03.551315+00:00",
+   "question": "How Low Will US Gas Prices Get in 2026?",
+   "pm_label": "Below $3.20",
+   "k_label": "Below $3.20",
+   "k_title": "Will average **gas prices** be below $3.20 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-low-2026-12-31-lt3pt40",
+   "kalshi": "KXAAAGASMIN-26DEC31-3.40",
+   "relation": "same",
+   "at": "2026-09-30T17:48:03.933439+00:00",
+   "question": "How Low Will US Gas Prices Get in 2026?",
+   "pm_label": "Below $3.40",
+   "k_label": "Below $3.40",
+   "k_title": "Will average **gas prices** be below $3.40 by Dec 31, 2026?"
+  },
+  {
+   "pm": "aaagaspc-usgas-low-2026-12-31-lt3pt60",
+   "kalshi": "KXAAAGASMIN-26DEC31-3.60",
+   "relation": "same",
+   "at": "2026-09-30T17:48:04.344452+00:00",
+   "question": "How Low Will US Gas Prices Get in 2026?",
+   "pm_label": "Below $3.60",
+   "k_label": "Below $3.60",
+   "k_title": "Will average **gas prices** be below $3.60 by Dec 31, 2026?"
+  },
+  {
+   "pm": "rtc-bbus-s28-3-2026-10-01-drecam",
+   "kalshi": "KXBIGBROTHERRANK-26DEC31R3-DRE",
+   "relation": "same",
+   "at": "2026-09-30T17:48:08.404240+00:00",
+   "question": "Big Brother Season 28: 3rd Place",
+   "pm_label": "Drew Campbell",
+   "k_label": "Drew Campbell",
+   "k_title": "Will Drew Campbell finish in 3 place in Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-3-2026-10-01-taybro",
+   "kalshi": "KXBIGBROTHERRANK-26DEC31R3-TAY",
+   "relation": "same",
+   "at": "2026-09-30T17:48:08.623940+00:00",
+   "question": "Big Brother Season 28: 3rd Place",
+   "pm_label": "Taylor Brown",
+   "k_label": "Taylor Brown",
+   "k_title": "Will Taylor Brown finish in 3 place in Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-3-2026-10-01-ricdev",
+   "kalshi": "KXBIGBROTHERRANK-26DEC31R3-RIC",
+   "relation": "same",
+   "at": "2026-09-30T17:48:11.568808+00:00",
+   "question": "Big Brother Season 28: 3rd Place",
+   "pm_label": "Rick Devens",
+   "k_label": "Rick Devens",
+   "k_title": "Will Rick Devens finish in 3 place in Big Brother Season 28?"
+  },
+  {
+   "pm": "ushrewc-ushr-ca-39-2026-11-03-rep",
+   "kalshi": "KXHOUSERACE-CA39-26-R",
+   "relation": "same",
+   "at": "2026-09-30T17:48:13.981565+00:00",
+   "question": "CA-39 House Election Winner",
+   "pm_label": "Steve Manos (R)",
+   "k_label": "Steve Manos",
+   "k_title": "Will Republican win the House race for CA-39?"
+  },
+  {
+   "pm": "ushrewc-ushr-ca-39-2026-11-03-dem",
+   "kalshi": "KXHOUSERACE-CA39-26-D",
+   "relation": "same",
+   "at": "2026-09-30T17:48:14.529840+00:00",
+   "question": "CA-39 House Election Winner",
+   "pm_label": "Mark Takano (D)",
+   "k_label": "Mark Takano",
+   "k_title": "Will Democratic win the House race for CA-39?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-domvil",
+   "kalshi": "KXFRENCHPRES-27-DVIL",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.694369+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Dominique de Villepin",
+   "k_label": "Dominique de Villepin",
+   "k_title": "Will Dominique de Villepin win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-marlep",
+   "kalshi": "KXFRENCHPRES-27-MLEP",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.700644+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Marine Le Pen",
+   "k_label": "Marine Le Pen",
+   "k_title": "Will Marine Le Pen win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-davlis",
+   "kalshi": "KXFRENCHPRES-27-DLIS",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.708986+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "David Lisnard",
+   "k_label": "David Lisnard",
+   "k_title": "Will David Lisnard win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-jorbar",
+   "kalshi": "KXFRENCHPRES-27-JBAR",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.713860+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Jordan Bardella",
+   "k_label": "Jordan Bardella",
+   "k_title": "Will Jordan Bardella win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-gabatt",
+   "kalshi": "KXFRENCHPRES-27-GATT",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.718929+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Gabriel Attal",
+   "k_label": "Gabriel Attal",
+   "k_title": "Will Gabriel Attal win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-sarkna",
+   "kalshi": "KXFRENCHPRES-27-SKNA",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.723835+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Sarah Knafo",
+   "k_label": "Sarah Knafo",
+   "k_title": "Will Sarah Knafo win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-bruret",
+   "kalshi": "KXFRENCHPRES-27-BRET",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.727576+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Bruno Retailleau",
+   "k_label": "Bruno Retailleau",
+   "k_title": "Will Bruno Retailleau win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-jeamel",
+   "kalshi": "KXFRENCHPRES-27-JMEL",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.731167+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Jean-Luc Melenchon",
+   "k_label": "Jean-Luc M\u00e9lenchon",
+   "k_title": "Will Jean-Luc M\u00e9lenchon win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-edophi",
+   "kalshi": "KXFRENCHPRES-27-EPHI",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.735583+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Edouard Philippe",
+   "k_label": "\u00c9douard Philippe",
+   "k_title": "Will \u00c9douard Philippe win the 2027 French presidential election?"
+  },
+  {
+   "pm": "ewc-pres-fra-2027-04-11-frahol",
+   "kalshi": "KXFRENCHPRES-27-FHOL",
+   "relation": "same",
+   "at": "2026-09-30T17:48:38.739498+00:00",
+   "question": "2027 French Presidential Election Winner",
+   "pm_label": "Francois Hollande",
+   "k_label": "Fran\u00e7ois Hollande",
+   "k_title": "Will Fran\u00e7ois Hollande win the 2027 French presidential election?"
+  },
+  {
+   "pm": "rtc-bbus-s28-2-2026-10-01-taybro",
+   "kalshi": "KXBIGBROTHERRANK-26DEC31R2-TAY",
+   "relation": "same",
+   "at": "2026-09-30T17:48:41.903370+00:00",
+   "question": "Big Brother Season 28: 2nd Place",
+   "pm_label": "Taylor Brown",
+   "k_label": "Taylor Brown",
+   "k_title": "Will Taylor Brown finish in 2 place in Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-2-2026-10-01-drecam",
+   "kalshi": "KXBIGBROTHERRANK-26DEC31R2-DRE",
+   "relation": "same",
+   "at": "2026-09-30T17:48:41.915062+00:00",
+   "question": "Big Brother Season 28: 2nd Place",
+   "pm_label": "Drew Campbell",
+   "k_label": "Drew Campbell",
+   "k_title": "Will Drew Campbell finish in 2 place in Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-2-2026-10-01-ricdev",
+   "kalshi": "KXBIGBROTHERRANK-26DEC31R2-RIC",
+   "relation": "same",
+   "at": "2026-09-30T17:48:41.920814+00:00",
+   "question": "Big Brother Season 28: 2nd Place",
+   "pm_label": "Rick Devens",
+   "k_label": "Rick Devens",
+   "k_title": "Will Rick Devens finish in 2 place in Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-winner-2026-10-01-taybro",
+   "kalshi": "KXBIGBROTHER-26DEC31-TAY",
+   "relation": "same",
+   "at": "2026-09-30T17:48:46.794744+00:00",
+   "question": "Big Brother Season 28 Winner",
+   "pm_label": "Taylor Brown",
+   "k_label": "Taylor Brown",
+   "k_title": "Will Taylor Brown win Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-winner-2026-10-01-drecam",
+   "kalshi": "KXBIGBROTHER-26DEC31-DRE",
+   "relation": "same",
+   "at": "2026-09-30T17:48:46.811520+00:00",
+   "question": "Big Brother Season 28 Winner",
+   "pm_label": "Drew Campbell",
+   "k_label": "Drew Campbell",
+   "k_title": "Will Drew Campbell win Big Brother Season 28?"
+  },
+  {
+   "pm": "rtc-bbus-s28-winner-2026-10-01-ricdev",
+   "kalshi": "KXBIGBROTHER-26DEC31-RIC",
+   "relation": "same",
+   "at": "2026-09-30T17:48:46.817531+00:00",
+   "question": "Big Brother Season 28 Winner",
+   "pm_label": "Rick Devens",
+   "k_label": "Rick Devens",
+   "k_title": "Will Rick Devens win Big Brother Season 28?"
+  }
+ ],
+ "rejected": [
+  {
+   "pm": "tac-nobel-peace-2026-10-09-ahmsha",
+   "kalshi": "KXNOBELPEACE-26-SAR",
+   "at": "2026-09-30T17:49:05.238957+00:00"
+  }
+ ],
+ "rejected_events": [
+  {
+   "pm_event": "2026 Nobel Peace Prize Winner|2026-10-24",
+   "kalshi_event": "KXNOBELPEACE-26",
+   "at": "2026-09-30T17:49:12.427100+00:00"
+  }
+ ]
+}

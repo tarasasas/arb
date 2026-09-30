@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arb Scanner</title>
+<meta name="arb-token" content="__ARB_TOKEN__">
+<style>
+  :root {
+    --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2de;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+    --accent: #2f5fd0; --good-text: #006300; --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+    --kalshi: #0b7a5a; --poly: #2f5fd0; --row-hover: #f0efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+      --accent: #7ea2f2; --good-text: #0ca30c; --kalshi: #3fc39a; --poly: #7ea2f2; --row-hover: #232322;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1400px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  h2 { font-size: 15px; margin: 28px 0 10px; font-weight: 650; }
+  .muted { color: var(--text-muted); } .secondary { color: var(--text-secondary); }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); }
+  .dot.run { background: var(--good); } .dot.err { background: var(--critical); } .dot.start { background: var(--warning); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .tile .label { font-size: 12.5px; color: var(--text-secondary); }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .tile.hero .value { font-size: 48px; line-height: 1.05; }
+  .tile .note { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 18px 0 10px;
+             padding: 10px 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+  .filters label { font-size: 13px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+  select, input[type=number], input[type=search] { font: inherit; color: var(--text-primary); background: var(--surface-0);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  input[type=number] { width: 80px; }
+
+  .table-wrap { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 12px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tbody tr.row { cursor: pointer; } tbody tr.row:hover { background: var(--row-hover); }
+  tr:last-child td { border-bottom: 0; }
+  .profit { font-weight: 600; color: var(--good-text); }
+  .leg { display: grid; grid-template-columns: 86px 1fr; gap: 2px 8px; margin-bottom: 4px; }
+  .ex { font-size: 11.5px; font-weight: 600; letter-spacing: .02em; }
+  .ex.kalshi { color: var(--kalshi); } .ex.poly { color: var(--poly); }
+  .leg .what { font-size: 13px; } .leg .id { font-size: 11.5px; color: var(--text-muted); word-break: break-all; }
+  .warn { display: inline-flex; gap: 4px; align-items: center; font-size: 12.5px; color: var(--text-secondary); white-space: nowrap; }
+  .warn svg { flex: none; }
+  .details td { background: var(--surface-0); }
+  .details ul { margin: 4px 0 10px 18px; padding: 0; }
+  .bet { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+  .bet b { color: var(--text-primary); }
+  .math { margin: 6px 0 14px; }
+  .math .eq { font-variant-numeric: tabular-nums; margin: 2px 0; }
+  .math table { width: auto; min-width: 520px; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
+  .math th, .math td { padding: 5px 10px; font-size: 12.5px; }
+  .helper { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 4px 0 16px; }
+  @media (max-width: 900px) { .helper { grid-template-columns: 1fr; } }
+  .helper .depth-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  .helper .depth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .helper table { border: 1px solid var(--border); border-radius: 8px; margin-top: 4px; }
+  .helper th, .helper td { padding: 3px 8px; font-size: 12.5px; }
+  .fill-form { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; align-items: center; }
+  .fill-form label { font-size: 12.5px; color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
+  .fill-form input { width: 100px; }
+  .fill-result .eq { margin: 3px 0; }
+  button { font: inherit; font-size: 12.5px; color: var(--text-primary); background: var(--surface-0);
+           border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  button.trade { margin-top: 8px; font-weight: 600; border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 6px 16px; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start;
+              justify-content: center; padding: 60px 16px; z-index: 10; overflow-y: auto; }
+  .modal-bg.show { display: flex; }
+  .modal { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px;
+           max-width: 720px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+  .modal h3 { margin: 0 0 10px; font-size: 16px; }
+  .modal table { border: 1px solid var(--border); border-radius: 8px; margin: 8px 0; }
+  .modal td, .modal th { font-size: 13px; padding: 6px 10px; }
+  .modal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; align-items: center; }
+  .modal .policy { font-size: 12.5px; color: var(--text-secondary); margin-top: 8px; }
+  .modal ol { margin: 6px 0 6px 18px; padding: 0; }
+  .alert { color: var(--critical); font-weight: 600; }
+  .mcard { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+  .mcard .mhead { display: grid; gap: 3px; margin-bottom: 6px; }
+  .mcard table { border: 1px solid var(--border); border-radius: 8px; }
+  .mcard td, .mcard th { font-size: 12.5px; padding: 5px 8px; vertical-align: middle; }
+  .mcard .acts { white-space: nowrap; }
+  .mcard .acts button { margin-left: 4px; }
+  .mcard pre { white-space: pre-wrap; font-family: inherit; font-size: 12px; color: var(--text-secondary); margin: 2px 0 6px; }
+  .hint-same { color: var(--good-text); } .hint-opp { color: var(--accent); }
+  .pin { font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; margin-left: 4px; }
+  .rules { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .rules pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; line-height: 1.45; margin: 4px 0 0; color: var(--text-secondary); }
+  @media (max-width: 720px) { .rules { grid-template-columns: 1fr; } }
+  .empty { padding: 22px; text-align: center; color: var(--text-muted); }
+  details summary { cursor: pointer; font-weight: 600; margin: 24px 0 8px; }
+  .log { font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: var(--text-secondary);
+         background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .caveat { font-size: 12.5px; color: var(--text-muted); margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Arb Scanner <span class="muted" style="font-weight:400">· Kalshi × Polymarket US</span></h1>
+    <span class="status"><span id="dot" class="dot start"></span><span id="status">Starting…</span></span>
+    <span class="status" id="updated"></span>
+    <span class="status" id="access"></span>
+    <span class="status" id="trading"></span>
+  </header>
+
+  <section class="tiles">
+    <div class="tile hero"><div class="label">Open opportunities</div><div class="value" id="t-count">–</div>
+      <div class="note">guaranteed profit after fees</div></div>
+    <div class="tile"><div class="label">Best single opportunity</div><div class="value" id="t-best">–</div><div class="note" id="t-best-note"></div></div>
+    <div class="tile"><div class="label">Matched games</div><div class="value" id="t-games">–</div><div class="note" id="t-games-note"></div></div>
+    <div class="tile"><div class="label">Contracts watched</div><div class="value" id="t-contracts">–</div><div class="note" id="t-contracts-note"></div></div>
+    <div class="tile"><div class="label">Near-arb re-check</div><div class="value" id="t-scan">–</div><div class="note" id="t-scan-note">seconds</div></div>
+  </section>
+
+  <div class="filters">
+    <label>Max to invest per arb $ <input id="f-budget" type="number" min="0" step="50" placeholder="no limit" style="width:100px"></label>
+    <label>League <select id="f-league"><option value="">All</option></select></label>
+    <label>Min profit $ <input id="f-min" type="number" min="0" step="0.5" value="0"></label>
+    <label>Min ROI % <input id="f-roi" type="number" min="0" step="0.1" value="0"></label>
+    <label><input id="f-clean" type="checkbox"> Hide rows with warnings</label>
+    <label><input id="f-noshort" type="checkbox"> Hide Polymarket shorts</label>
+    <label><input id="f-nosus" type="checkbox"> Hide too-good-to-be-true</label>
+    <label><input id="f-expand" type="checkbox"> Show math for all</label>
+    <label><input id="f-search" type="search" placeholder="Search team, market…"></label>
+  </div>
+
+  <h2>Opportunities</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th class="num">Profit</th><th class="num">ROI</th><th class="num">Annualized</th><th class="num">Contracts</th>
+        <th class="num">Capital</th><th>Game</th><th>Trades</th><th>Checks</th>
+      </tr></thead>
+      <tbody id="opps"></tbody>
+    </table>
+  </div>
+  <p class="caveat">Click a row for the math. Bet amounts use the actual order-book depth and each exchange's fee
+    rounding; set "Max to invest" to size every arb to your stake. Profit is locked in only if both legs fill at these prices. Quotes from the two exchanges are
+    fetched seconds apart and move constantly — re-check both books before trading. Capital includes the $1 Polymarket
+    locks per shorted contract. Opportunities can share a leg, so don't add their profits together.</p>
+
+  <h2>Closest to breaking even</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th class="num">Edge / contract</th><th>Game</th><th>Trades (top of book)</th></tr></thead>
+      <tbody id="near"></tbody>
+    </table>
+  </div>
+
+  <h2>Politics, economics, culture &amp; more <span class="muted" id="m-sub" style="font-weight:400"></span></h2>
+  <p class="caveat" style="margin-top:0">Confident matches are scanned automatically; when one shows up as an arb it's marked
+    <b>Auto-matched</b> with Correct / Wrong buttons. Below are the lower-confidence pairs for you to review.
+    <b>Same</b> = YES on both sites is the same outcome; <b>Opposite</b> = Polymarket YES is Kalshi NO.
+    A wrong match can look like a guaranteed arb and lose on both sides.</p>
+  <div class="filters">
+    <label>Search <input id="m-q" type="search" placeholder="candidate, race, topic…"></label>
+    <label>Category <select id="m-cat"><option value="">All</option></select></label>
+    <span class="muted" id="m-count"></span>
+  </div>
+  <div id="m-groups"></div>
+  <div style="margin-top:10px"><button id="m-more" style="display:none">Show more</button></div>
+  <details><summary>Approved pairs (<span id="m-approved-count">0</span>) — saved in D:\Projects\arb\matches.json</summary>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Polymarket</th><th>Kalshi</th><th>Meaning</th><th>Approved</th><th></th></tr></thead>
+      <tbody id="m-approved"></tbody></table></div></details>
+
+  <h2>Coverage</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>League</th><th>Kalshi code</th><th>Sport</th><th class="num">Polymarket games</th>
+        <th class="num">Kalshi games</th><th class="num">Matched</th></tr></thead>
+      <tbody id="leagues"></tbody>
+    </table>
+  </div>
+
+  <div class="modal-bg" id="modal-bg"><div class="modal" id="modal"></div></div>
+
+  <details><summary>Unmatched Polymarket games</summary><div class="log" id="unmatched"></div></details>
+  <details><summary>Scanner log</summary><div class="log" id="log"></div></details>
+</main>
+
+<script>
+const WARN_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 15 14H1z" fill="var(--warning)"/><path d="M8 6v3.6M8 11.4v.1" stroke="#0b0b0b" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const OK_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="var(--good)"/><path d="m4.8 8.2 2.2 2.2 4.2-4.4" stroke="#fff" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>';
+let state = null; const open = new Set();
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pct = v => v == null ? "–" : (v * 100).toFixed(v * 100 >= 100 ? 0 : 2) + "%";
+const compact = n => n == null ? "–" : Number(n).toLocaleString(undefined, {notation: n >= 10000 ? "compact" : "standard", maximumFractionDigits: 1});
+const ago = iso => { if (!iso) return ""; const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  return s < 120 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
+const localTime = iso => iso ? new Date(iso).toLocaleString(undefined, {weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "–";
+
+// ---- sizing: mirrors arb/model.py fee rounding so smaller stakes are exact ----------------
+const take = (levels, n) => { const out = []; let left = n;
+  for (const [p, q] of levels) { if (left <= 0) break; const t = Math.min(q, left); out.push([p, t]); left -= t; } return out; };
+const feeRaw = (fills, coef) => fills.reduce((s, [p, q]) => s + coef * q * p * (1 - p), 0);
+const kalshiFee = (f, c) => Math.ceil(feeRaw(f, c) * 100 - 1e-7) / 100;                 // round up to the cent
+const pmFee = (f, c) => { const x = feeRaw(f, c) * 100, fl = Math.floor(x);              // banker's rounding
+  return (Math.abs(x - fl - 0.5) < 1e-7 ? (fl % 2 === 0 ? fl : fl + 1) : Math.round(x)) / 100; };
+const sum = f => f.reduce((s, [p, q]) => s + p * q, 0);
+
+function calc(r, n) {
+  const b = r.book, fk = take(b.kalshi, n), fp = take(b.polymarket, n);
+  const leg = (fills, fee) => ({ n, fills, cost: sum(fills), fee, avg: n ? sum(fills) / n : 0 });
+  const k = leg(fk, kalshiFee(fk, b.coef_kalshi)), p = leg(fp, pmFee(fp, b.coef_polymarket));
+  const capital = k.cost + k.fee + p.cost + p.fee, payout = r.payout * n;
+  const days = r.closes ? Math.max((new Date(r.closes) - Date.now()) / 864e5, 0.25) : null;
+  const roi = capital ? (payout - capital) / capital : 0;
+  return { n, k, p, capital, payout, profit: payout - capital, roi, annualized: days ? roi * 365 / days : null };
+}
+function sizeFor(r, budget) {
+  const full = calc(r, r.size);
+  if (!(budget > 0) || full.capital <= budget) return full;
+  let lo = 0, hi = r.size;                        // largest n whose capital fits the budget
+  while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); calc(r, mid).capital <= budget ? lo = mid : hi = mid - 1; }
+  return calc(r, lo);
+}
+
+function betText(l, s) {
+  if (!s.n) return "";
+  if (l.exchange === "Polymarket" && l.side === "no") {
+    const bid = 1 - s.avg;                         // fills are stored as cost per contract (1 - bid)
+    return `Short <b>${s.n.toLocaleString()}</b> at avg bid ${bid.toFixed(3)}: receive ${money(s.n * bid)},
+      ${money(s.n)} locked → <b>${money(s.cost)}</b> cash + ${money(s.fee)} fee`;
+  }
+  return `Buy <b>${s.n.toLocaleString()}</b> ${l.side.toUpperCase()} at avg ${s.avg.toFixed(3)} = <b>${money(s.cost)}</b> + ${money(s.fee)} fee`;
+}
+function legHtml(l, s, depth) {
+  const cls = l.exchange === "Kalshi" ? "kalshi" : "poly";
+  const avail = depth && depth.length
+    ? `<div class="bet">Available now: <b>${compact(depth[0][1])}</b> at ${depth[0][0].toFixed(3)}` +
+      (depth.length > 1 ? `, ${compact(depth.slice(0, 3).reduce((a, [, q]) => a + q, 0))} up to ${depth[Math.min(2, depth.length - 1)][0].toFixed(3)}` : "") +
+      ` <span class="muted">(last scan)</span></div>` : "";
+  return `<div class="leg"><span class="ex ${cls}">${esc(l.exchange.toUpperCase())}</span>
+    <span class="what">${esc(l.action)} @ <b>${l.price.toFixed(3)}</b> · ${esc(l.title)}
+      ${s ? `<div class="bet">${betText(l, s)}</div>` : ""}${avail}<div class="id">${esc(l.market_id)}</div></span></div>`;
+}
+
+// ---- order-book depth + "match your fill" --------------------------------------------------
+const EXS = ["kalshi", "polymarket"], EXNAME = { kalshi: "Kalshi", polymarket: "Polymarket" };
+const ui = {};                // per-row inputs and live depth, keyed by row key
+const pinned = new Map();     // rows you're mid-trade on stay visible even after the arb disappears
+let rowsByKey = new Map();
+const rowKey = r => r.legs.map(l => l.market_id + l.side).join("|");
+const uiFor = key => ui[key] ??= { first: "polymarket", shares: "", paid: "", live: {}, err: "", loading: false };
+const legIdx = ex => ex === "kalshi" ? 0 : 1;
+const feeFor = ex => ex === "kalshi" ? kalshiFee : pmFee;
+
+function depthTable(r, key, ex) {
+  const u = uiFor(key), live = u.live[ex], levels = (live ? live.levels : r.depth?.[ex]) || [];
+  let cum = 0;
+  const rows = levels.slice(0, 8).map(([p, q]) => { cum += q;
+    return `<tr><td class="num">${p.toFixed(3)}</td><td class="num">${compact(q)}</td><td class="num">${compact(cum)}</td></tr>`; }).join("");
+  const l = r.legs[legIdx(ex)];
+  return `<div><b>${EXNAME[ex]}</b> <span class="muted">buy ${l.side.toUpperCase()} · ${live ? "live " + ago(live.fetched) : "from last scan"}</span>
+    <table><thead><tr><th class="num">Price</th><th class="num">Shares</th><th class="num">Cumulative</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="3" class="empty">No offers</td></tr>`}</tbody></table></div>`;
+}
+
+function hedgeResult(r, key) {
+  const u = uiFor(key), n = +u.shares, paid = +u.paid;
+  if (!(n > 0) || !(paid > 0)) return `<span class="muted">Enter the shares that filled and the total you paid (the "Cost" shown on that site, fees included).</span>`;
+  const other = u.first === "kalshi" ? "polymarket" : "kalshi", l = r.legs[legIdx(other)];
+  const coef = r.fee_coef[other], fee = feeFor(other);
+  const room = r.payout * n - paid;                          // most you can spend on the second leg, fees included
+  const cost2 = p => n * p + fee([[p, n]], coef);
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; cost2(m) <= room ? lo = m : hi = m; }
+  if (room <= 0 || lo <= 0) return `<b style="color:var(--critical)">No price works:</b> the first leg cost ${money(paid)} for ${n} shares,
+    which is already ≥ the $${(r.payout * n).toFixed(2)} guaranteed payout. Don't add the second leg; consider selling the first.`;
+  const pmax = Math.floor(lo * 10000) / 10000;
+  const live = u.live[other], levels = (live ? live.levels : r.depth?.[other]) || [];
+  const usable = levels.filter(([p]) => p <= pmax + 1e-9);
+  const availAtMax = usable.reduce((a, [, q]) => a + q, 0);
+  const fills = take(usable, n), got = fills.reduce((a, [, q]) => a + q, 0);
+  const cost = sum(fills), f = fee(fills, coef), limit = fills.length ? fills[fills.length - 1][0] : null;
+  const src = live ? `live, ${ago(live.fetched)}` : "from the last scan — press “Check live depth” before trading";
+  let out = `<div class="eq">Buy <b>${n.toLocaleString()} ${l.side.toUpperCase()}</b> on <b>${EXNAME[other]}</b>: ${esc(l.title)}</div>
+    <div class="eq">Break-even price: <b>$${pmax.toFixed(4)}</b> per share. Paying more than this loses money.</div>
+    <div class="eq">Available at or below that price: <b>${compact(availAtMax)}</b> shares (${src})</div>`;
+  if (got >= n - 1e-9) {
+    const profit = r.payout * n - paid - cost - f;
+    out += `<div class="eq">Set your limit price to <b>$${limit.toFixed(3)}</b>: ${n.toLocaleString()} shares cost ${money(cost)} + ${money(f)} fee
+      (avg ${(cost / n).toFixed(4)}) → locked profit <b class="profit">${money(profit)}</b> whatever the result.</div>`;
+  } else {
+    out += `<div class="eq" style="color:var(--critical)"><b>Only ${compact(got)} of ${n.toLocaleString()}</b> are available at or below break-even right now.
+      Buying those hedges ${compact(got)} shares; the other ${compact(n - got)} stay unhedged until more sellers appear at ≤ $${pmax.toFixed(3)}.</div>`;
+  }
+  return out;
+}
+
+function tradeHelperHtml(r, key) {
+  const u = uiFor(key);
+  const opt = ex => `<option value="${ex}" ${u.first === ex ? "selected" : ""}>${EXNAME[ex]} (${r.legs[legIdx(ex)].side.toUpperCase()})</option>`;
+  return `<div class="helper">
+    <div class="depth"><div class="depth-head"><b>Order book right now</b>
+      <button data-action="live" data-key="${esc(key)}" ${u.loading ? "disabled" : ""}>${u.loading ? "Checking…" : "Check live depth"}</button>
+      ${u.err ? `<span style="color:var(--critical)">${esc(u.err)}</span>` : ""}</div>
+      <div class="depth-grid">${depthTable(r, key, "kalshi")}${depthTable(r, key, "polymarket")}</div></div>
+    <div class="fill"><b>Match your fill</b> <span class="muted">after the first leg fills, size the second one to it</span>
+      <div class="fill-form">
+        <label>First leg <select data-key="${esc(key)}" data-field="first">${opt("kalshi")}${opt("polymarket")}</select></label>
+        <label>Shares filled <input data-key="${esc(key)}" data-field="shares" type="number" min="0" step="0.01" value="${esc(u.shares)}" placeholder="e.g. 101.3"></label>
+        <label>Total paid incl. fees $ <input data-key="${esc(key)}" data-field="paid" type="number" min="0" step="0.01" value="${esc(u.paid)}" placeholder="e.g. 95.62"></label>
+        ${pinned.has(key) ? `<button data-action="unpin" data-key="${esc(key)}">Done – unpin</button>` : ""}
+      </div>
+      <div class="fill-result" data-result="${esc(key)}">${hedgeResult(r, key)}</div></div></div>`;
+}
+
+// ---- make trade -------------------------------------------------------------------------------
+const TOKEN = document.querySelector('meta[name="arb-token"]').content;
+const tradingOn = () => (state?.stats?.trading || "").startsWith("on");
+let countdown = null;
+async function post(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Arb-Token": TOKEN },
+                                  body: JSON.stringify(body) });
+  const d = await res.json().catch(() => ({ error: "Bad response from scanner" }));
+  if (!res.ok) throw new Error(d.error || res.status);
+  return d;
+}
+function showModal(html) {
+  document.getElementById("modal").innerHTML = html;
+  document.getElementById("modal-bg").classList.add("show");
+}
+function closeModal() {
+  clearInterval(countdown); countdown = null;
+  document.getElementById("modal-bg").classList.remove("show");
+}
+
+async function openTrade(key) {
+  const r = rowsByKey.get(key); if (!r) return;
+  showModal(`<h3>Make trade</h3><div class="muted">Checking live order books and balances…</div>`);
+  const budget = +document.getElementById("f-budget").value || null;
+  try {
+    const plan = await post("/api/trade/prepare", {
+      legs: r.legs.map(l => ({ exchange: l.exchange.toLowerCase(), market_id: l.market_id, side: l.side })),
+      max_invest: budget });
+    renderPlan(plan, r);
+  } catch (e) {
+    showModal(`<h3>Can't trade this right now</h3><div class="alert">${esc(e.message)}</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+}
+
+function renderPlan(plan, r) {
+  const order = [plan.first, plan.first === "kalshi" ? "polymarket" : "kalshi"];
+  const rows = order.map((ex, i) => { const l = plan.legs[ex];
+    return `<tr><td>${i + 1}</td><td><b>${EXNAME[ex]}</b></td>
+      <td>Buy <b>${plan.size.toLocaleString()} ${l.side.toUpperCase()}</b><div class="muted">${esc(l.title)}</div></td>
+      <td class="num">≤ $${l.limit.toFixed(3)}</td><td class="num">${money(l.amount)} + ${money(l.fee)}</td>
+      <td class="num">${compact(l.available_at_limit)}</td><td class="num">${money(l.balance)}</td></tr>`; }).join("");
+  const second = EXNAME[order[1]], first = EXNAME[order[0]];
+  showModal(`<h3>Confirm trade: ${esc(r.game)} · ${esc(r.quantity)}</h3>
+    ${r.warnings.length ? `<ul class="${r.pair?.auto ? "alert" : ""}" style="margin:0 0 8px 18px;padding:0">
+      ${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+    <div class="muted">Live prices just now. Orders are immediate-or-cancel: they fill what's available at your limit and cancel the rest.</div>
+    <table><thead><tr><th>#</th><th>Exchange</th><th>Order</th><th class="num">Limit</th><th class="num">Est. cost + fee</th>
+      <th class="num">Available at limit</th><th class="num">Your cash</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="eq">Total cost <b>${money(plan.capital)}</b> · guaranteed payout <b>${money(plan.payout * plan.size)}</b> ·
+      expected profit <b class="profit">${money(plan.expected_profit)}</b>
+      <span class="muted">(cap ${money(plan.cap)})</span></div>
+    <div class="policy">${first} goes first (thinner book). ${second} is then bought for exactly the shares that filled, never above
+      break-even, retried up to 2 more times at fresh prices. Any ${first} shares still unhedged are sold back immediately.
+      Every order is logged to D:\\Projects\\arb\\trades.jsonl.</div>
+    <div class="actions"><span class="muted" id="ttl"></span>
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" id="confirm-btn">Confirm – place orders</button></div>`);
+  let left = 20;
+  const tick = () => { const el = document.getElementById("ttl"); if (!el) return;
+    el.textContent = left > 0 ? `Prices valid for ${left}s` : "Expired: close and press Make trade again";
+    if (left <= 0) { document.getElementById("confirm-btn").disabled = true; clearInterval(countdown); } left--; };
+  tick(); countdown = setInterval(tick, 1000);
+  document.getElementById("confirm-btn").onclick = () => executePlan(plan);
+}
+
+async function executePlan(plan) {
+  clearInterval(countdown);
+  showModal(`<h3>Placing orders…</h3><div class="muted">Don't close this window.</div>`);
+  try {
+    const res = await post("/api/trade/execute", { plan_id: plan.id });
+    const unhedged = res.unhedged_shares > 0;
+    showModal(`<h3>${res.status === "ok" ? "Trade complete" : res.status === "no_fill" ? "Nothing traded" :
+                  res.status === "partial" ? "Trade partly completed" : "Check your accounts"}</h3>
+      <ol>${res.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>
+      ${res.note ? `<div class="${res.status === "unknown" ? "alert" : "muted"}">${esc(res.note)}</div>` : ""}
+      <div class="eq">Hedged pairs: <b>${compact(res.hedged_pairs)}</b> · locked profit <b class="profit">${money(res.locked_profit)}</b>
+        ${res.sellback_pnl ? ` · sell-back ${res.sellback_pnl >= 0 ? "+" : ""}${money(res.sellback_pnl)}` : ""}
+        · net <b>${money(res.net)}</b></div>
+      ${unhedged ? `<div class="alert">⚠ ${compact(res.unhedged_shares)} ${esc(res.unhedged_exchange)} ${esc(res.unhedged_side.toUpperCase())}
+        shares are still unhedged. Sell them or hedge them manually.</div>` : ""}
+      <div class="policy">Check both accounts to confirm. Details are in D:\\Projects\\arb\\trades.jsonl.</div>
+      <div class="actions"><button class="primary" onclick="closeModal()">Done</button></div>`);
+  } catch (e) {
+    showModal(`<h3>Trade failed</h3><div class="alert">${esc(e.message)}</div>
+      <div class="policy">Check both accounts before trying again.</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+}
+
+// ---- non-sports matching ----------------------------------------------------------------------
+const M = { offset: 0, groups: [], total: 0, loading: false };
+const px = v => v == null ? "–" : v.toFixed(3);
+const hintHtml = h => h === "same" ? `<span class="hint-same">prices agree → likely Same</span>`
+  : h === "opposite" ? `<span class="hint-opp">prices mirror → likely Opposite</span>` : `<span class="muted">–</span>`;
+
+function matchCard(g, gi) {
+  const rows = g.pairs.map((p, pi) => `<tr data-g="${gi}" data-p="${pi}">
+      <td>${esc(p.pm_label)}</td><td class="num">${px(p.pm_bid)} / ${px(p.pm_ask)}</td>
+      <td>${esc(p.k_label)}${p.k_title && p.k_title !== p.k_label ? `<div class="muted">${esc(p.k_title)}</div>` : ""}</td>
+      <td class="num">${px(p.k_bid)} / ${px(p.k_ask)}</td><td>${hintHtml(p.hint)}</td>
+      <td class="acts"><button data-m="same">Same</button><button data-m="opposite">Opposite</button><button data-m="reject">Reject</button></td></tr>
+    <tr data-g="${gi}" data-p="${pi}" class="rules-row"><td colspan="6"><details><summary class="muted" style="margin:0;font-weight:400">Rules on both sites</summary>
+      <div class="rules"><div><b>Polymarket</b><pre>${esc(p.pm_rules)}</pre></div><div><b>Kalshi</b><pre>${esc(p.k_rules)}</pre></div></div>
+      </details></td></tr>`).join("");
+  return `<div class="mcard" data-g="${gi}">
+    <div class="mhead">
+      <div><span class="ex poly">POLYMARKET</span> <b>${esc(g.pm.question)}</b>
+        <span class="muted">${esc(g.pm.category)} · ends ${esc(g.pm.end)} · ${g.pm.outcomes} outcome${g.pm.outcomes > 1 ? "s" : ""}</span></div>
+      <div><span class="ex kalshi">KALSHI</span> <b>${esc(g.kalshi.title)}</b>
+        <span class="muted">${esc(g.kalshi.sub_title)} · closes ${esc(g.kalshi.close)} · ${esc(g.kalshi.key)}</span></div>
+      <div class="muted">match score ${g.score.toFixed(2)} &nbsp;<button data-m="reject_event">Not the same question</button>
+        ${g.pairs.length > 1 ? `<button data-m="all_same">Approve all ${g.pairs.length} as Same</button>` : ""}</div>
+    </div>
+    <table><thead><tr><th>Polymarket outcome</th><th class="num">bid / ask</th><th>Kalshi outcome</th><th class="num">bid / ask</th>
+      <th>Prices say</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function loadMatching(reset) {
+  if (M.loading) return; M.loading = true;
+  if (reset) { M.offset = 0; M.groups = []; }
+  const q = encodeURIComponent(document.getElementById("m-q").value), cat = encodeURIComponent(document.getElementById("m-cat").value);
+  try {
+    const d = await (await fetch(`/api/matching?q=${q}&category=${cat}&offset=${M.offset}&limit=20`)).json();
+    M.groups = M.groups.concat(d.groups); M.total = d.total; M.offset += d.groups.length;
+    const sel = document.getElementById("m-cat"), cur = sel.value;
+    if (sel.options.length - 1 !== d.categories.length) {
+      sel.innerHTML = '<option value="">All</option>' + d.categories.map(c => `<option>${esc(c)}</option>`).join(""); sel.value = cur; }
+    document.getElementById("m-sub").textContent = d.status === "ready"
+      ? `· ${compact(d.pm_markets)} Polymarket vs ${compact(d.kalshi_markets)} Kalshi markets compared, ${ago(d.updated)}`
+      : "· building suggestions (first build takes a minute or two)…";
+    document.getElementById("m-count").textContent = d.status === "ready"
+      ? `${compact(d.auto_count)} pairs auto-matched and being scanned (verify them when they show up as arbs) · ` +
+        `${compact(M.total)} lower-confidence question pairs below for review` : "";
+    document.getElementById("m-groups").innerHTML = M.groups.map(matchCard).join("") ||
+      `<div class="empty">${d.status === "ready" ? "No suggestions match." : "Suggestions are being built…"}</div>`;
+    document.getElementById("m-more").style.display = M.offset < M.total ? "" : "none";
+    renderApproved(d.approved);
+    if (d.status !== "ready") setTimeout(() => loadMatching(true), 15000);
+  } catch (e) { document.getElementById("m-sub").textContent = "· couldn't load suggestions"; }
+  M.loading = false;
+}
+
+function renderApproved(list) {
+  document.getElementById("m-approved-count").textContent = list.length;
+  document.getElementById("m-approved").innerHTML = list.map((a, i) => `<tr>
+      <td>${esc(a.question || a.pm)}<div class="muted">${esc(a.pm_label || "")}</div></td>
+      <td>${esc(a.k_label || a.kalshi)}<div class="muted">${esc(a.kalshi)}</div></td>
+      <td>${a.relation === "same" ? "Same" : "Opposite"}</td><td>${esc(localTime(a.at))}</td>
+      <td><button data-remove="${i}">Remove</button></td></tr>`).join("") || `<tr><td colspan="5" class="empty">None yet</td></tr>`;
+  document.getElementById("m-approved").onclick = async e => {
+    const b = e.target.closest("button[data-remove]"); if (!b) return;
+    const a = list[+b.dataset.remove];
+    await post("/api/matching/decide", { pm: a.pm, kalshi: a.kalshi, relation: "remove" }); loadMatching(true);
+  };
+}
+
+document.getElementById("m-groups").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-m]"); if (!b) return;
+  const card = b.closest(".mcard"), g = M.groups[+card.dataset.g], rel = b.dataset.m;
+  b.disabled = true;
+  try {
+    if (rel === "reject_event") {
+      await post("/api/matching/decide", { relation: rel, pm_event: g.pm.key, kalshi_event: g.kalshi.key });
+      card.remove(); return;
+    }
+    if (rel === "all_same") {
+      const rows = [...card.querySelectorAll("tbody tr:not(.rules-row)")];
+      if (!confirm(`Approve all ${rows.length} outcome pairs in this card as Same meaning?\n\nOnly do this if you've checked ` +
+                   `that every row is the same person/outcome and both questions resolve the same way.`)) { b.disabled = false; return; }
+      for (const tr of rows) { const p = g.pairs[+tr.dataset.p];
+        await post("/api/matching/decide", { pm: p.pm, kalshi: p.kalshi, relation: "same",
+          extra: { question: g.pm.question, pm_label: p.pm_label, k_label: p.k_label, k_title: p.k_title } }); }
+      card.remove();
+      const d = await (await fetch(`/api/matching?limit=0`)).json(); renderApproved(d.approved); return;
+    }
+    const tr = b.closest("tr"), p = g.pairs[+tr.dataset.p];
+    if (rel === "opposite" && !confirm((p.hint === "same" ? "The prices on both sites AGREE, which usually means Same, not Opposite.\n\n" : "") +
+        `Opposite means Polymarket YES "${p.pm_label}" = Kalshi NO "${p.k_label}".\n` +
+        `If both are the same person/outcome, this is wrong and will create fake arbs. Save as Opposite?`)) { b.disabled = false; return; }
+    await post("/api/matching/decide", { pm: p.pm, kalshi: p.kalshi, relation: rel,
+      extra: { question: g.pm.question, pm_label: p.pm_label, k_label: p.k_label, k_title: p.k_title } });
+    card.querySelectorAll(`tr[data-p="${tr.dataset.p}"]`).forEach(r => r.remove());
+    if (!card.querySelector("tbody tr:not(.rules-row)")) card.remove();
+    if (rel !== "reject") { const d = await (await fetch(`/api/matching?limit=0`)).json(); renderApproved(d.approved); }
+  } catch (err) { b.disabled = false; alert("Couldn't save: " + err.message); }
+});
+document.getElementById("m-more").onclick = () => loadMatching(false);
+let mTimer = null;
+for (const id of ["m-q", "m-cat"]) document.getElementById(id).addEventListener("input", () => {
+  clearTimeout(mTimer); mTimer = setTimeout(() => loadMatching(true), 300); });
+
+async function verifyMatch(key, btn) {
+  const r = rowsByKey.get(key); if (!r?.pair) return;
+  const wrong = btn.dataset.action === "wrong";
+  if (wrong && !confirm("Mark as a wrong match? It will stop being scanned and won't be suggested again.")) return;
+  btn.disabled = true;
+  try {
+    await post("/api/matching/decide", { pm: r.pair.pm, kalshi: r.pair.kalshi, relation: wrong ? "reject" : "same",
+      extra: { question: r.game, pm_label: r.legs[1].title, k_label: r.legs[0].title } });
+    btn.closest("td").insertAdjacentHTML("beforeend",
+      `<div class="muted">${wrong ? "Removed; it disappears on the next refresh." : "Saved as verified."}</div>`);
+    loadMatching(true);
+  } catch (e) { btn.disabled = false; alert("Couldn't save: " + e.message); }
+}
+
+async function checkLive(key) {
+  const r = rowsByKey.get(key), u = uiFor(key); if (!r) return;
+  u.loading = true; u.err = ""; render(true);
+  try {
+    await Promise.all(EXS.map(async ex => {
+      const l = r.legs[legIdx(ex)];
+      const res = await fetch(`/api/depth?exchange=${ex}&id=${encodeURIComponent(l.market_id)}&side=${l.side}`);
+      const d = await res.json(); if (!res.ok) throw new Error(d.error || res.status);
+      u.live[ex] = d;
+    }));
+  } catch (e) { u.err = "Live check failed: " + e.message; }
+  u.loading = false; render(true);
+}
+
+function mathHtml(r, z) {
+  if (!z.n) return `<div class="math">Too small to trade at this budget.</div>`;
+  const perK = (z.k.cost + z.k.fee) / z.n, perP = (z.p.cost + z.p.fee) / z.n, per = perK + perP;
+  const [lk, lp] = r.legs;
+  const rows = r.scenarios.map(s => {
+    const pl = s.total * z.n - z.capital;
+    return `<tr><td>${esc(s.outcome)}</td><td class="num">${money(s.kalshi)}</td><td class="num">${money(s.polymarket)}</td>
+      <td class="num">${money(s.total)}</td><td class="num">${money(s.total * z.n)}</td>
+      <td class="num profit">${pl >= 0 ? "+" : ""}${money(pl)}</td></tr>`; }).join("");
+  return `<div class="math"><b>The math</b>
+    <div class="eq">Cost per pair: Kalshi ${lk.side.toUpperCase()} ${z.k.avg.toFixed(4)} + fee ${(z.k.fee / z.n).toFixed(4)}
+      &nbsp;+&nbsp; Polymarket ${lp.side === "no" ? "short (1 − bid)" : "YES"} ${z.p.avg.toFixed(4)} + fee ${(z.p.fee / z.n).toFixed(4)}
+      &nbsp;=&nbsp; <b>$${per.toFixed(4)}</b></div>
+    <div class="eq">Worst-case payout per pair: <b>$${r.payout.toFixed(2)}</b> (every outcome below pays at least this)</div>
+    <div class="eq">Profit per pair: $${r.payout.toFixed(2)} − $${per.toFixed(4)} = <b>$${(r.payout - per).toFixed(4)}</b>
+      &nbsp;×&nbsp; ${z.n.toLocaleString()} pairs = <b class="profit">${money(z.profit)}</b> on ${money(z.capital)} invested (${pct(z.roi)})</div>
+    <table><thead><tr><th>If the game ends…</th><th class="num">Kalshi leg pays</th><th class="num">Polymarket leg pays</th>
+      <th class="num">Per pair</th><th class="num">× ${z.n.toLocaleString()}</th><th class="num">Your P&amp;L</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+function checksHtml(r) {
+  const w = r.suspicious ? `<span class="warn alert">${WARN_ICON}Too good to be true</span>` : r.warnings.length
+    ? `<span class="warn">${WARN_ICON}${r.warnings.length} warning${r.warnings.length > 1 ? "s" : ""}</span>`
+    : `<span class="warn">${OK_ICON}No warnings</span>`;
+  const on = tradingOn(), key = esc(rowKey(r));
+  const match = !r.pair ? "" : r.pair.auto
+    ? `<div class="warn" style="margin-top:6px">${WARN_ICON}<b>Auto-matched</b>: verify</div>
+       <div><button data-action="verify" data-key="${key}">Correct match</button>
+            <button data-action="wrong" data-key="${key}">Wrong match</button></div>`
+    : `<div class="warn" style="margin-top:6px">${OK_ICON}Match verified by you</div>`;
+  return w + match + `<div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
+    title="${on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
+}
+function passes(r) {
+  const lg = document.getElementById("f-league").value, q = document.getElementById("f-search").value.toLowerCase();
+  if (lg && r.league !== lg) return false;
+  if (document.getElementById("f-clean").checked && r.warnings.length) return false;
+  if (document.getElementById("f-noshort").checked && r.legs.some(l => l.exchange === "Polymarket" && l.side === "no")) return false;
+  if (document.getElementById("f-nosus").checked && r.suspicious) return false;
+  if (q && !JSON.stringify([r.game, r.legs]).toLowerCase().includes(q)) return false;
+  return true;
+}
+
+function render(force) {
+  if (!state) return;
+  const s = state, st = s.stats || {};
+  const dot = document.getElementById("dot");
+  dot.className = "dot " + (s.status === "running" ? "run" : s.status.startsWith("error") ? "err" : "start");
+  document.getElementById("status").textContent = s.status === "running" ? "Scanning" : s.status === "starting" ? "Loading markets (first load takes ~2 min)…" : s.status;
+  document.getElementById("updated").textContent = s.last_prices ? "Prices updated " + ago(s.last_prices) : "";
+  document.getElementById("access").textContent = st.kalshi_access ? "Kalshi: " + st.kalshi_access : "";
+  document.getElementById("trading").textContent = st.trading ? "Trading: " + st.trading : "";
+
+  const minP = +document.getElementById("f-min").value || 0, minR = (+document.getElementById("f-roi").value || 0) / 100;
+  const budget = +document.getElementById("f-budget").value || 0;
+  const opps = s.opportunities.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
+    .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR)
+    .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || b.z.profit - a.z.profit);
+  // Rows you're mid-trade on: refresh their snapshot while the arb exists, keep showing it after.
+  const live = new Set(s.opportunities.map(rowKey));
+  for (const r of s.opportunities) if (pinned.has(rowKey(r))) pinned.set(rowKey(r), r);
+  const shown = new Set(opps.map(o => rowKey(o.r)));
+  const pinnedRows = [...pinned.entries()].filter(([k]) => !shown.has(k))
+    .map(([k, r]) => ({ r, z: calc(r, r.size), stale: !live.has(k) }));
+  rowsByKey = new Map([...opps, ...pinnedRows].map(o => [rowKey(o.r), o.r]));
+  document.getElementById("t-count").textContent = s.last_prices ? opps.length : "–";
+  const best = opps[0];
+  document.getElementById("t-best").textContent = best ? money(best.z.profit) : "–";
+  document.getElementById("t-best-note").textContent = best ? `${pct(best.z.roi)} on ${money(best.z.capital)}` : "";
+  document.getElementById("t-games").textContent = compact(st.matched_games);
+  document.getElementById("t-games-note").textContent = st.paired_quantities ? `${compact(st.paired_quantities)} shared lines/markets` : "";
+  document.getElementById("t-contracts").textContent = compact(st.paired_contracts);
+  document.getElementById("t-contracts-note").textContent = st.pm_markets ? `of ${compact(st.pm_markets)} PM + ${compact(st.kalshi_markets)} Kalshi` : "";
+  document.getElementById("t-scan").textContent = s.hot_seconds != null ? `${s.hot_seconds}s` : (s.scan_seconds != null ? `${s.scan_seconds}s` : "–");
+  document.getElementById("t-scan-note").textContent = s.scan_seconds != null
+    ? `${compact(s.hot_count || 0)} near-arb markets; full sweep ${s.scan_seconds}s, ${ago(s.last_full)}` : "seconds";
+
+  const sel = document.getElementById("f-league"), cur = sel.value;
+  const leagues = [...new Set((s.leagues || []).filter(l => l.matched).map(l => l.kalshi))];
+  if (sel.options.length - 1 !== leagues.length) {
+    sel.innerHTML = '<option value="">All</option>' + leagues.map(l => `<option>${esc(l)}</option>`).join("");
+    sel.value = cur;
+  }
+
+  // Don't rebuild the table while you're typing in it (it would wipe the cursor).
+  const body = document.getElementById("opps"), ae = document.activeElement;
+  if (!force && ae && body.contains(ae) && /INPUT|SELECT/.test(ae.tagName)) return renderRest(s);
+  const all = [...opps.map(o => ({ ...o, stale: false })), ...pinnedRows];
+  body.innerHTML = all.length ? all.map(({ r, z, stale }) => {
+    const key = rowKey(r), isPinned = pinned.has(key);
+    const row = `<tr class="row" data-key="${esc(key)}">
+      <td class="num profit">${money(z.profit)}</td><td class="num">${pct(z.roi)}</td><td class="num">${pct(z.annualized)}</td>
+      <td class="num">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}</div>` : ""}</td>
+      <td class="num">${money(z.capital)}</td>
+      <td><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}
+        <div class="secondary">${esc(r.quantity)}</div>
+        <div class="muted">closes ${esc(localTime(r.closes))}</div>
+        ${stale ? `<div class="warn">${WARN_ICON}No longer an arb at current prices; numbers are from when it was</div>` : ""}</td>
+      <td>${legHtml(r.legs[0], z.k, r.depth?.kalshi)}${legHtml(r.legs[1], z.p, r.depth?.polymarket)}</td><td>${checksHtml(r)}</td></tr>`;
+    const det = open.has(key) || isPinned || document.getElementById("f-expand").checked ? `<tr class="details"><td colspan="8">
+      ${r.warnings.length ? `<b>Warnings</b><ul>${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${tradeHelperHtml(r, key)}
+      ${mathHtml(r, z)}
+      <div class="rules"><div><b>Kalshi rules</b><pre>${esc(r.rules.kalshi)}</pre></div>
+        <div><b>Polymarket rules</b><pre>${esc(r.rules.polymarket)}</pre></div></div></td></tr>` : "";
+    return row + det;
+  }).join("") : `<tr><td colspan="8" class="empty">${s.last_prices ? "No opportunities match right now. The scanner keeps checking." : "Waiting for the first scan…"}</td></tr>`;
+  renderRest(s);
+}
+
+function renderRest(s) {
+  document.getElementById("near").innerHTML = s.near_misses.filter(passes).slice(0, 25).map(r =>
+    `<tr><td class="num">${(r.edge_per_contract * 100).toFixed(2)}¢</td>
+      <td><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span><div class="secondary">${esc(r.quantity)}</div></td>
+      <td>${r.legs.map(l => legHtml(l)).join("")}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">–</td></tr>`;
+
+  document.getElementById("leagues").innerHTML = (s.leagues || []).map(l =>
+    `<tr><td>${esc(l.league)}</td><td>${esc(l.kalshi)}</td><td>${esc(l.sport)}</td><td class="num">${l.pm_games}</td>
+      <td class="num">${l.kalshi_games}</td><td class="num">${l.matched}</td></tr>`).join("");
+  document.getElementById("unmatched").textContent = (s.unmatched || []).join("\n") || "None";
+  document.getElementById("log").textContent = (s.logs || []).join("\n");
+}
+
+const opps = document.getElementById("opps");
+opps.addEventListener("click", e => {
+  const btn = e.target.closest("button[data-action]");
+  if (btn) {
+    const k = btn.dataset.key;
+    if (btn.dataset.action === "live") checkLive(k);
+    if (btn.dataset.action === "trade") openTrade(k);
+    if (btn.dataset.action === "verify" || btn.dataset.action === "wrong") verifyMatch(k, btn);
+    if (btn.dataset.action === "unpin") { pinned.delete(k); delete ui[k]; render(true); }
+    return;
+  }
+  const tr = e.target.closest("tr.row"); if (!tr) return;
+  const k = tr.dataset.key; open.has(k) ? open.delete(k) : open.add(k); render(true);
+});
+opps.addEventListener("input", e => {
+  const el = e.target, k = el.dataset.key, field = el.dataset.field; if (!k || !field) return;
+  const u = uiFor(k); u[field] = el.value;
+  if (u.shares || u.paid) { const r = rowsByKey.get(k); if (r) pinned.set(k, r); }   // keep it on screen mid-trade
+  const r = rowsByKey.get(k), out = opps.querySelector(`[data-result="${CSS.escape(k)}"]`);
+  if (r && out) out.innerHTML = hedgeResult(r, k);
+});
+const FILTER_IDS = ["f-budget", "f-league", "f-min", "f-roi", "f-clean", "f-noshort", "f-nosus", "f-expand", "f-search"];
+for (const id of FILTER_IDS) document.getElementById(id).addEventListener("input", () => { saveFilters(); render(true); });
+// Remember filter settings in this browser between visits.
+function saveFilters() {
+  try { localStorage.setItem("arb-filters", JSON.stringify(Object.fromEntries(FILTER_IDS.map(id => {
+    const el = document.getElementById(id); return [id, el.type === "checkbox" ? el.checked : el.value]; })))); } catch (e) {}
+}
+try { const f = JSON.parse(localStorage.getItem("arb-filters") || "{}");
+  for (const [id, v] of Object.entries(f)) { const el = document.getElementById(id);
+    if (el && id !== "f-league") el.type === "checkbox" ? el.checked = v : el.value = v; } } catch (e) {}
+if (location.search.includes("expand")) document.getElementById("f-expand").checked = true;
+
+async function poll() {
+  try { state = await (await fetch("/api/state")).json(); render(); } catch (e) {
+    document.getElementById("status").textContent = "Scanner not reachable"; document.getElementById("dot").className = "dot err"; }
+}
+poll(); setInterval(poll, 2000);
+loadMatching(true);
+</script>
+</body>
+</html>
