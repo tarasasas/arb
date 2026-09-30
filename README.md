@@ -129,9 +129,37 @@ Safety checks on every match, including pairs approved earlier:
   stations gets a warning, for example CF Benchmarks on Kalshi and Binance on Polymarket. The
   two feeds can disagree right at the line, and then both legs can lose.
 
+- **Different data providers:** a pair is never auto-matched when the two rules name different
+  providers for the same kind of number: price feeds, weather stations, music charts (Spotify vs
+  Luminate/Billboard), wealth rankings (Forbes vs Bloomberg), or AI leaderboards (LiveBench vs
+  LMArena).
+- **"90+" vs "Above 90":** these never pair. On a whole-number score such as Rotten Tomatoes or a
+  seat count, a result of exactly 90 loses both legs.
+- **One-way rules:** some Kalshi markets also resolve YES on an *announcement*, for example "leave
+  office or announce leaving", while Polymarket needs the event itself. Kalshi YES with Polymarket NO
+  is safe. A trade holding Kalshi NO gets a ONE-WAY RULES warning, because an announcement alone
+  loses both legs.
+
 The **Non-sports tabs** table shows, for each category tab on each site, how many markets are
 open and how many outcome pairs the matcher found. Tabs with pairs on both sites are where
 non-sports arbs can show up.
+
+## Checking what the dashboard found
+
+With the dashboard running, run this in a second window:
+
+```
+python -m arb.verify
+```
+
+For every opportunity it:
+
+- re-fetches both order books live;
+- recomputes the profit at today's depth;
+- sorts the row as **LEGIT**, **GONE**, **SUSPECT** (too good to be true), **WRONG** (different
+  source, year or time), or **TRAP** (this direction can lose both legs).
+
+LEGIT means no problem was found, not that there is none, so still read both rules before trading.
 
 ## Make trade (places real orders)
 

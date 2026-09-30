@@ -13,17 +13,15 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
+from .engine import source_mismatch
 from .kalshi import KalshiMarket
 from .model import Contract
 from .polymarket import PMMarket
 
-# Polymarket US category slugs to load. Unknown slugs just come back empty (see raw_markets), so
-# this deliberately over-covers the site's tabs: Politics, Crypto, Macro/Economy, Finance, Earnings,
-# Geopolitics, Weather/Climate, Mentions, Culture, Tech/Science. The dashboard's "Non-sports tabs"
-# table shows which ones actually returned markets.
-PM_CATEGORIES = ("politics", "elections", "culture", "entertainment", "macro", "economy", "economics", "finance",
-                 "financials", "earnings", "companies", "commodities", "technology", "tech", "science", "climate",
-                 "weather", "crypto", "geopolitics", "world", "mentions")
+# Every non-sports category Polymarket US has (checked against the live API, Sep 2026). Unknown
+# slugs return nothing; the dashboard's "Non-sports tabs" table shows what each one returned.
+PM_CATEGORIES = ("politics", "culture", "macro", "finance", "technology", "climate", "crypto", "geopolitics",
+                 "science")
 MONTHS = {"jan": "january", "feb": "february", "mar": "march", "apr": "april", "jun": "june", "jul": "july",
           "aug": "august", "sep": "september", "sept": "september", "oct": "october", "nov": "november",
           "dec": "december"}
@@ -31,7 +29,9 @@ SYNONYMS = {"d": "democratic", "dem": "democratic", "democrat": "democratic", "d
             "r": "republican", "rep": "republican", "gop": "republican", "republicans": "republican",
             "govenor": "governor", "gubernatorial": "governor", "pres": "president", "presidential": "president",
             "btc": "bitcoin", "eth": "ethereum", "fomc": "fed", "hikes": "hike", "cuts": "cut", "wins": "win",
-            "winner": "win", "senator": "senate", "elections": "election"}
+            "winner": "win", "senator": "senate", "elections": "election", "nominee": "nomination",
+            "nominees": "nomination", "nominated": "nomination", "nominations": "nomination", "nyc": "newyorkcity",
+            "songs": "song", "albums": "album"}
 STOP = set("the a an of in on by be to for what which who how is at will does do did with and or from this that "
            "than more less before after end next per its it as are was were has have any get".split())
 STATES = {"AL": "alabama", "AK": "alaska", "AZ": "arizona", "AR": "arkansas", "CA": "california", "CO": "colorado",
@@ -45,14 +45,33 @@ STATES = {"AL": "alabama", "AK": "alaska", "AZ": "arizona", "AR": "arkansas", "C
           "UT": "utah", "VT": "vermont", "VA": "virginia", "WA": "washington", "WV": "westvirginia",
           "WI": "wisconsin", "WY": "wyoming", "DC": "districtofcolumbia"}
 STATE_NAMES = {v for v in STATES.values()}
+# Cities that weather, mayor and local markets are about; two different cities are never the same market.
+CITIES = {"newyorkcity", "chicago", "miami", "losangeles", "sanfrancisco", "austin", "denver", "philadelphia",
+          "houston", "seattle", "boston", "atlanta", "dallas", "phoenix", "lasvegas", "neworleans", "minneapolis",
+          "washingtondc", "sanantonio", "oklahomacity", "detroit", "portland", "nashville", "london", "paris",
+          "tokyo", "seoul", "toronto", "wellington", "karachi"}
+MULTIWORD_CITIES = {"new york city": "newyorkcity", "los angeles": "losangeles", "san francisco": "sanfrancisco",
+                    "las vegas": "lasvegas", "new orleans": "neworleans", "washington dc": "washingtondc",
+                    "washington, d.c.": "washingtondc", "san antonio": "sanantonio", "oklahoma city": "oklahomacity"}
 MULTIWORD_STATES = {"new hampshire": "newhampshire", "new jersey": "newjersey", "new mexico": "newmexico",
                     "new york": "newyork", "north carolina": "northcarolina", "north dakota": "northdakota",
                     "rhode island": "rhodeisland", "south carolina": "southcarolina", "south dakota": "southdakota",
                     "west virginia": "westvirginia", "district of columbia": "districtofcolumbia"}
 # Words that change what a market measures; one side having it and the other not is a red flag.
 CONCEPTS = {"margin", "turnout", "percent", "nomination", "primary", "seats", "control", "approval", "runoff",
-            "popular", "mention", "say", "price", "score", "rank", "place", "global", "county", "state"}
+            "popular", "mention", "say", "price", "score", "rank", "place", "global", "county", "state",
+            "core", "goods", "services", "shelter", "energy", "food", "week", "target", "spotify", "billboard",
+            "ifpi", "streams", "album", "song"}
+# A lone one of these always means a different market: winner vs nominee, core vs headline CPI,
+# a weekly vs season-long question, Spotify vs Billboard chart, a combo vs a single leg.
+HARD_CONCEPTS = {"nomination", "core", "goods", "services", "shelter", "energy", "food", "week", "target",
+                 "spotify", "billboard", "ifpi", "combo", "elimination", "eliminated", "runner", "margin",
+                 "digital", "selling", "sales", "streaming", "grammy", "grammys", "oscar", "oscars", "emmy", "emmys",
+                 "cma", "globe", "globes", "tony", "tonys", "bafta", "vma", "vmas"}
+INDICATORS = {"cpi", "ppi", "pce", "gdp", "unemployment", "payrolls", "jobless", "claims", "retail"}
+TOP_N_RE = re.compile(r"\btop[- ](\d+)\b", re.I)
 MONTH_NAMES = set(MONTHS.values()) | {"may"}
+MONTHS_ORDER = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 PRICE_THRESHOLD_WORDS = {"above", "below", "over", "under", "reach", "hit", "dip", "range", "between"}
 OFFICES = {"house", "senate", "governor", "mayor", "president", "parliament", "minister"}
 RANGE_RE = re.compile(r"\d+(?:\.\d+)?\s*[%°$A-Za-z]{0,4}\s*(?:-|–|to)\s*\$?\d")   # "20-25%", "85° to 86°"
@@ -69,9 +88,13 @@ def years(text, ticker=""):
     ys = {int(y) for y in re.findall(r"\b(20[2-4]\d)\b", text or "")}
     # "before 2027" is a 2026 deadline
     ys |= {int(y) - 1 for y in re.findall(r"\bbefore\s+(?:jan(?:uary)?\.?\s+1,?\s+)?(20[2-4]\d)\b", text or "", re.I)}
-    m = re.search(r"-(\d{2})(?:[A-Z]{3}(?:\d{2})?)?$", ticker or "")        # -27, -26DEC, -26DEC31
+    # "Jan 1, 2027" (a deadline) is the end of 2026
+    ys |= {int(y) - 1 for y in re.findall(r"\bjan(?:uary)?\.?\s+1(?:st)?,?\s+(20[2-4]\d)\b", text or "", re.I)}
+    m = re.search(r"-(\d{2})(?:([A-Z]{3})(\d{2})?\d{0,4})?$", ticker or "")   # -27, -26DEC, -26DEC31, -27JAN0100
     if m:
         ys.add(2000 + int(m[1]))
+        if m[2] in ("JAN", "FEB", "MAR"):
+            ys.add(1999 + int(m[1]))   # settles early next year: KXBTCY-27JAN0100 = end of 2026, -27FEB = Nov 2026 vote
     return ys
 
 
@@ -141,12 +164,77 @@ def pm_years(question, end=None):
     return ys
 
 
+PARTIES = {"democratic": "D", "republican": "R", "independent": "I"}
+PARTY_CHAMBER_RE = re.compile(r"\b(d|r|dems?|reps?|democrat\w*|republican\w*)\W+(?:win\s+)?(house|senate|gov)", re.I)
+
+
+def _party_chambers(label):
+    """{('D', 'house'), ('R', 'senate')} from 'D House, R Senate' / 'Dems win Gov, Reps win Senate'."""
+    return {(p[0].upper(), c.lower()) for p, c in PARTY_CHAMBER_RE.findall(label or "")}
+DATE_NUM_RE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?\b|\b20[2-4]\d\b",
+                         re.I)
+
+
+def _values(label):
+    """Signed numbers in a label other than dates and years (thresholds, margins, counts):
+    'Above -0.4%' -> {-0.4}; the dash in '20-25%' is a range, not a sign."""
+    text = DATE_NUM_RE.sub(" ", label or "").replace(",", "").replace("−", "-")
+    return {float(x) for x in re.findall(r"(?<![\d.])-?\d+(?:\.\d+)?", text)}
+
+
+def _deadline_months(label):
+    """Months a deadline label points at; 'Before December' means by the end of November."""
+    out = set()
+    for before, mon in re.findall(r"\b(before\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b(?!\s+\d)",
+                                  (label or "").lower()):
+        i = list(MONTHS_ORDER).index(mon)
+        out.add(MONTHS_ORDER[i - 1] if before else mon)
+    for mon, _day in re.findall(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b",
+                                (label or "").lower()):
+        out.add(mon)
+    return out
+
+
+INCLUSIVE_RE = re.compile(r"\+|≥|\bor (?:more|above|higher|greater)\b|\bat least\b", re.I)
+STRICT_RE = re.compile(r"\b(?:above|over|more than|greater than)\b|>(?!=)", re.I)
+
+
+def _bound(label):
+    """'inclusive' ('90+', 'at least 16'), 'strict' ('Above 90'), or None."""
+    inc, strict = bool(INCLUSIVE_RE.search(label or "")), bool(STRICT_RE.search(label or ""))
+    return "inclusive" if inc and not strict else "strict" if strict and not inc else None
+
+
 def outcomes_compatible(pm_label, k_label):
     """Numbers alone aren't enough: '25 bps Increase' is not 'Hike >25bps' (shape differs),
     not '25 bps Decrease' (direction differs), and 'By December 31' is not 'Before Dec 1'."""
     dp_, dk_ = _month_days(pm_label), _month_days(k_label)
     if dp_ and dk_ and not dp_ & dk_:
         return False
+    mp, mk = _deadline_months(pm_label), _deadline_months(k_label)
+    if mp and mk and not mp & mk:
+        return False                             # "By December 31, 2027" is not "Before March, 2027"
+    tp, tk = tokens(pm_label), tokens(k_label)
+    pp, pk = {PARTIES[t] for t in tp if t in PARTIES}, {PARTIES[t] for t in tk if t in PARTIES}
+    np_, nk = _values(pm_label), _values(k_label)
+    cp, ck = _party_chambers(pm_label), _party_chambers(k_label)
+    if cp and ck and cp != ck:
+        return False                             # "D House, R Senate" is not "R-House, D-Senate"
+    if pp and pk and not pp & pk:
+        return False                             # "Republican 6%+" is not "Democrats, ≥6%"
+    if np_ and nk and bool(pp) != bool(pk):
+        return False                             # "Republican 3%+" vs "Riley, 3+ pts": which party is Riley?
+    if np_ and nk and not np_ & nk:
+        return False                             # "Democrat 3%+" is not "Lamb, 5+ pts"
+    bp, bk = _bound(pm_label), _bound(k_label)
+    if np_ and nk and bp and bk and bp != bk and "$" not in (pm_label or "") + (k_label or ""):
+        return False                             # "90+" vs "Above 90": a score of exactly 90 loses both legs
+    if not re.search(r"\d", (pm_label or "") + (k_label or "")):
+        wp = {t[:4] for t in tp if t.isalpha() and len(t) >= 3}
+        wk = {t[:4] for t in tk if t.isalpha() and len(t) >= 3}
+        short, long_ = (wp, wk) if len(wp) <= len(wk) else (wk, wp)
+        if short and not short <= long_:
+            return False                         # Jair is not Flavio Bolsonaro; "Billie Jean" is not Billie Eilish
     if not times_compatible(pm_label, k_label):
         return False                             # "5pm ET" close is not the "12pm ET" close
     if numbers(pm_label) and numbers(k_label):
@@ -169,9 +257,13 @@ def _shape(label):
 
 def _expand(text):
     """'CA-39' / 'NY25' -> 'california district 39'; multi-word state names -> one token."""
-    text = re.sub(r"\b([A-Z]{2})-?(\d{1,2})\b",
-                  lambda m: f" {STATES[m[1]]} district {int(m[2])} " if m[1] in STATES else m[0], text or "")
+    text = re.sub(r"\b([A-Z]{2})(?:-?(\d{1,2})|-(AL))\b",
+                  lambda m: (f" {STATES[m[1]]} district {'atlarge' if m[3] else int(m[2])} "
+                             if m[1] in STATES else m[0]), text or "")
+    text = re.sub(r"\bat[- ]large\b", "district atlarge", text, flags=re.I)
     low = text.lower()
+    for k, v in MULTIWORD_CITIES.items():          # before states: "new york city" is not the state
+        low = low.replace(k, v)
     for k, v in MULTIWORD_STATES.items():
         low = low.replace(k, v)
     return low
@@ -320,11 +412,11 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
                 cands[i] += 1
         scored = []
         p_set = set(pm_docs[qi])
-        p_dist = set(re.findall(r"district (\d+)", _expand(q["question"])))
+        p_dist = set(re.findall(r"district (\d+|atlarge)", _expand(q["question"])))
         p_years = pm_years(q["question"], q["end"])
         for i, _ in cands.most_common(60):
             k_set = set(k_docs[i])
-            k_dist = set(re.findall(r"district (\d+)", _expand(f"{kq[i]['title']} {kq[i]['sub_title']}")))
+            k_dist = set(re.findall(r"district (\d+|atlarge)", _expand(f"{kq[i]['title']} {kq[i]['sub_title']}")))
             if p_dist and k_dist and not p_dist & k_dist:
                 continue                                        # PA-01 is never PA-03
             k_years = years(f"{kq[i]['title']} {kq[i]['sub_title']}", kq[i]["key"])
@@ -340,6 +432,12 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
             if nums_p and nums_k:
                 overlap = len(nums_p & nums_k) / len(nums_p | nums_k)
                 s += 0.1 * overlap if overlap else -0.3         # e.g. district 3 vs district 1
+            pc, kc = p_set & CITIES, k_set & CITIES
+            if pc and kc and not pc & kc:
+                continue                                        # NYC temperature is never Chicago's
+            if _month_days(q["question"]) and _month_days(kq[i]["title"]) and \
+                    not _month_days(q["question"]) & _month_days(kq[i]["title"]):
+                continue                                        # net worth on Oct 31 is not on Dec 31
             sp, sk = p_set & STATE_NAMES, k_set & STATE_NAMES
             if sp and sk and not sp & sk:
                 s -= 0.4                                        # different states
@@ -348,6 +446,14 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
             op, ok = _offices(pm_docs[qi]), _offices(k_docs[i])
             if op and ok and not op & ok:
                 s -= 0.3                                        # House vs Governor, etc.
+            if (p_set ^ k_set) & HARD_CONCEPTS:
+                continue                                        # Grammy winner is never Grammy nominee
+            pi, ki = p_set & INDICATORS, k_set & INDICATORS
+            if pi and ki and pi != ki:
+                continue                                        # CPI is never PPI
+            k_text = f"{kq[i]['title']} {kq[i]['sub_title']}"
+            if set(TOP_N_RE.findall(q["question"])) != set(TOP_N_RE.findall(k_text)):
+                continue                                        # "Top song" is not "a top 10 song"
             lone = (p_set ^ k_set) & CONCEPTS
             if lone == {"price"} and (p_set | k_set) & PRICE_THRESHOLD_WORDS:
                 lone = set()                  # "Bitcoin price at 5pm?" (Kalshi) = "Bitcoin above ___ at 5PM?"
@@ -386,6 +492,9 @@ def _pair_outcomes(q, k, score, decided):
                     continue                    # "20-25%" bucket is not the same market as "25+"
                 if not outcomes_compatible(_pm_outcome_text(q, pm), km.get("yes_sub_title") or km.get("title") or ""):
                     continue
+                ky, py = years(km.get("yes_sub_title") or ""), pm_years(f"{q['question']} {_pm_label(pm)}")
+                if ky and py and not ky & py:
+                    continue                    # "Hike in 2026?" is not "Next hike before 2028"
                 s = cosine(pv, vec)
                 if pn and kn:
                     s = 0.5 * s + 0.5 * (len(pn & kn) / len(pn | kn))
@@ -444,7 +553,9 @@ def split_auto(groups, min_event, min_outcome):
         for p in g["pairs"]:
             pm_mid, k_mid = _mid(p.get("pm_bid"), p.get("pm_ask")), _mid(p.get("k_bid"), p.get("k_ask"))
             wild = pm_mid is not None and k_mid is not None and abs(pm_mid - k_mid) > MAX_AUTO_PRICE_GAP
-            if g["score"] >= min_event and p["score"] >= min_outcome and p["hint"] != "opposite" and not wild:
+            other_source = source_mismatch(p.get("k_rules"), p.get("pm_rules"))   # Forbes vs Bloomberg, etc.
+            if (g["score"] >= min_event and p["score"] >= min_outcome and p["hint"] != "opposite" and not wild
+                    and not other_source):
                 auto.append({"pm": p["pm"], "kalshi": p["kalshi"], "relation": "same", "auto": True,
                              "question": g["pm"]["question"], "pm_label": p["pm_label"], "k_label": p["k_label"],
                              "k_title": p["k_title"]})
@@ -483,7 +594,7 @@ def pm_market_obj(m, default_coef):
 def pair_conflict(km, pm):
     """Reason an approved pair can't be the same question, or None. Catches pairs saved before
     a check existed, e.g. the 2026 Nobel (Polymarket) approved against KXNOBELPEACE-27."""
-    py, ky = years(pm.title), years(km.title, km.event_ticker)
+    py, ky = years(pm.title), years(f"{km.title} {km.name}", km.event_ticker)
     if py and ky and not py & ky:
         return (f"different years: Polymarket {'/'.join(map(str, sorted(py)))}, "
                 f"Kalshi {'/'.join(map(str, sorted(ky)))} ({km.event_ticker})")

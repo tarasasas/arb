@@ -131,6 +131,10 @@ SETTLEMENT_SOURCES = {
     "weather": {"National Weather Service": r"national weather service|\bnws\b|nowdata|climatological report",
                 "Weather Underground": r"weather underground|wunderground", "AccuWeather": r"accuweather",
                 "Meteostat": r"meteostat"},
+    "chart": {"Spotify": r"spotify", "Luminate/Billboard": r"luminate|billboard", "Apple Music": r"apple music"},
+    "wealth": {"Forbes": r"forbes", "Bloomberg Billionaires": r"bloomberg billionaires"},
+    "ai leaderboard": {"LiveBench": r"livebench", "LMArena": r"\barena\b|lmarena", "Artificial Analysis":
+                       r"artificial analysis"},
 }
 
 
@@ -147,6 +151,18 @@ def source_mismatch(k_rules, p_rules):
         if sk[fam] and sp[fam] and not sk[fam] & sp[fam]:
             return f"Kalshi: {', '.join(sorted(sk[fam]))}; Polymarket: {', '.join(sorted(sp[fam]))}"
     return None
+
+
+ANNOUNCE_K = re.compile(r"announce", re.I)
+ANNOUNCE_EXCLUDED = re.compile(r"announcements?\b[^.]{0,60}\b(?:do not|does not|will not|won't) (?:qualify|count)", re.I)
+
+
+def one_way_trap(k, sk, p):
+    """Kalshi resolves YES on an announcement ("leave office or announce leaving") while Polymarket
+    needs the real thing. Kalshi YES + Polymarket NO is then still safe; holding Kalshi NO is not:
+    an announcement without the event loses both legs."""
+    return (sk == NO and bool(ANNOUNCE_K.search(k.rules or "")) and bool(ANNOUNCE_EXCLUDED.search(p.rules or ""))
+            and p.op == ">")
 
 
 def exact_hedge(k, sk, p, sp):
@@ -176,11 +192,22 @@ def not_simple_reasons(cand):
             why.append("auto-matched, not verified")
         if source_mismatch(k.rules, p.rules):
             why.append("different settlement sources")
+        if one_way_trap(k, sk, p):
+            why.append("Kalshi also resolves YES on an announcement")
     else:
         ok, op = _ot_rule(k.rules), _ot_rule(p.rules)
         if ok and op and ok != op:
             why.append("overtime rules differ")
     return why
+
+
+def trade_warnings(cand):
+    """Warnings that depend on which sides the trade takes."""
+    if cand["k"].var[0] == "event" and one_way_trap(cand["k"], cand["sk"], cand["p"]):
+        return ["ONE-WAY RULES: Kalshi also resolves YES if they only ANNOUNCE it; Polymarket needs it to actually "
+                "happen. This trade holds Kalshi NO, so an announcement without the event loses both legs. The reverse "
+                "trade (Kalshi YES + Polymarket NO) would be safe."]
+    return []
 
 
 def warnings_for(k, p, now):
@@ -343,7 +370,7 @@ def to_row(cand, sizing, now):
         "quantity": describe_var(k.var), "payout": cand["payout"], "edge_per_contract": round(cand["edge"], 4),
         "legs": [leg_text(k, cand["sk"], cand["ak"]), leg_text(p, cand["sp"], cand["ap"])],
         "rules": {"kalshi": k.rules, "polymarket": p.rules},
-        "warnings": (explain_suspicious(cand, now) if too_good else []) + warnings_for(k, p, now),
+        "warnings": (explain_suspicious(cand, now) if too_good else []) + trade_warnings(cand) + warnings_for(k, p, now),
         "pm_short": cand["sp"] == NO,
         "not_simple": not_simple_reasons(cand),
         "suspicious": too_good, "closes": close.isoformat() if close else None,

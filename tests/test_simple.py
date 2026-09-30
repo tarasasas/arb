@@ -46,6 +46,57 @@ class SimpleTradeTests(unittest.TestCase):
         self.assertIsNone(engine.source_mismatch("Federal Reserve target rate", "FOMC statement"))
 
 
+class RuleTrapTests(unittest.TestCase):
+    def test_announcement_counts_only_on_kalshi(self):
+        k = Contract("kalshi", "K", "E", ("event", "x"), ">", 0.5, "t",
+                     "If Zelenskyy has either officially announced their intention to leave or has left...")
+        p = Contract("polymarket", "P", "E", ("event", "x"), ">", 0.5, "t",
+                     "Must formally cease to hold the position. Announcements of a future departure do not qualify.")
+        self.assertTrue(engine.not_simple_reasons(cand(k, NO, p, YES)))
+        self.assertTrue(engine.trade_warnings(cand(k, NO, p, YES)))
+        self.assertEqual(engine.trade_warnings(cand(k, YES, p, NO)), [])      # Kalshi YES side stays safe
+
+    def test_inclusive_vs_strict_threshold(self):
+        self.assertFalse(nonsports.outcomes_compatible("90+", "Above 90"))
+        self.assertTrue(nonsports.outcomes_compatible("Democratic Party 16%+", "Democrats, ≥16%"))
+        self.assertTrue(nonsports.outcomes_compatible("Above $5.20", "Above $5.20"))
+
+    def test_more_sources(self):
+        self.assertIsNotNone(engine.source_mismatch("Forbes Real-Time Billionaires", "Bloomberg Billionaires Index"))
+        self.assertIsNotNone(engine.source_mismatch("Luminate year-end report", "Spotify Wrapped"))
+        self.assertIsNotNone(engine.source_mismatch("LiveBench.ai Coding Average", "Arena AI Text Arena leaderboard"))
+
+
+class MatcherTests(unittest.TestCase):
+    def test_wrong_pairs_seen_live(self):
+        bad = [("Republican Party 6%+", "Democrats, ≥6%"), ("Democrat 3%+", "Lamb, 5+ pts"),
+               ("Flavio Bolsonaro", "Jair Bolsonaro"), ("By December 31, 2027", "Before March, 2027"),
+               ("By December 31, 2026", "Before December"), ("Above 0.4%", "Above -0.4%"),
+               ("D House, R Senate", "R-House, D-Senate"), ("Billie Jean - Michael Jackson", "Billie Eilish")]
+        for a, b in bad:
+            self.assertFalse(nonsports.outcomes_compatible(a, b), (a, b))
+        good = [("By December 31, 2026", "Before 2027"), ("Mark Takano (D)", "Mark Takano"),
+                ("Volodymyr Zelensky", "Volodymyr Zelenskyy"), ("20-25%", "20-25%"),
+                ("Sudans Emergency Response Rooms (ERRs)", "Sudan’s Emergency Response Rooms")]
+        for a, b in good:
+            self.assertTrue(nonsports.outcomes_compatible(a, b), (a, b))
+
+    def test_at_large_and_cities(self):
+        self.assertIn("alaska", nonsports.tokens("AK-AL House Election Winner"))
+        self.assertNotIn("maine", nonsports.tokens("MEAL DEAL"))
+        pm = [pm_market("p", "Highest temperature in NYC on October 1?", "72 to 73", 0.3, 0.32,
+                        end="2026-10-02T00:00:00Z", category="climate")]
+        ev = [{"event_ticker": "KXHIGHCHI-26OCT01", "title": "Highest temperature in Chicago on Oct 1, 2026",
+               "sub_title": "", "category": "Climate and Weather",
+               "markets": [k_market("KXHIGHCHI-26OCT01-B72.5", "KXHIGHCHI-26OCT01", "72° to 73°", 0.3, 0.32)]}]
+        self.assertEqual(nonsports.suggest(pm, ev, set(), set()), [])
+
+    def test_settlement_early_next_year_is_same_year(self):
+        self.assertIn(2026, nonsports.years("BTC price on Jan 1, 2027?", "KXBTCY-27JAN0100"))
+        self.assertIn(2026, nonsports.years("", "KXARREST-27JAN"))
+        self.assertEqual(nonsports.years("", "KXNOBELPEACE-27"), {2027})
+
+
 class TimeAndYearTests(unittest.TestCase):
     def test_clock_times(self):
         self.assertEqual(nonsports.clock_times("Bitcoin above $120k on Oct 1 at 5pm ET?"), {17 * 60})
