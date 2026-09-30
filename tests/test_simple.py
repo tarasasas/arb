@@ -36,8 +36,7 @@ class SimpleTradeTests(unittest.TestCase):
     def test_whole_number_line_short_and_too_good(self):
         k, p = c(TOTAL, ">", 8), c(TOTAL, ">", 8, "polymarket")
         why = engine.not_simple_reasons(cand(k, YES, p, NO, edge=0.2))
-        self.assertEqual(why, ["whole-number line (push possible)", "shorts on Polymarket (locks $1)",
-                               "too good to be true"])
+        self.assertEqual(why, ["whole-number line (push possible)", "too good to be true"])
 
     def test_settlement_source_mismatch(self):
         self.assertIn("CF Benchmarks", engine.source_mismatch("Settles on the CF Benchmarks BRTI at 5pm ET.",

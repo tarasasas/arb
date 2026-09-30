@@ -6,7 +6,7 @@ import traceback
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 
-from . import config, engine, matching, nonsports
+from . import config, crypto, engine, matching, nonsports
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
 from .polymarket import PolymarketClient
@@ -32,6 +32,7 @@ class Scanner:
         self.suggest_state = {"status": "waiting"}
         self._pairs_pending = False
         self.auto_pairs = []            # confident non-sports matches scanned without your approval
+        self.crypto_pairs = []          # identical crypto Up/Down windows, paired by contract terms
         self.trader, self.trading_status = self._make_trader()
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
                       "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
@@ -119,7 +120,7 @@ class Scanner:
         approved = self.store.approved()
         manual = {(a["pm"], a["kalshi"]) for a in approved}
         with self.lock:
-            approved += [a for a in self.auto_pairs if (a["pm"], a["kalshi"]) not in manual]
+            approved += [a for a in self.auto_pairs + self.crypto_pairs if (a["pm"], a["kalshi"]) not in manual]
         contracts, source, conflicts = [], {}, []
         if approved:
             if not self.series_fees:
@@ -152,6 +153,26 @@ class Scanner:
                                         "approved_pairs": len(p_contracts) // 2,
                                         "auto_pairs": sum(1 for c in p_contracts
                                                           if c.note == "auto" and c.exchange == "kalshi")})
+
+    def refresh_crypto(self):
+        """Pair the current crypto Up/Down windows; reload pairs only when the set changes."""
+        pm_raw = self.pm.raw_markets(("crypto",), self.log)
+        k_raw = [m for series in crypto.kalshi_series_for(pm_raw) for m in self.kalshi.open_markets(series)]
+        new = crypto.pairs(pm_raw, k_raw)
+        with self.lock:
+            changed = {(a["pm"], a["kalshi"]) for a in new} != {(a["pm"], a["kalshi"]) for a in self.crypto_pairs}
+            self.crypto_pairs = new
+        if changed:
+            self.log(f"Crypto Up/Down: {len(new)} identical window(s) on both exchanges")
+            self.refresh_pairs()
+
+    def _crypto_loop(self, stop_event):
+        while not (stop_event and stop_event.is_set()):
+            try:
+                self.refresh_crypto()
+            except Exception as e:
+                self.log(f"Crypto pairing error: {e!r}")
+            time.sleep(config.CRYPTO_REFRESH_SECS)
 
     def _suggest_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
@@ -347,6 +368,7 @@ class Scanner:
         self.start_message()
         threading.Thread(target=self._catalog_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._suggest_loop, args=(stop_event,), daemon=True).start()
+        threading.Thread(target=self._crypto_loop, args=(stop_event,), daemon=True).start()
         while not self.contracts and not (stop_event and stop_event.is_set()):
             time.sleep(1)               # first catalog load
         threading.Thread(target=self._loop, args=(stop_event, False), daemon=True).start()

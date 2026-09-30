@@ -183,8 +183,6 @@ def not_simple_reasons(cand):
         why.append("whole-number line (push possible)")
     elif not exact_hedge(k, sk, p, sp):
         why.append("different lines (some results pay $2)")
-    if sp == NO:
-        why.append("shorts on Polymarket (locks $1)")
     if cand["edge"] > SUSPICIOUS_EDGE:
         why.append("too good to be true")
     if k.var[0] == "event":
@@ -213,7 +211,10 @@ def trade_warnings(cand):
 def warnings_for(k, p, now):
     w = []
     if k.var[0] == "event":
-        if k.note == "auto":
+        if k.note == "structural":
+            w.append("Paired by contract terms: same coin, same CF Benchmarks index, same window and same price "
+                     "to beat on both exchanges. Quotes move fast in the last minutes of a window.")
+        elif k.note == "auto":
             w.append("AUTO-MATCHED, NOT VERIFIED: the scanner paired these by wording. Open the math and read both "
                      "rules; if they aren't the same question, click Wrong match. A wrong match looks like a sure "
                      "arb but can lose on both sides.")
@@ -251,7 +252,7 @@ def warnings_for(k, p, now):
 
 def leg_text(c, side, price):
     if c.exchange == "polymarket":
-        action = "Buy (long)" if side == YES else f"Sell/short (receive ${1 - price:.3f}, locks $1)"
+        action = "Buy (long)" if side == YES else f"Sell/short (receive ${1 - price:.3f}; uses ${price:.3f} of buying power)"
     else:
         action = f"Buy {side.upper()}"
     return {"exchange": EXCHANGE_NAMES[c.exchange], "market_id": c.market_id, "title": c.title,

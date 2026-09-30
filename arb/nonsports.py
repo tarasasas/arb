@@ -618,10 +618,11 @@ def approved_contracts(approved, kalshi_markets, pm_markets, conflicts=None):
             continue
         pid = f"{a['pm']}|{a['kalshi']}"
         var, key = ("event", pid), f"{(pm.league or 'other').upper()}:{pid}"
-        label = pm.title if len(pm.title) < 90 else pm.title[:87] + "…"
+        label = a.get("label") or pm.title
+        label = label if len(label) < 90 else label[:87] + "…"
         k_op = ">"                                  # Kalshi YES = the event
         p_op = ">" if a["relation"] == "same" else "<"
-        note = "auto" if a.get("auto") else ""
+        note = "structural" if a.get("structural") else "auto" if a.get("auto") else ""
         contracts.append(Contract("kalshi", km.ticker, key, var, k_op, 0.5, km.title, km.rules, False, km.fee_coef,
                                   km.close_time, False, True, label, note))
         contracts.append(Contract("polymarket", pm.slug, key, var, p_op, 0.5, pm.title, pm.rules, False, pm.fee_coef,
