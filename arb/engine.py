@@ -263,7 +263,7 @@ def warnings_for(k, p, now):
 
 def leg_text(c, side, price):
     if c.exchange == "polymarket":
-        action = "Buy (long)" if side == YES else f"Sell/short (receive ${1 - price:.3f}; uses ${price:.3f} of buying power)"
+        action = f"Buy {side.upper()}"       # Polymarket US: Buy No is a short of YES costing 1 - bid
     else:
         action = f"Buy {side.upper()}"
     return {"exchange": EXCHANGE_NAMES[c.exchange], "market_id": c.market_id, "title": c.title,

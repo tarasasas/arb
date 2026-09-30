@@ -49,9 +49,10 @@ order-book depth and fee rounding.
 
 More filters above the table (the browser remembers them):
 
-- **Hide Polymarket shorts:** hides any trade that shorts on Polymarket. Polymarket US has no NO
-  shares, so taking NO means shorting YES. That costs the same as buying NO: you receive the bid, $1
-  is held as margin, and your buying power drops by 1 − bid.
+- **Hide Polymarket Buy NO:** hides any trade that buys NO on Polymarket. In the app that's
+  **Buy → No**. Under the hood Polymarket US has no NO shares: it sells YES for you at the bid and
+  holds $1 as margin, so each share costs 1 − bid, the price the dashboard shows. There's no extra
+  risk compared with buying NO on Kalshi.
 - **Hide too-good-to-be-true:** hides any opportunity over 10¢ per contract.
   - These rows sort to the bottom and carry an automatic explanation, for example "Kalshi
     prices its outcome at 3%, Polymarket at 71%".
@@ -246,8 +247,8 @@ trigger orders. The server listens on localhost only.
 - **Taker fees only.**
   - Kalshi: `0.07 × series fee_multiplier × C × P × (1−P)`.
   - Polymarket: `feeCoefficient × C × p × (1−p)` (currently 0.0695).
-- **Shorting on Polymarket US is the NO side.** You receive the bid and $1 is held as margin, so
-  buying power drops by `1 − bid`, the same as buying NO. The capital figure uses `1 − bid`.
+- **Buy NO on Polymarket US is a short of YES.** You receive the bid and $1 is held as margin, so
+  each share costs `1 − bid`, the same as buying NO. The dashboard shows it as Buy NO at `1 − bid`.
 - **Whole-number lines assume a push pays nothing on either side.** This is conservative.
   Such rows carry a warning.
 - **Ties and draws.** An NFL moneyline tie pays $0.50 on both exchanges. Basketball,

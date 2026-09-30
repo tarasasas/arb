@@ -157,7 +157,7 @@
     <label>Min profit $ <input id="f-min" type="number" min="0" step="0.5" value="0"></label>
     <label>Min ROI % <input id="f-roi" type="number" min="0" step="0.1" value="0"></label>
     <label><input id="f-clean" type="checkbox"> Hide rows with warnings</label>
-    <label><input id="f-noshort" type="checkbox"> Hide Polymarket shorts</label>
+    <label><input id="f-noshort" type="checkbox"> Hide Polymarket Buy NO</label>
     <label><input id="f-nosus" type="checkbox"> Hide too-good-to-be-true</label>
     <label title="Two exact-opposite legs (every result pays $1), no whole-number line, same overtime rules and settlement source, verified match"><input id="f-simple" type="checkbox"> Simple trades only</label>
     <label>Settles within <input id="f-days" type="number" min="0" step="1" placeholder="any" style="width:60px"> days</label>
@@ -178,8 +178,8 @@
   </div>
   <p class="caveat">Click a row for the math. Bet amounts use the actual order-book depth and each exchange's fee
     rounding; set "Max to invest" to size every arb to your stake. Profit is locked in only if both legs fill at these prices. Quotes from the two exchanges are
-    fetched seconds apart and move constantly — re-check both books before trading. A Polymarket short costs 1 − bid of buying power
-    per contract (you receive the bid and $1 is held as margin), the same as buying NO. Opportunities can share a leg, so don't add their profits together.</p>
+    fetched seconds apart and move constantly — re-check both books before trading. On Polymarket, Buy NO costs 1 − the YES bid per
+    share, the price shown here. Opportunities can share a leg, so don't add their profits together.</p>
 
   <h2>Closest to breaking even</h2>
   <div class="table-wrap">
@@ -274,12 +274,16 @@ function sizeFor(r, budget) {
   return calc(r, lo);
 }
 
-// "Buy YES" / "Short" (Polymarket has no NO shares: taking NO means selling YES at the bid).
-const doText = l => l.exchange === "Polymarket" && l.side === "no" ? "Short YES" : `Buy ${l.side.toUpperCase()}`;
+// Legs are worded like both sites' buttons: Buy → Yes / Buy → No. On Polymarket US, Buy No is a
+// short of YES under the hood; it costs 1 − the YES bid, which is the price shown.
+// Highest price the order fills at: the limit to enter so the whole size fills and nothing costs more.
+const limitOf = s => s && s.fills && s.fills.length ? s.fills[s.fills.length - 1][0] : null;
 function legHtml(l, s) {
   const cls = l.exchange === "Kalshi" ? "kalshi" : "poly";
-  const what = s && s.n ? `<b>${doText(l)}</b> ${s.n.toLocaleString()} @ ${cents(s.avg)} = <b>${money(s.cost + s.fee)}</b>`
-                        : `<b>${doText(l)}</b> @ ${cents(l.price)}`;
+  const what = s && s.n
+    ? `<b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> · <b>${s.n.toLocaleString()}</b> shares · limit <b>${cents(limitOf(s))}</b>
+       <span class="muted">= ${money(s.cost + s.fee)}</span>`
+    : `<b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> @ ${cents(l.price)}`;
   return `<div class="leg"><span class="ex ${cls}">${esc(l.exchange.toUpperCase())}</span>
     <span class="what">${what}<span class="mkt" title="${esc(l.title)}">${esc(l.title)}</span></span></div>`;
 }
@@ -588,10 +592,9 @@ function mathHtml(r, z) {
   if (!z.n) return `<div class="math">Too small to trade at this budget.</div>`;
   const [lk, lp] = r.legs, n = z.n;
   const step = (i, l, leg) => {
-    const short = l.exchange === "Polymarket" && l.side === "no";
-    const price = short ? `${cents(1 - leg.avg)} bid <span class="muted">(costs ${cents(leg.avg)})</span>` : cents(leg.avg);
-    return `<tr><td class="num">${i}</td><td>${l.exchange}</td><td><b>${doText(l)}</b></td>
-      <td class="num">${n.toLocaleString()}</td><td class="num">${price}</td><td class="num">${money(leg.cost)}</td>
+    return `<tr><td class="num">${i}</td><td>${l.exchange}</td><td><b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b></td>
+      <td class="num"><b>${n.toLocaleString()}</b></td><td class="num"><b>${cents(limitOf(leg))}</b></td>
+      <td class="num">${cents(leg.avg)}</td><td class="num">${money(leg.cost)}</td>
       <td class="num">${money(leg.fee)}</td><td class="num"><b>${money(leg.cost + leg.fee)}</b></td></tr>`;
   };
   const same = r.scenarios.every(sc => Math.abs(sc.total - r.payout) < 1e-9);
@@ -611,9 +614,12 @@ function mathHtml(r, z) {
       <div class="sumcard"><div class="label">Profit</div><div class="big profit">${money(z.profit)}</div>
         <div class="sub">${pct(z.roi)}${z.annualized != null ? ` · ${pct(z.annualized)} a year` : ""} · paid out ${esc(localTime(r.closes))}</div></div>
     </div>
-    <table class="steps"><thead><tr><th class="num">Step</th><th>Where</th><th>Do</th><th class="num">Shares</th>
-      <th class="num">Avg price</th><th class="num">Cost</th><th class="num">Fee</th><th class="num">Total</th></tr></thead>
+    <table class="steps"><thead><tr><th class="num">Step</th><th>Site</th><th>Click</th><th class="num">Shares</th>
+      <th class="num">Limit price</th><th class="num">Avg fill</th><th class="num">Cost</th><th class="num">Fee</th>
+      <th class="num">Total</th></tr></thead>
       <tbody>${step(1, lk, z.k)}${step(2, lp, z.p)}</tbody></table>
+    <div class="sub muted" style="margin:-2px 0 8px">Use a limit order at the limit price: the whole size fills at or below
+      it, and the average works out to the avg fill. Prices are from the last scan; press "Check live depth" first.</div>
     ${outcomes}</div>`;
 }
 function checksHtml(r) {
