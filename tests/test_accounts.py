@@ -1,0 +1,100 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from arb import accounts, myarbs
+from arb.model import Contract
+
+
+class FakeHTTP:
+    """Replies shaped like the exchanges' documented responses, one page each."""
+    def __init__(self, pages):
+        self.pages, self.calls = list(pages), []
+
+    def get(self, path, params=None):
+        self.calls.append((path, dict(params or {})))
+        return self.pages.pop(0)
+
+
+KALSHI = {"market_positions": [
+    {"ticker": "KXGAS-5.20", "position_fp": "100.00", "market_exposure_dollars": "19.00", "fees_paid_dollars": "1.08"},
+    {"ticker": "KXNOBEL-X", "position_fp": "-40.00", "market_exposure_dollars": "38.00", "fees_paid_dollars": "0.10"},
+    {"ticker": "KXFLAT", "position_fp": "0.00", "market_exposure_dollars": "0", "fees_paid_dollars": "0.50"}],
+    "cursor": ""}
+
+PM = {"positions": {
+    "gas-5pt20": {"netPositionDecimal": "-100", "cost": {"value": "-25.00", "currency": "USD"},
+                  "marketMetadata": {"slug": "gas-5pt20", "title": "Gas above $5.20"}},
+    "btc-range": {"netPositionDecimal": "10", "cost": {"value": "8.40", "currency": "USD"},
+                  "marketMetadata": {"slug": "btc-range", "title": "BTC 80-85k"}},
+    "old": {"netPositionDecimal": "5", "cost": {"value": "1"}, "expired": True}},
+    "eof": True}
+
+
+def contract(ex, mid, key="MACRO:gas"):
+    return Contract(ex, mid, key, ("event", key), ">", 0.5, f"{ex} {mid}", game_label="Gas above $5.20")
+
+
+class ParseTests(unittest.TestCase):
+    def test_kalshi_positions(self):
+        k = accounts.kalshi_positions(FakeHTTP([KALSHI]))
+        self.assertEqual(k["KXGAS-5.20"], {"side": "yes", "shares": 100, "paid": 20.08, "title": "KXGAS-5.20"})
+        self.assertEqual((k["KXNOBEL-X"]["side"], k["KXNOBEL-X"]["shares"]), ("no", 40))
+        self.assertNotIn("KXFLAT", k)                                    # closed out: nothing held
+
+    def test_polymarket_positions(self):
+        p = accounts.polymarket_positions(FakeHTTP([PM]))
+        self.assertEqual((p["gas-5pt20"]["side"], p["gas-5pt20"]["shares"], p["gas-5pt20"]["paid"]), ("no", 100, 75.0))
+        self.assertFalse(p["gas-5pt20"]["paid_estimated"])              # short proceeds converted to 1 - price
+        self.assertEqual((p["btc-range"]["side"], p["btc-range"]["paid"]), ("yes", 8.4))
+        self.assertNotIn("old", p)                                       # expired
+
+    def test_pagination(self):
+        h = FakeHTTP([{"market_positions": [KALSHI["market_positions"][0]], "cursor": "c2"},
+                      {"market_positions": [KALSHI["market_positions"][1]], "cursor": ""}])
+        self.assertEqual(set(accounts.kalshi_positions(h)), {"KXGAS-5.20", "KXNOBEL-X"})
+        self.assertEqual(h.calls[1][1]["cursor"], "c2")
+
+
+class PairTests(unittest.TestCase):
+    def setUp(self):
+        self.contracts = {("kalshi", "KXGAS-5.20"): contract("kalshi", "KXGAS-5.20"),
+                          ("polymarket", "gas-5pt20"): contract("polymarket", "gas-5pt20")}
+        self.lookup = lambda ex, mid: self.contracts.get((ex, mid))
+        self.k = accounts.kalshi_positions(FakeHTTP([KALSHI]))
+        self.p = accounts.polymarket_positions(FakeHTTP([PM]))
+
+    def test_pairs_complementary_positions_and_lists_the_rest(self):
+        pairs, unpaired = accounts.pair_positions(self.k, self.p, self.lookup)
+        self.assertEqual([(t, s, pay) for t, s, _, _, pay in pairs], [("KXGAS-5.20", "gas-5pt20", 1.0)])
+        self.assertEqual({(u["exchange"], u["market_id"]) for u in unpaired},
+                         {("kalshi", "KXNOBEL-X"), ("polymarket", "btc-range")})
+
+    def test_same_side_on_both_sites_is_not_an_arb(self):
+        self.p["gas-5pt20"]["side"] = "yes"                              # YES on both: not hedged
+        pairs, unpaired = accounts.pair_positions(self.k, self.p, self.lookup)
+        self.assertEqual(pairs, [])
+        self.assertEqual(len(unpaired), 4)
+
+    def test_sync_into_my_arbs_respects_your_edits(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = myarbs.MyArbs(Path(d) / "my_arbs.json")
+            pairs, unpaired = accounts.pair_positions(self.k, self.p, self.lookup)
+            info = lambda kc: {"game": kc.game_label, "tab": "Economics", "closes": None}
+            store.sync_from_accounts(pairs, self.k, self.p, unpaired, info)
+            a = store.items[0]
+            self.assertEqual((a["id"], a["source"], a["legs"][0]["paid"], a["legs"][1]["paid"]),
+                             ("acct-KXGAS-5.20-gas-5pt20", "account", 20.08, 75.0))
+            self.assertEqual(myarbs.summarize(a)["profit"], round(100 - 20.08 - 75.0, 2))
+            self.k["KXGAS-5.20"]["shares"] = 120                          # bought more: sync follows
+            store.sync_from_accounts(pairs, self.k, self.p, unpaired, info)
+            self.assertEqual((len(store.items), store.items[0]["legs"][0]["shares"]), (1, 120))
+            store.save({**store.items[0], "note": "mine", "edited": True})  # you edited it: sync leaves it
+            self.k["KXGAS-5.20"]["shares"] = 150
+            store.sync_from_accounts(pairs, self.k, self.p, unpaired, info)
+            self.assertEqual((store.items[0]["legs"][0]["shares"], store.items[0]["note"]), (120, "mine"))
+            self.assertEqual(len(store.unpaired), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

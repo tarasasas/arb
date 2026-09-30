@@ -48,7 +48,8 @@ def serve(scanner, port, open_browser=True):
             if path == "/api/state":
                 return self._json(200, scanner.snapshot())
             if path == "/api/myarbs":
-                return self._json(200, {"arbs": scanner.my_arbs.snapshot(scanner.kalshi, scanner.pm)})
+                return self._json(200, {"arbs": scanner.my_arbs.snapshot(scanner.kalshi, scanner.pm),
+                                        **scanner.my_arbs.state()})
             if path == "/api/matching":
                 q = {k: v[0] for k, v in parse_qs(query).items()}
                 return self._json(200, scanner.matching_snapshot(q.get("q", ""), q.get("category", ""),
@@ -88,7 +89,10 @@ def serve(scanner, port, open_browser=True):
                                 f"{body.get('kalshi') or body.get('kalshi_event')}")
                     return self._json(200, {"ok": True})
                 if path == "/api/myarbs/save":
-                    return self._json(200, scanner.my_arbs.save(body))
+                    return self._json(200, scanner.my_arbs.save({**body, "edited": True}))
+                if path == "/api/myarbs/sync":
+                    scanner.sync_positions()
+                    return self._json(200, scanner.my_arbs.state())
                 if path == "/api/myarbs/delete":
                     scanner.my_arbs.delete(body.get("id", ""))
                     return self._json(200, {"ok": True})

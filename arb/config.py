@@ -99,6 +99,7 @@ POLYMARKET_DEFAULT_COEF = 0.0695
 CATALOG_REFRESH_SECS = 300     # full market lists + game matching
 SUGGEST_REFRESH_SECS = 1800    # rebuild non-sports match suggestions
 CRYPTO_REFRESH_SECS = 20       # look for new 15-minute crypto Up/Down windows
+POSITIONS_REFRESH_SECS = 60    # live position check for My arbs (needs your API keys)
 AUTO_ACCEPT_MATCHES = True     # scan non-sports matches without waiting for approval
 # Match scores needed to auto-accept. 0 accepts every suggestion; pairs whose prices mirror each other,
 # sit 25+ points apart, or settle on different data providers still wait for review (always fake arbs).

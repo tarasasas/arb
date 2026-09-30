@@ -61,6 +61,8 @@ class MyArbs:
         self.path, self.lock = path, threading.Lock()
         self.items = []
         self._live, self._live_time = {}, 0.0
+        self.unpaired = []                          # live positions with no partner on the other site
+        self.sync_state = {"status": "never"}
         if path.exists():
             try:
                 self.items = json.loads(path.read_text(encoding="utf-8")).get("arbs", [])
@@ -88,11 +90,31 @@ class MyArbs:
                      "source": (old or {}).get("source") or arb.get("source") or "manual",
                      "game": str(arb.get("game") or legs[1]["title"]), "tab": arb.get("tab") or "",
                      "closes": arb.get("closes"), "payout": float(arb.get("payout") or 1.0),
-                     "note": str(arb.get("note") or ""), "legs": legs}
+                     "note": str(arb.get("note") or ""), "legs": legs,
+                     "edited": bool(arb.get("edited") or (old or {}).get("edited"))}
             self.items = [a for a in self.items if a["id"] != entry["id"]] + [entry]
             self._save()
             self._live_time = 0.0                   # fetch status for the new markets next time
         return entry
+
+    def sync_from_accounts(self, pairs, kpos, ppos, unpaired, row_info):
+        """Upsert an arb for every paired live position. Shares and cost follow the accounts unless
+        you edited the entry yourself. row_info(kalshi contract) -> {game, tab, closes}."""
+        for ticker, slug, kc, pc, payout in pairs:
+            kp, pp = kpos[ticker], ppos[slug]
+            arb_id = f"acct-{ticker}-{slug}"
+            with self.lock:
+                old = next((a for a in self.items if a["id"] == arb_id), None)
+            if old and old.get("edited"):
+                continue
+            legs = [{"exchange": "kalshi", "market_id": ticker, "side": kp["side"], "title": kc.title,
+                     "shares": kp["shares"], "paid": kp["paid"]},
+                    {"exchange": "polymarket", "market_id": slug, "side": pp["side"], "title": pc.title,
+                     "shares": pp["shares"], "paid": pp["paid"] if pp["paid"] is not None else 0.0}]
+            note = "Polymarket cost estimated from the account: check it" if pp.get("paid_estimated") else ""
+            self.save({"id": arb_id, "source": "account", "payout": payout, "legs": legs, "note": note,
+                       **row_info(kc)})
+        self.unpaired = unpaired
 
     def delete(self, arb_id):
         with self.lock:
@@ -140,3 +162,6 @@ class MyArbs:
                         "worth_now": round(sum(worth), 2) if None not in worth else None,
                         "settled": all(l["state"] in ("settled", "closed") for l in legs)})
         return out
+
+    def state(self):
+        return {"unpaired": self.unpaired, "sync": self.sync_state}

@@ -180,6 +180,11 @@ DOGE and more. Polymarket's 60-minute windows have no Kalshi twin, because Kalsh
 
 The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actually placed:
 
+- **Live position check:** about once a minute, and when you click **Sync now**, it reads your open
+  positions on both sites with the API keys in `.env`. Kalshi and Polymarket positions that together
+  form an arb the scanner knows about are paired and added automatically, with the shares held and
+  what they cost. Positions with no partner on the other site are listed under **Only on one site**.
+  If you edit an arb found this way, the sync stops changing it.
 - **Make trade** adds each trade that hedged at least one pair, with the shares and costs that filled.
 - **Track this arb** on any opportunity opens a form filled in with the dashboard's sizing. Change
   it to what actually filled on each site (shares, and the total paid including fees), then save.

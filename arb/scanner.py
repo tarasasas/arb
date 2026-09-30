@@ -37,6 +37,7 @@ class Scanner:
         self.catalog_time = 0.0
         self.store = MatchStore()
         self.my_arbs = MyArbs()
+        self.accounts = None            # built on first sync (needs the API keys in .env)
         self.sports_cat, self.pairs_cat = ([], {}), ([], {})
         self.series_fees = {}
         self.fee_overrides = {}         # Kalshi per-event fee overrides (e.g. playoff games)
@@ -185,6 +186,38 @@ class Scanner:
         if changed:
             self.log(f"Crypto Up/Down: {len(new)} identical window(s) on both exchanges")
             self.refresh_pairs()
+
+    def sync_positions(self):
+        """Live position check: read both accounts, pair positions into arbs in My arbs."""
+        from . import accounts
+        if self.accounts is None:
+            self.accounts = accounts.Accounts(self.kalshi)
+        acc = self.accounts
+        if len(acc.missing) == 2:
+            self.my_arbs.sync_state = {"status": "off", "error": "Add your Kalshi and Polymarket API keys to .env"}
+            return
+        try:
+            kpos, ppos = acc.positions()
+        except Exception as e:
+            self.my_arbs.sync_state = {"status": "error", "error": repr(e), "time": engine.now_utc().isoformat()}
+            self.log(f"Position check failed: {e!r}")
+            return
+        pairs, unpaired = accounts.pair_positions(kpos, ppos, self.find_contract)
+        self.my_arbs.sync_from_accounts(
+            pairs, kpos, ppos, unpaired,
+            lambda kc: {"game": kc.game_label or kc.game_key.split(":", 1)[-1], "tab": engine.row_tab(kc),
+                        "closes": kc.close_time})
+        self.my_arbs.sync_state = {"status": "ok", "time": engine.now_utc().isoformat(), "missing": acc.missing,
+                                   "positions": len(kpos) + len(ppos), "paired": len(pairs)}
+
+    def _positions_loop(self, stop_event):
+        while not (stop_event and stop_event.is_set()):
+            if self.contracts:                   # pairing needs the market catalog loaded
+                try:
+                    self.sync_positions()
+                except Exception as e:
+                    self.log(f"Position check error: {e!r}")
+            time.sleep(config.POSITIONS_REFRESH_SECS)
 
     def _crypto_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
@@ -404,6 +437,7 @@ class Scanner:
         threading.Thread(target=self._catalog_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._suggest_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._crypto_loop, args=(stop_event,), daemon=True).start()
+        threading.Thread(target=self._positions_loop, args=(stop_event,), daemon=True).start()
         while not self.contracts and not (stop_event and stop_event.is_set()):
             time.sleep(1)               # first catalog load
         threading.Thread(target=self._loop, args=(stop_event, False), daemon=True).start()
