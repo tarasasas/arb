@@ -34,7 +34,7 @@ class Scanner:
         self.auto_pairs = []            # confident non-sports matches scanned without your approval
         self.trader, self.trading_status = self._make_trader()
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
-                      "leagues": [], "unmatched": [], "last_catalog": None, "last_prices": None,
+                      "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
                       "scan_seconds": None, "logs": []}
 
     def _make_trader(self):
@@ -120,7 +120,7 @@ class Scanner:
         manual = {(a["pm"], a["kalshi"]) for a in approved}
         with self.lock:
             approved += [a for a in self.auto_pairs if (a["pm"], a["kalshi"]) not in manual]
-        contracts, source = [], {}
+        contracts, source, conflicts = [], {}, []
         if approved:
             if not self.series_fees:
                 self.series_fees = self.kalshi.series_fee_coefs()
@@ -131,7 +131,11 @@ class Scanner:
                    for t, m in raw_k.items() if m.get("status") in ("active", "open")}
             pms = {s: nonsports.pm_market_obj(m, config.POLYMARKET_DEFAULT_COEF)
                    for s, m in raw_p.items() if m.get("active") and not m.get("closed")}
-            contracts, source = nonsports.approved_contracts(approved, kms, pms)
+            contracts, source = nonsports.approved_contracts(approved, kms, pms, conflicts)
+            for c in conflicts:
+                self.log(f"Not scanning {c['pm']} ↔ {c['kalshi']}: {c['why']}. Remove it under Approved pairs.")
+        with self.lock:
+            self.state["pair_conflicts"] = conflicts
         self.pairs_cat = (contracts, source)
         self._publish()
 
@@ -167,17 +171,19 @@ class Scanner:
             self.suggest_state["status"] = "building"
         self.log("Building non-sports match suggestions...")
         with ThreadPoolExecutor(3) as pool:
-            j_pm = pool.submit(self.pm.raw_markets, nonsports.PM_CATEGORIES)
+            j_pm = pool.submit(self.pm.raw_markets, nonsports.PM_CATEGORIES, self.log)
             j_ev = pool.submit(self.kalshi.open_events)
             j_fee = pool.submit(self.kalshi.series_fee_coefs)
             pm_raw, events, self.series_fees = j_pm.result(), j_ev.result(), j_fee.result()
         pairs, rejected_events = self.store.decided()
         groups = nonsports.suggest(pm_raw, events, pairs, rejected_events)
+        coverage = nonsports.tab_coverage(pm_raw, events, groups)
         auto = []
         if config.AUTO_ACCEPT_MATCHES:
             auto, groups = nonsports.split_auto(groups, config.AUTO_MIN_EVENT_SCORE, config.AUTO_MIN_OUTCOME_SCORE)
         with self.lock:
             self.suggestions, self.auto_pairs = groups, auto
+            self.state["tabs"] = coverage
             self.suggest_state = {"status": "ready", "updated": engine.now_utc().isoformat(),
                                   "pm_markets": len(pm_raw),
                                   "kalshi_markets": sum(len(e.get("markets") or []) for e in events
