@@ -14,11 +14,11 @@ On Windows, double-click these files in this folder:
 
 | File | What it does |
 |---|---|
-| `start-dashboard.bat` | Starts the scanner and opens the dashboard. Close the window to stop it. |
+| `start-dashboard.bat` | Gets the latest code (see `update.bat`), then starts the scanner and opens the dashboard. Close the window to stop it. |
 | `scan-once.bat` | Runs one scan and prints the results in the window. |
 | `run-tests.bat` | Runs the unit tests. |
 | `setup.bat` | One-time setup for the Kalshi API key: installs `cryptography` and creates `.env`. |
-| `update.bat` | Gets the latest code from GitHub by running `update.sh` in Git Bash. Keeps your `.env`, `kalshi.key` and trade log, and throws away any other edits to the code. |
+| `update.bat` | Gets the latest code from GitHub by running `update.sh` in Git Bash. `start-dashboard.bat` runs it for you every time. Keeps your `.env`, `kalshi.key` and trade log, and throws away any other edits to the code. |
 
 Or run from a terminal:
 
