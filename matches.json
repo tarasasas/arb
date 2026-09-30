@@ -21,16 +21,6 @@
    "k_title": "Who will win the Nobel Peace Prize?"
   },
   {
-   "pm": "tac-nobel-peace-2026-10-09-popleo",
-   "kalshi": "KXNOBELPEACE-27-PLEO",
-   "relation": "same",
-   "at": "2026-09-30T17:46:37.058909+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "Pope Leo XIV",
-   "k_label": "Pope Leo XIV",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
    "pm": "tac-nobel-peace-2026-10-09-chd",
    "kalshi": "KXNOBELPEACE-26-CE",
    "relation": "same",
@@ -48,16 +38,6 @@
    "question": "2026 Nobel Peace Prize Winner",
    "pm_label": "Doctors Without Borders",
    "k_label": "Doctors Without Borders",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-yulnav",
-   "kalshi": "KXNOBELPEACE-27-YNAV",
-   "relation": "same",
-   "at": "2026-09-30T17:46:38.380387+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "Yulia Navalnaya",
-   "k_label": "Yulia Navalnaya",
    "k_title": "Who will win the Nobel Peace Prize?"
   },
   {
@@ -98,66 +78,6 @@
    "question": "2026 Nobel Peace Prize Winner",
    "pm_label": "Narges Mohammadi",
    "k_label": "Narges Mohammadi",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-shesha",
-   "kalshi": "KXNOBELPEACE-27-SSHA",
-   "relation": "same",
-   "at": "2026-09-30T17:46:42.570100+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "Shehbaz Sharif",
-   "k_label": "Shehbaz Sharif",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-stc",
-   "kalshi": "KXNOBELPEACE-27-STC",
-   "relation": "same",
-   "at": "2026-09-30T17:46:42.881199+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "Save the Children",
-   "k_label": "Save the Children",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-unrwa",
-   "kalshi": "KXNOBELPEACE-27-UNRWA",
-   "relation": "same",
-   "at": "2026-09-30T17:46:43.597900+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "UNRWA",
-   "k_label": "UNRWA",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-cpj",
-   "kalshi": "KXNOBELPEACE-27-CPJ",
-   "relation": "same",
-   "at": "2026-09-30T17:46:44.606444+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "Committee to Protect Journalists (CPJ)",
-   "k_label": "Committee to Protect Journalists",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-icc",
-   "kalshi": "KXNOBELPEACE-27-ICC",
-   "relation": "same",
-   "at": "2026-09-30T17:46:45.581705+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "International Criminal Court (ICC)",
-   "k_label": "International Criminal Court",
-   "k_title": "Who will win the Nobel Peace Prize?"
-  },
-  {
-   "pm": "tac-nobel-peace-2026-10-09-mykkul",
-   "kalshi": "KXNOBELPEACE-27-MKUL",
-   "relation": "same",
-   "at": "2026-09-30T17:46:49.543998+00:00",
-   "question": "2026 Nobel Peace Prize Winner",
-   "pm_label": "Mykola Kuleba",
-   "k_label": "Mykola Kuleba / Save Ukraine",
    "k_title": "Who will win the Nobel Peace Prize?"
   },
   {

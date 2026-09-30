@@ -17,8 +17,13 @@ from .kalshi import KalshiMarket
 from .model import Contract
 from .polymarket import PMMarket
 
-PM_CATEGORIES = ("politics", "culture", "macro", "finance", "technology", "climate", "crypto",
-                 "geopolitics", "science")
+# Polymarket US category slugs to load. Unknown slugs just come back empty (see raw_markets), so
+# this deliberately over-covers the site's tabs: Politics, Crypto, Macro/Economy, Finance, Earnings,
+# Geopolitics, Weather/Climate, Mentions, Culture, Tech/Science. The dashboard's "Non-sports tabs"
+# table shows which ones actually returned markets.
+PM_CATEGORIES = ("politics", "elections", "culture", "entertainment", "macro", "economy", "economics", "finance",
+                 "financials", "earnings", "companies", "commodities", "technology", "tech", "science", "climate",
+                 "weather", "crypto", "geopolitics", "world", "mentions")
 MONTHS = {"jan": "january", "feb": "february", "mar": "march", "apr": "april", "jun": "june", "jul": "july",
           "aug": "august", "sep": "september", "sept": "september", "oct": "october", "nov": "november",
           "dec": "december"}
@@ -48,6 +53,7 @@ MULTIWORD_STATES = {"new hampshire": "newhampshire", "new jersey": "newjersey", 
 CONCEPTS = {"margin", "turnout", "percent", "nomination", "primary", "seats", "control", "approval", "runoff",
             "popular", "mention", "say", "price", "score", "rank", "place", "global", "county", "state"}
 MONTH_NAMES = set(MONTHS.values()) | {"may"}
+PRICE_THRESHOLD_WORDS = {"above", "below", "over", "under", "reach", "hit", "dip", "range", "between"}
 OFFICES = {"house", "senate", "governor", "mayor", "president", "parliament", "minister"}
 RANGE_RE = re.compile(r"\d+(?:\.\d+)?\s*[%°$A-Za-z]{0,4}\s*(?:-|–|to)\s*\$?\d")   # "20-25%", "85° to 86°"
 THRESHOLD_RE = re.compile(r"\+|≥|≤|>|<|\b(?:or more|or above|or higher|or less|or below|or lower|above|below|"
@@ -61,6 +67,8 @@ def years(text, ticker=""):
     """Years mentioned in a title, plus the 2-digit year Kalshi puts in event tickers
     (KXNOBELPEACE-27, KXHOUSERACE-CA39-26, KXBIGBROTHER-26DEC31)."""
     ys = {int(y) for y in re.findall(r"\b(20[2-4]\d)\b", text or "")}
+    # "before 2027" is a 2026 deadline
+    ys |= {int(y) - 1 for y in re.findall(r"\bbefore\s+(?:jan(?:uary)?\.?\s+1,?\s+)?(20[2-4]\d)\b", text or "", re.I)}
     m = re.search(r"-(\d{2})(?:[A-Z]{3}(?:\d{2})?)?$", ticker or "")        # -27, -26DEC, -26DEC31
     if m:
         ys.add(2000 + int(m[1]))
@@ -97,12 +105,50 @@ def _month_days(label):
     return out
 
 
+TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b\.?\s*(et|est|edt|utc|gmt)?\b"
+                     r"|\b(\d{1,2}):(\d{2})\s*(et|est|edt|utc|gmt)\b", re.I)
+
+
+def clock_times(text):
+    """Times of day as minutes after midnight US Eastern, e.g. '5pm ET' -> {1020}. A UTC time maps to
+    both its EDT and EST equivalents. Hourly crypto and index markets differ only by this."""
+    out = set()
+    for h12, m12, ampm, z12, h24, m24, z24 in TIME_RE.findall(text or ""):
+        if ampm:
+            h, mi, zone = int(h12) % 12 + (12 if ampm.lower() == "pm" else 0), int(m12 or 0), z12.lower()
+        else:
+            h, mi, zone = int(h24), int(m24), z24.lower()
+        if h > 23 or mi > 59:
+            continue
+        t = h * 60 + mi
+        out |= {(t - 240) % 1440, (t - 300) % 1440} if zone in ("utc", "gmt") else {t}
+    return out
+
+
+def times_compatible(a, b):
+    ta, tb = clock_times(a), clock_times(b)
+    return not (ta and tb and not ta & tb)
+
+
+def pm_years(question, end=None):
+    """Years a Polymarket question is about: from its title, else its end date backed off 20 days
+    (Polymarket end dates run ~15 days past the event)."""
+    ys = years(question)
+    if not ys and end:
+        d = _date(end)
+        if d:
+            ys = {(d - timedelta(days=20)).year}
+    return ys
+
+
 def outcomes_compatible(pm_label, k_label):
     """Numbers alone aren't enough: '25 bps Increase' is not 'Hike >25bps' (shape differs),
     not '25 bps Decrease' (direction differs), and 'By December 31' is not 'Before Dec 1'."""
     dp_, dk_ = _month_days(pm_label), _month_days(k_label)
     if dp_ and dk_ and not dp_ & dk_:
         return False
+    if not times_compatible(pm_label, k_label):
+        return False                             # "5pm ET" close is not the "12pm ET" close
     if numbers(pm_label) and numbers(k_label):
         if _shape(pm_label) != _shape(k_label):
             return False
@@ -220,6 +266,17 @@ def _pm_label(m):
     return m.get("title") or m.get("question") or ""
 
 
+def _pm_outcome_text(q, m):
+    """Outcome label with its question's direction when the label is a bare number:
+    'Bitcoin above ___?' + '$120,000' -> '$120,000 above'."""
+    label = _pm_label(m)
+    if numbers(label) and not _shape(label):
+        d = _direction(q["question"])
+        if d:
+            label += " above" if d == "up" else " below"
+    return label
+
+
 def _k_label(m):
     return f"{m.get('yes_sub_title') or ''} {m.get('title') or ''}"
 
@@ -264,12 +321,7 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
         scored = []
         p_set = set(pm_docs[qi])
         p_dist = set(re.findall(r"district (\d+)", _expand(q["question"])))
-        p_years = years(q["question"])
-        if not p_years:
-            # No year in the title: Polymarket end dates run ~15 days past the event, so back off 20 days.
-            end = _date(q["end"])
-            if end:
-                p_years = {(end - timedelta(days=20)).year}
+        p_years = pm_years(q["question"], q["end"])
         for i, _ in cands.most_common(60):
             k_set = set(k_docs[i])
             k_dist = set(re.findall(r"district (\d+)", _expand(f"{kq[i]['title']} {kq[i]['sub_title']}")))
@@ -278,6 +330,8 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
             k_years = years(f"{kq[i]['title']} {kq[i]['sub_title']}", kq[i]["key"])
             if p_years and k_years and not p_years & k_years:
                 continue                                        # 2026 Nobel is never the 2027 Nobel
+            if not times_compatible(q["question"], f"{kq[i]['title']} {kq[i]['sub_title']}"):
+                continue                                        # 5pm crypto close is never the noon one
             s = cosine(v, k_vecs[i])
             pm_months, k_months = p_set & MONTH_NAMES, k_set & MONTH_NAMES
             if pm_months and k_months and not pm_months & k_months:
@@ -294,7 +348,10 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
             op, ok = _offices(pm_docs[qi]), _offices(k_docs[i])
             if op and ok and not op & ok:
                 s -= 0.3                                        # House vs Governor, etc.
-            s -= 0.25 * len((p_set ^ k_set) & CONCEPTS)         # "margin" on one side only, etc.
+            lone = (p_set ^ k_set) & CONCEPTS
+            if lone == {"price"} and (p_set | k_set) & PRICE_THRESHOLD_WORDS:
+                lone = set()                  # "Bitcoin price at 5pm?" (Kalshi) = "Bitcoin above ___ at 5PM?"
+            s -= 0.25 * len(lone)                               # "margin" on one side only, etc.
             dp, dk = _date(q["end"]), _date(kq[i]["close"])
             if dp and dk and abs((dp - dk).days) > 400:
                 s -= 0.15                         # very different years: probably a different contest
@@ -315,19 +372,19 @@ def _pair_outcomes(q, k, score, decided):
     pms, kms = q["markets"], k["markets"]
     cand = []
     if len(pms) == 1 and len(kms) == 1:
-        if outcomes_compatible(_pm_label(pms[0]), kms[0].get("yes_sub_title") or ""):
+        if outcomes_compatible(_pm_outcome_text(q, pms[0]), kms[0].get("yes_sub_title") or ""):
             cand = [(score, pms[0], kms[0])]
     else:
         tf = Tfidf([tokens(_pm_label(m)) for m in pms] + [tokens(_k_label(m)) for m in kms])
         kv = [(m, tf.vec(tokens(_k_label(m))), numbers(m.get("yes_sub_title"))) for m in kms]
         for pm in pms:
             pv, pn = tf.vec(tokens(_pm_label(pm))), numbers(_pm_label(pm))
-            p_shape = _shape(_pm_label(pm))
+            p_shape = _shape(_pm_label(pm)) or (_shape(q["question"]) if pn else None)
             for km, vec, kn in kv:
                 k_shape = _shape(km.get("yes_sub_title"))
                 if {p_shape, k_shape} == {"range", "threshold"}:
                     continue                    # "20-25%" bucket is not the same market as "25+"
-                if not outcomes_compatible(_pm_label(pm), km.get("yes_sub_title") or km.get("title") or ""):
+                if not outcomes_compatible(_pm_outcome_text(q, pm), km.get("yes_sub_title") or km.get("title") or ""):
                     continue
                 s = cosine(pv, vec)
                 if pn and kn:
@@ -355,6 +412,26 @@ def _pair_outcomes(q, k, score, decided):
             "kalshi": {"key": k["key"], "title": k["title"], "sub_title": k["sub_title"], "category": k["category"],
                        "close": k["close"], "outcomes": len(k["markets"])},
             "pairs": sorted(pairs, key=lambda p: -p["score"])}
+
+
+def tab_coverage(pm_markets, kalshi_events, groups):
+    """Per category tab on each exchange: open markets, and how many outcome pairs the matcher
+    found there (auto-accepted or waiting for review). Shows which tabs overlap across sites."""
+    rows = {}
+
+    def row(ex, cat):
+        return rows.setdefault((ex, cat or "other"), {"exchange": ex, "category": cat or "other",
+                                                      "markets": 0, "paired": 0})
+    for m in pm_markets:
+        if m.get("category") != "sports" and m.get("active") and not m.get("closed"):
+            row("Polymarket", m.get("category"))["markets"] += 1
+    for e in kalshi_events:
+        if e.get("category") != "Sports":
+            row("Kalshi", e.get("category"))["markets"] += len(e.get("markets") or [])
+    for g in groups:
+        row("Polymarket", g["pm"]["category"])["paired"] += len(g["pairs"])
+        row("Kalshi", g["kalshi"]["category"])["paired"] += len(g["pairs"])
+    return sorted(rows.values(), key=lambda r: (r["exchange"], -r["paired"], -r["markets"]))
 
 
 def split_auto(groups, min_event, min_outcome):
@@ -403,13 +480,31 @@ def pm_market_obj(m, default_coef):
     return pm
 
 
-def approved_contracts(approved, kalshi_markets, pm_markets):
-    """approved: store rows; *_markets: id -> market object. Returns (contracts, source)."""
+def pair_conflict(km, pm):
+    """Reason an approved pair can't be the same question, or None. Catches pairs saved before
+    a check existed, e.g. the 2026 Nobel (Polymarket) approved against KXNOBELPEACE-27."""
+    py, ky = years(pm.title), years(km.title, km.event_ticker)
+    if py and ky and not py & ky:
+        return (f"different years: Polymarket {'/'.join(map(str, sorted(py)))}, "
+                f"Kalshi {'/'.join(map(str, sorted(ky)))} ({km.event_ticker})")
+    if not times_compatible(pm.title, f"{km.title} {km.name}"):
+        return "different times of day"
+    return None
+
+
+def approved_contracts(approved, kalshi_markets, pm_markets, conflicts=None):
+    """approved: store rows; *_markets: id -> market object. Returns (contracts, source).
+    Pairs that can't be the same question are skipped and, if given, appended to `conflicts`."""
     contracts, source = [], {}
     for a in approved:
         km, pm = kalshi_markets.get(a["kalshi"]), pm_markets.get(a["pm"])
         if not km or not pm:
             continue                               # closed/settled or not open right now
+        why = pair_conflict(km, pm)
+        if why:
+            if conflicts is not None:
+                conflicts.append({**a, "why": why})
+            continue
         pid = f"{a['pm']}|{a['kalshi']}"
         var, key = ("event", pid), f"{(pm.league or 'other').upper()}:{pid}"
         label = pm.title if len(pm.title) < 90 else pm.title[:87] + "…"

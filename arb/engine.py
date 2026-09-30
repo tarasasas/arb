@@ -122,6 +122,67 @@ def _mid(c):
     return (y + (1 - n)) / 2
 
 
+# Where a market's number comes from. Two sites settling "Bitcoin above $X at 5pm" on different
+# feeds (or a temperature on different stations) can land on opposite sides of the line.
+SETTLEMENT_SOURCES = {
+    "price": {"CF Benchmarks": r"cf benchmarks|\bbrti\b|real[- ]time index", "Binance": r"binance",
+              "Coinbase": r"coinbase", "Chainlink": r"chainlink", "Kraken": r"kraken", "Pyth": r"\bpyth\b",
+              "Bloomberg": r"bloomberg", "S&P Dow Jones Indices": r"s&p dow jones|spglobal"},
+    "weather": {"National Weather Service": r"national weather service|\bnws\b|nowdata|climatological report",
+                "Weather Underground": r"weather underground|wunderground", "AccuWeather": r"accuweather",
+                "Meteostat": r"meteostat"},
+}
+
+
+def settlement_sources(text):
+    t = (text or "").lower()
+    return {fam: {name for name, rx in names.items() if re.search(rx, t)} for fam, names in SETTLEMENT_SOURCES.items()}
+
+
+def source_mismatch(k_rules, p_rules):
+    """'Kalshi: CF Benchmarks; Polymarket: Binance' when the two rules name different sources for
+    the same kind of number, else None."""
+    sk, sp = settlement_sources(k_rules), settlement_sources(p_rules)
+    for fam in SETTLEMENT_SOURCES:
+        if sk[fam] and sp[fam] and not sk[fam] & sp[fam]:
+            return f"Kalshi: {', '.join(sorted(sk[fam]))}; Polymarket: {', '.join(sorted(sp[fam]))}"
+    return None
+
+
+def exact_hedge(k, sk, p, sp):
+    """True when the two legs are exact opposites: every possible result pays exactly $1 in
+    total, never $2 (cross-line) and never $0 (push)."""
+    nonneg = k.var[0] != "margin"
+    pts = sample_points([k, p], nonneg)
+    if not nonneg and (k.no_draw or p.no_draw):
+        pts = [x for x in pts if x != 0]
+    return {round(payout(k, sk, x) + payout(p, sp, x), 6) for x in pts} == {1.0}
+
+
+def not_simple_reasons(cand):
+    """Why a pair is not a plain two-leg "YES here, NO there" trade; empty list = simple."""
+    k, p, sk, sp = cand["k"], cand["p"], cand["sk"], cand["sp"]
+    why = []
+    if k.integer_line or p.integer_line:
+        why.append("whole-number line (push possible)")
+    elif not exact_hedge(k, sk, p, sp):
+        why.append("different lines (some results pay $2)")
+    if sp == NO:
+        why.append("shorts on Polymarket (locks $1)")
+    if cand["edge"] > SUSPICIOUS_EDGE:
+        why.append("too good to be true")
+    if k.var[0] == "event":
+        if k.note == "auto":
+            why.append("auto-matched, not verified")
+        if source_mismatch(k.rules, p.rules):
+            why.append("different settlement sources")
+    else:
+        ok, op = _ot_rule(k.rules), _ot_rule(p.rules)
+        if ok and op and ok != op:
+            why.append("overtime rules differ")
+    return why
+
+
 def warnings_for(k, p, now):
     w = []
     if k.var[0] == "event":
@@ -140,6 +201,11 @@ def warnings_for(k, p, now):
             if p.op == ">" and abs(km - (1 - pmid)) < 0.08 and abs(km - pmid) > 0.2:
                 w.append("PRICES CONTRADICT THIS MATCH: the prices mirror each other, which means Opposite (or "
                          "different questions), but it's saved as Same.")
+        src = source_mismatch(k.rules, p.rules)
+        if src:
+            w.append(f"DIFFERENT SETTLEMENT SOURCES ({src}). The two feeds can differ at the deadline, so a "
+                     f"result right at the line can lose both legs. Only safe when the line is far from the "
+                     f"current value.")
         dk, dp = _parse_time(k.close_time), _parse_time(p.close_time)
         if dk and dp and abs((dk - dp).days) > 30:     # Polymarket end dates run ~15 days past the event
             w.append(f"Close dates differ by {abs((dk - dp).days)} days (Kalshi {dk:%b %d, %Y}, Polymarket "
@@ -279,6 +345,7 @@ def to_row(cand, sizing, now):
         "rules": {"kalshi": k.rules, "polymarket": p.rules},
         "warnings": (explain_suspicious(cand, now) if too_good else []) + warnings_for(k, p, now),
         "pm_short": cand["sp"] == NO,
+        "not_simple": not_simple_reasons(cand),
         "suspicious": too_good, "closes": close.isoformat() if close else None,
         "depth": cand.get("depth"),
         "fee_coef": {"kalshi": k.fee_coef, "polymarket": p.fee_coef},

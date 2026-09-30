@@ -54,6 +54,15 @@ More filters above the table (the browser remembers them):
   - These rows sort to the bottom and carry an automatic explanation, for example "Kalshi
     prices its outcome at 3%, Polymarket at 71%".
   - The explanation shows both exact outcome texts, so a wrong match is easy to spot.
+- **Simple trades only:** keeps only plain two-leg trades, YES on one site and NO on the other,
+  where every result pays exactly $1. Hover a row's "Not simple" note to see what rules it out:
+  - different lines, where some results pay $2;
+  - a whole-number line, where a push is possible;
+  - a Polymarket short;
+  - overtime rules or settlement sources that differ;
+  - an auto-matched pair you haven't verified;
+  - too good to be true.
+- **Settles within N days:** hides anything that ties money up longer.
 
 The opportunity size is the smaller of the two legs' available shares at profitable prices.
 Each leg shows how many shares are available at its best price. The details panel adds:
@@ -108,6 +117,21 @@ market means. The scanner therefore suggests pairs and scans only the ones you a
 
 Decisions are saved in `matches.json`. Remove an approved pair from the *Approved pairs*
 list on the dashboard.
+
+Safety checks on every match, including pairs approved earlier:
+
+- **Different years:** a pair whose years differ is never scanned, for example the 2026 Nobel
+  on Polymarket against `KXNOBELPEACE-27` on Kalshi. The dashboard lists any such saved pair so
+  you can remove it.
+- **Different times of day:** hourly crypto and index markets pair only when the times match,
+  so "5pm ET" never pairs with "12pm ET". A UTC time counts as either its EDT or EST equivalent.
+- **Different settlement sources:** a row whose two rules name different price feeds or weather
+  stations gets a warning, for example CF Benchmarks on Kalshi and Binance on Polymarket. The
+  two feeds can disagree right at the line, and then both legs can lose.
+
+The **Non-sports tabs** table shows, for each category tab on each site, how many markets are
+open and how many outcome pairs the matcher found. Tabs with pairs on both sites are where
+non-sports arbs can show up.
 
 ## Make trade (places real orders)
 

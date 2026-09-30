@@ -140,6 +140,8 @@
     <label><input id="f-clean" type="checkbox"> Hide rows with warnings</label>
     <label><input id="f-noshort" type="checkbox"> Hide Polymarket shorts</label>
     <label><input id="f-nosus" type="checkbox"> Hide too-good-to-be-true</label>
+    <label title="Two exact-opposite legs (every result pays $1), no whole-number line, no Polymarket short, same overtime rules and settlement source, verified match"><input id="f-simple" type="checkbox"> Simple trades only</label>
+    <label>Settles within <input id="f-days" type="number" min="0" step="1" placeholder="any" style="width:60px"> days</label>
     <label><input id="f-expand" type="checkbox"> Show math for all</label>
     <label><input id="f-search" type="search" placeholder="Search team, market…"></label>
   </div>
@@ -190,6 +192,18 @@
       <thead><tr><th>League</th><th>Kalshi code</th><th>Sport</th><th class="num">Polymarket games</th>
         <th class="num">Kalshi games</th><th class="num">Matched</th></tr></thead>
       <tbody id="leagues"></tbody>
+    </table>
+  </div>
+
+  <h2>Non-sports tabs</h2>
+  <p class="caveat" style="margin-top:0">Open markets in each category tab, and how many outcome pairs the matcher found
+    there (auto-matched or waiting for review). Tabs with pairs on both sites are where non-sports arbs can appear.
+    Updates every 30 minutes.</p>
+  <div id="conflicts"></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Exchange</th><th>Tab</th><th class="num">Open markets</th><th class="num">Matched pairs</th></tr></thead>
+      <tbody id="tabs"></tbody>
     </table>
   </div>
 
@@ -573,13 +587,16 @@ function checksHtml(r) {
   const w = r.suspicious ? `<span class="warn alert">${WARN_ICON}Too good to be true</span>` : r.warnings.length
     ? `<span class="warn">${WARN_ICON}${r.warnings.length} warning${r.warnings.length > 1 ? "s" : ""}</span>`
     : `<span class="warn">${OK_ICON}No warnings</span>`;
+  const ns = r.not_simple || [];
+  const simple = ns.length ? `<div><span class="warn" title="${esc(ns.join("; "))}">Not simple: ${esc(ns[0])}${ns.length > 1 ? ` +${ns.length - 1}` : ""}</span></div>`
+    : `<div><span class="warn">${OK_ICON}Simple: YES here, NO there</span></div>`;
   const on = tradingOn(), key = esc(rowKey(r));
   const match = !r.pair ? "" : r.pair.auto
     ? `<div class="warn" style="margin-top:6px">${WARN_ICON}<b>Auto-matched</b>: verify</div>
        <div><button data-action="verify" data-key="${key}">Correct match</button>
             <button data-action="wrong" data-key="${key}">Wrong match</button></div>`
     : `<div class="warn" style="margin-top:6px">${OK_ICON}Match verified by you</div>`;
-  return w + match + `<div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
+  return w + simple + match + `<div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
     title="${on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
 }
 function passes(r) {
@@ -588,6 +605,9 @@ function passes(r) {
   if (document.getElementById("f-clean").checked && r.warnings.length) return false;
   if (document.getElementById("f-noshort").checked && r.legs.some(l => l.exchange === "Polymarket" && l.side === "no")) return false;
   if (document.getElementById("f-nosus").checked && r.suspicious) return false;
+  if (document.getElementById("f-simple").checked && (r.not_simple || []).length) return false;
+  const days = +document.getElementById("f-days").value;
+  if (days > 0 && (!r.closes || new Date(r.closes) - Date.now() > days * 86400000)) return false;
   if (q && !JSON.stringify([r.game, r.legs]).toLowerCase().includes(q)) return false;
   return true;
 }
@@ -668,6 +688,13 @@ function renderRest(s) {
   document.getElementById("leagues").innerHTML = (s.leagues || []).map(l =>
     `<tr><td>${esc(l.league)}</td><td>${esc(l.kalshi)}</td><td>${esc(l.sport)}</td><td class="num">${l.pm_games}</td>
       <td class="num">${l.kalshi_games}</td><td class="num">${l.matched}</td></tr>`).join("");
+  document.getElementById("tabs").innerHTML = (s.tabs || []).map(t =>
+    `<tr><td>${esc(t.exchange)}</td><td>${esc(t.category)}</td><td class="num">${compact(t.markets)}</td>
+      <td class="num">${compact(t.paired)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">Loading…</td></tr>`;
+  document.getElementById("conflicts").innerHTML = (s.pair_conflicts || []).length
+    ? `<p class="warn" style="white-space:normal">${WARN_ICON}<span><b>${s.pair_conflicts.length} approved pair(s) aren't being
+      scanned</b> because they can't be the same question: ${s.pair_conflicts.map(c =>
+      `${esc(c.pm_label || c.pm)} (${esc(c.why)})`).join("; ")}. Remove them under Approved pairs.</span></p>` : "";
   document.getElementById("unmatched").textContent = (s.unmatched || []).join("\n") || "None";
   document.getElementById("log").textContent = (s.logs || []).join("\n");
 }
@@ -693,7 +720,7 @@ opps.addEventListener("input", e => {
   const r = rowsByKey.get(k), out = opps.querySelector(`[data-result="${CSS.escape(k)}"]`);
   if (r && out) out.innerHTML = hedgeResult(r, k);
 });
-const FILTER_IDS = ["f-budget", "f-league", "f-min", "f-roi", "f-clean", "f-noshort", "f-nosus", "f-expand", "f-search"];
+const FILTER_IDS = ["f-budget", "f-league", "f-min", "f-roi", "f-clean", "f-noshort", "f-nosus", "f-simple", "f-days", "f-expand", "f-search"];
 for (const id of FILTER_IDS) document.getElementById(id).addEventListener("input", () => { saveFilters(); render(true); });
 // Remember filter settings in this browser between visits.
 function saveFilters() {
