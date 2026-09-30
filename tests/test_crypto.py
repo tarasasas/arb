@@ -1,0 +1,59 @@
+import unittest
+
+from arb import crypto, engine, nonsports
+from arb.model import NO, YES
+
+
+def pm(slug, start, end, beat, horizon="15m", coin="btc"):
+    return {"slug": slug, "question": "BTC Up or Down: 15 min", "title": "BTC Up or Down: 15 min", "active": True,
+            "closed": False, "category": "crypto", "endDate": end, "feeCoefficient": 0.0695,
+            "description": "Settles Up if the price at the close is greater than or equal to the open. CF Benchmarks BRTI.",
+            "bestBidQuote": {"value": "0.40"}, "bestAskQuote": {"value": "0.41"},
+            "assetPriceTerms": {"marketType": "ASSET_PRICE_MARKET_TYPE_UP_DOWN", "asset": {"symbol": coin},
+                                "indexSymbol": "BRTI", "horizon": horizon, "windowStart": start, "windowEnd": end,
+                                "priceToBeat": {"value": str(beat)} if beat else None}}
+
+
+def km(ticker, start, end, strike, series="KXBTC15M"):
+    return {"ticker": ticker, "event_ticker": f"{series}-26SEP301530", "status": "active", "open_time": start,
+            "close_time": end, "floor_strike": strike, "strike_type": "greater_or_equal",
+            "title": "BTC price up in next 15 mins?", "yes_sub_title": f"Target Price: ${strike:,.2f}",
+            "yes_ask_dollars": "0.44", "no_ask_dollars": "0.57", "yes_bid_dollars": "0.43",
+            "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' BRTI before 3:30 PM EDT is "
+                             "at least the average before 3:15 PM EDT, then the market resolves to Yes."}
+
+
+S, E = "2026-09-30T19:15:00Z", "2026-09-30T19:30:00Z"
+
+
+class CryptoPairTests(unittest.TestCase):
+    def test_same_window_and_price_to_beat_pairs(self):
+        rows = crypto.pairs([pm("p15", S, E, 83728.93)], [km("K1", S, E, 83728.93)])
+        self.assertEqual([(r["pm"], r["kalshi"], r["relation"]) for r in rows], [("p15", "K1", "same")])
+        self.assertTrue(rows[0]["structural"])
+        self.assertIn("19:15–19:30 UTC", rows[0]["label"])
+
+    def test_mismatches_never_pair(self):
+        self.assertEqual(crypto.pairs([pm("p", S, E, 83728.93)], [km("K", S, E, 83935.01)]), [])      # other open
+        self.assertEqual(crypto.pairs([pm("p", S, E, 83728.93)], [km("K", E, "2026-09-30T19:45:00Z", 83728.93)]), [])
+        self.assertEqual(crypto.pairs([pm("p", S, "2026-09-30T20:15:00Z", 83728.93, horizon="1h")],
+                                      [km("K", S, E, 83728.93)]), [])                                  # 60-min window
+        self.assertEqual(crypto.pairs([pm("p", S, E, None)], [km("K", S, E, 83728.93)]), [])        # not started
+        self.assertEqual(crypto.pairs([pm("p", S, E, 3000.0, coin="eth")], [km("K", S, E, 3000.0)]), [])  # coin
+
+    def test_series_to_fetch(self):
+        self.assertEqual(crypto.kalshi_series_for([pm("p", S, E, 1.0), pm("q", S, E, 1.0, coin="eth")]),
+                         ["KXBTC15M", "KXETH15M"])
+
+    def test_pair_becomes_verified_simple_contract(self):
+        rows = crypto.pairs([pm("p15", S, E, 83728.93)], [km("K1", S, E, 83728.93)])
+        k_obj = nonsports.kalshi_market_obj(km("K1", S, E, 83728.93), 0.07)
+        p_obj = nonsports.pm_market_obj(pm("p15", S, E, 83728.93), 0.0695)
+        k, p = nonsports.approved_contracts(rows, {"K1": k_obj}, {"p15": p_obj})[0]
+        self.assertEqual(k.note, "structural")
+        self.assertEqual(engine.not_simple_reasons({"k": k, "sk": NO, "p": p, "sp": YES, "edge": 0.01}), [])
+        self.assertTrue(any("contract terms" in w for w in engine.warnings_for(k, p, engine.now_utc())))
+
+
+if __name__ == "__main__":
+    unittest.main()

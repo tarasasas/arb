@@ -95,6 +95,7 @@ POLYMARKET_DEFAULT_COEF = 0.0695
 # Scanner settings.
 CATALOG_REFRESH_SECS = 300     # full market lists + game matching
 SUGGEST_REFRESH_SECS = 1800    # rebuild non-sports match suggestions
+CRYPTO_REFRESH_SECS = 20       # look for new 15-minute crypto Up/Down windows
 AUTO_ACCEPT_MATCHES = True     # scan confident non-sports matches without waiting for approval
 AUTO_MIN_EVENT_SCORE = 0.5     # question-level match score needed to auto-accept
 AUTO_MIN_OUTCOME_SCORE = 0.3   # outcome-level match score needed to auto-accept

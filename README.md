@@ -48,8 +48,9 @@ order-book depth and fee rounding.
 
 More filters above the table (the browser remembers them):
 
-- **Hide Polymarket shorts:** hides any trade that shorts on Polymarket. A short locks $1
-  per contract.
+- **Hide Polymarket shorts:** hides any trade that shorts on Polymarket. Polymarket US has no NO
+  shares, so taking NO means shorting YES. That costs the same as buying NO: you receive the bid, $1
+  is held as margin, and your buying power drops by 1 − bid.
 - **Hide too-good-to-be-true:** hides any opportunity over 10¢ per contract.
   - These rows sort to the bottom and carry an automatic explanation, for example "Kalshi
     prices its outcome at 3%, Polymarket at 71%".
@@ -58,7 +59,6 @@ More filters above the table (the browser remembers them):
   where every result pays exactly $1. Hover a row's "Not simple" note to see what rules it out:
   - different lines, where some results pay $2;
   - a whole-number line, where a push is possible;
-  - a Polymarket short;
   - overtime rules or settlement sources that differ;
   - an auto-matched pair you haven't verified;
   - too good to be true.
@@ -129,9 +129,52 @@ Safety checks on every match, including pairs approved earlier:
   stations gets a warning, for example CF Benchmarks on Kalshi and Binance on Polymarket. The
   two feeds can disagree right at the line, and then both legs can lose.
 
+- **Different data providers:** a pair is never auto-matched when the two rules name different
+  providers for the same kind of number: price feeds, weather stations, music charts (Spotify vs
+  Luminate/Billboard), wealth rankings (Forbes vs Bloomberg), or AI leaderboards (LiveBench vs
+  LMArena).
+- **"90+" vs "Above 90":** these never pair. On a whole-number score such as Rotten Tomatoes or a
+  seat count, a result of exactly 90 loses both legs.
+- **One-way rules:** some Kalshi markets also resolve YES on an *announcement*, for example "leave
+  office or announce leaving", while Polymarket needs the event itself. Kalshi YES with Polymarket NO
+  is safe. A trade holding Kalshi NO gets a ONE-WAY RULES warning, because an announcement alone
+  loses both legs.
+
 The **Non-sports tabs** table shows, for each category tab on each site, how many markets are
 open and how many outcome pairs the matcher found. Tabs with pairs on both sites are where
 non-sports arbs can show up.
+
+## Crypto Up/Down (paired automatically, no approval needed)
+
+Polymarket US "BTC Up or Down: 15 min" and Kalshi `KXBTC15M` "BTC price up in next 15 mins?" are the
+same contract. Both settle on the 60-second average of CF Benchmarks' BRTI at the window's open and
+close, and a tie counts as Up/Yes on both.
+
+Every 20 seconds the scanner pairs windows with the same coin, the same start and end to the second,
+and the same price to beat. These rows are marked as paired by contract terms, count as simple
+trades, and settle within 15 minutes. Near 50/50 both taker fees add up to about 3.5¢, so an arb
+appears only when one site lags the other during a fast move.
+
+Other coins pair automatically as soon as Polymarket lists them. Kalshi already runs ETH, SOL, XRP,
+DOGE and more. Polymarket's 60-minute windows have no Kalshi twin, because Kalshi only runs
+15-minute ones.
+
+## Checking what the dashboard found
+
+With the dashboard running, run this in a second window:
+
+```
+python -m arb.verify
+```
+
+For every opportunity it:
+
+- re-fetches both order books live;
+- recomputes the profit at today's depth;
+- sorts the row as **LEGIT**, **GONE**, **SUSPECT** (too good to be true), **WRONG** (different
+  source, year or time), or **TRAP** (this direction can lose both legs).
+
+LEGIT means no problem was found, not that there is none, so still read both rules before trading.
 
 ## Make trade (places real orders)
 
@@ -187,8 +230,8 @@ trigger orders. The server listens on localhost only.
 - **Taker fees only.**
   - Kalshi: `0.07 × series fee_multiplier × C × P × (1−P)`.
   - Polymarket: `feeCoefficient × C × p × (1−p)` (currently 0.0695).
-- **Shorting on Polymarket US is the NO side.** You receive the bid, and $1 per contract is
-  locked, so the cost is `1 − bid`. The capital figure includes this lock-up.
+- **Shorting on Polymarket US is the NO side.** You receive the bid and $1 is held as margin, so
+  buying power drops by `1 − bid`, the same as buying NO. The capital figure uses `1 − bid`.
 - **Whole-number lines assume a push pays nothing on either side.** This is conservative.
   Such rows carry a warning.
 - **Ties and draws.** An NFL moneyline tie pays $0.50 on both exchanges. Basketball,

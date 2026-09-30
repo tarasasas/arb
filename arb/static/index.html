@@ -140,7 +140,7 @@
     <label><input id="f-clean" type="checkbox"> Hide rows with warnings</label>
     <label><input id="f-noshort" type="checkbox"> Hide Polymarket shorts</label>
     <label><input id="f-nosus" type="checkbox"> Hide too-good-to-be-true</label>
-    <label title="Two exact-opposite legs (every result pays $1), no whole-number line, no Polymarket short, same overtime rules and settlement source, verified match"><input id="f-simple" type="checkbox"> Simple trades only</label>
+    <label title="Two exact-opposite legs (every result pays $1), no whole-number line, same overtime rules and settlement source, verified match"><input id="f-simple" type="checkbox"> Simple trades only</label>
     <label>Settles within <input id="f-days" type="number" min="0" step="1" placeholder="any" style="width:60px"> days</label>
     <label><input id="f-expand" type="checkbox"> Show math for all</label>
     <label><input id="f-search" type="search" placeholder="Search team, market…"></label>
@@ -158,8 +158,8 @@
   </div>
   <p class="caveat">Click a row for the math. Bet amounts use the actual order-book depth and each exchange's fee
     rounding; set "Max to invest" to size every arb to your stake. Profit is locked in only if both legs fill at these prices. Quotes from the two exchanges are
-    fetched seconds apart and move constantly — re-check both books before trading. Capital includes the $1 Polymarket
-    locks per shorted contract. Opportunities can share a leg, so don't add their profits together.</p>
+    fetched seconds apart and move constantly — re-check both books before trading. A Polymarket short costs 1 − bid of buying power
+    per contract (you receive the bid and $1 is held as margin), the same as buying NO. Opportunities can share a leg, so don't add their profits together.</p>
 
   <h2>Closest to breaking even</h2>
   <div class="table-wrap">
