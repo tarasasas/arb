@@ -56,6 +56,44 @@ def polymarket_status(m):
             "bid": {"yes": bid, "no": round(1 - ask, 4) if ask is not None else None}}
 
 
+def pair_key(arb):
+    """The two markets an arb holds: one entry per pair, whichever way it was recorded."""
+    ids = {l["exchange"]: l["market_id"] for l in arb.get("legs") or []}
+    return ids.get("kalshi"), ids.get("polymarket")
+
+
+def merge_duplicates(items):
+    """Collapse entries for the same pair of markets. An entry from your accounts wins (it counts
+    every fill); otherwise repeat trades are added together into the earliest entry."""
+    groups, order = {}, []
+    for a in items:
+        k = pair_key(a)
+        if k not in groups:
+            order.append(k)
+        groups.setdefault(k, []).append(a)
+    out = []
+    for k in order:
+        group = groups[k]
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        acct = [a for a in group if a.get("source") == "account"]
+        base = dict(acct[0] if acct else min(group, key=lambda a: a.get("created") or ""))
+        others = [a for a in group if a["id"] != base["id"]]
+        if not acct:                               # separate trades on the same pair: add them up
+            legs = {l["exchange"]: dict(l) for l in base["legs"]}
+            for a in others:
+                for l in a["legs"]:
+                    if l["exchange"] in legs and l["side"] == legs[l["exchange"]]["side"]:
+                        legs[l["exchange"]]["shares"] += l["shares"]
+                        legs[l["exchange"]]["paid"] = round(legs[l["exchange"]]["paid"] + l["paid"], 2)
+            base["legs"] = [legs["kalshi"], legs["polymarket"]]
+        base["created"] = min(a.get("created") or "" for a in group) or base.get("created")
+        base["note"] = base.get("note") or next((a["note"] for a in others if a.get("note")), "")
+        out.append(base)
+    return out
+
+
 class MyArbs:
     def __init__(self, path=PATH):
         self.path, self.lock = path, threading.Lock()
@@ -68,6 +106,10 @@ class MyArbs:
                 self.items = json.loads(path.read_text(encoding="utf-8")).get("arbs", [])
             except (OSError, ValueError):
                 pass
+            merged = merge_duplicates(self.items)
+            if len(merged) != len(self.items):      # clean up doubles saved by earlier versions
+                self.items = merged
+                self._save()
 
     def _save(self):
         tmp = self.path.with_suffix(".tmp")
@@ -75,7 +117,9 @@ class MyArbs:
         tmp.replace(self.path)
 
     def save(self, arb):
-        """Add a new arb (no id) or replace an existing one (same id). Returns the stored entry."""
+        """Add a new arb (no id) or replace an existing one (same id). Returns the stored entry.
+        A new manual entry for a pair you already track is refused (edit that one instead); a new
+        Make trade fill on a tracked pair is added into the existing entry."""
         legs = [{"exchange": str(l["exchange"]).lower(), "market_id": str(l["market_id"]),
                  "side": str(l["side"]).lower(), "title": str(l.get("title") or ""),
                  "shares": float(l["shares"]), "paid": float(l["paid"])} for l in arb["legs"]]
@@ -85,6 +129,10 @@ class MyArbs:
             raise ValueError("Shares and amounts can't be negative")
         with self.lock:
             old = next((a for a in self.items if a["id"] == arb.get("id")), None)
+            if old is None and arb.get("source") != "account":
+                same = next((a for a in self.items if pair_key(a) == pair_key({"legs": legs})), None)
+                if same and arb.get("source") != "make_trade":
+                    raise ValueError(f'You already track this pair ("{same["game"]}"): use Edit on it in My arbs')
             entry = {"id": arb.get("id") or uuid.uuid4().hex[:12],
                      "created": (old or {}).get("created") or datetime.now(timezone.utc).isoformat(),
                      "source": (old or {}).get("source") or arb.get("source") or "manual",
@@ -92,7 +140,7 @@ class MyArbs:
                      "closes": arb.get("closes"), "payout": float(arb.get("payout") or 1.0),
                      "note": str(arb.get("note") or ""), "legs": legs,
                      "edited": bool(arb.get("edited") or (old or {}).get("edited"))}
-            self.items = [a for a in self.items if a["id"] != entry["id"]] + [entry]
+            self.items = merge_duplicates([a for a in self.items if a["id"] != entry["id"]] + [entry])
             self._save()
             self._live_time = 0.0                   # fetch status for the new markets next time
         return entry
@@ -106,12 +154,16 @@ class MyArbs:
             with self.lock:
                 old = next((a for a in self.items if a["id"] == arb_id), None)
             if old and old.get("edited"):
+                with self.lock:                     # still drop other entries for this pair
+                    self.items = merge_duplicates(self.items)
+                    self._save()
                 continue
             legs = [{"exchange": "kalshi", "market_id": ticker, "side": kp["side"], "title": kc.title,
                      "shares": kp["shares"], "paid": kp["paid"]},
                     {"exchange": "polymarket", "market_id": slug, "side": pp["side"], "title": pc.title,
                      "shares": pp["shares"], "paid": pp["paid"] if pp["paid"] is not None else 0.0}]
-            note = "Polymarket cost estimated from the account: check it" if pp.get("paid_estimated") else ""
+            note = (old or {}).get("note") or (
+                "Polymarket cost estimated from the account: check it" if pp.get("paid_estimated") else "")
             self.save({"id": arb_id, "source": "account", "payout": payout, "legs": legs, "note": note,
                        **row_info(kc)})
         self.unpaired = unpaired

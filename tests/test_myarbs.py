@@ -72,5 +72,73 @@ class MyArbsTests(unittest.TestCase):
         self.assertFalse(a["settled"])                  # Polymarket side still open
 
 
+class DuplicateTests(unittest.TestCase):
+    """One entry per pair of markets, however the trade reached My arbs."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "my_arbs.json"
+        self.store = myarbs.MyArbs(self.path)
+        self.plan = {"payout": 1.0, "legs": {"kalshi": legs()[0], "polymarket": legs()[1]}}
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def trade(self, n, kp, pp):
+        return self.store.add_from_trade(self.plan, {"hedged_pairs": n, "legs_filled": {
+            "kalshi": {"shares": n, "paid": kp}, "polymarket": {"shares": n, "paid": pp}}}, {"game": "Gas"})
+
+    def account_sync(self, shares, kp, pp, note=""):
+        k = {"K1": {"side": "yes", "shares": shares, "paid": kp}}
+        p = {"p1": {"side": "no", "shares": shares, "paid": pp}}
+
+        class C:
+            title, game_label = "t", "Gas"
+        self.store.sync_from_accounts([("K1", "p1", C, C, 1.0)], k, p, [],
+                                      lambda kc: {"game": "Gas", "tab": "Economics", "closes": None})
+
+    def test_make_trade_then_position_check_is_one_entry(self):
+        a = self.trade(50, 6.5, 42.5)
+        self.store.save({**a, "note": "first fill"})
+        self.account_sync(50, 6.6, 42.6)
+        self.assertEqual(len(self.store.items), 1)
+        e = self.store.items[0]
+        self.assertEqual((e["source"], e["legs"][0]["paid"], e["note"]), ("account", 6.6, "first fill"))
+        self.assertEqual(e["created"], a["created"])                   # keeps when you first traded
+
+    def test_two_trades_on_the_same_pair_add_up(self):
+        self.trade(50, 6.5, 42.5)
+        self.trade(30, 3.9, 25.5)
+        self.assertEqual(len(self.store.items), 1)
+        k, p = self.store.items[0]["legs"]
+        self.assertEqual((k["shares"], k["paid"], p["shares"], p["paid"]), (80, 10.4, 80, 68.0))
+
+    def test_trade_after_the_position_check_doesnt_double(self):
+        self.account_sync(50, 6.6, 42.6)
+        self.trade(30, 3.9, 25.5)
+        self.assertEqual(len(self.store.items), 1)                     # the next sync adds the new fill
+        self.account_sync(80, 10.5, 68.1)
+        self.assertEqual((len(self.store.items), self.store.items[0]["legs"][0]["shares"]), (1, 80))
+
+    def test_tracking_a_pair_twice_by_hand_is_refused(self):
+        self.store.save({"game": "Gas", "legs": legs()})
+        with self.assertRaises(ValueError):
+            self.store.save({"game": "Gas again", "legs": legs()})
+        self.assertEqual(len(self.store.items), 1)
+
+    def test_doubles_from_older_versions_are_merged_on_load(self):
+        import json
+        dupes = [{"id": "a1", "created": "2026-09-30T10:00:00", "source": "make_trade", "game": "Gas", "note": "",
+                  "legs": legs(50, 6.5, 50, 42.5)},
+                 {"id": "acct-K1-p1", "created": "2026-09-30T10:01:00", "source": "account", "game": "Gas", "note": "",
+                  "legs": legs(50, 6.6, 50, 42.6)},
+                 {"id": "other", "created": "2026-09-30T11:00:00", "source": "manual", "game": "BTC", "note": "",
+                  "legs": [{**legs()[0], "market_id": "K9"}, {**legs()[1], "market_id": "p9"}]}]
+        self.path.write_text(json.dumps({"arbs": dupes}))
+        items = myarbs.MyArbs(self.path).items
+        self.assertEqual(sorted(a["id"] for a in items), ["acct-K1-p1", "other"])
+        self.assertEqual(len(json.loads(self.path.read_text())["arbs"]), 2)   # the file is cleaned too
+
+
 if __name__ == "__main__":
     unittest.main()
