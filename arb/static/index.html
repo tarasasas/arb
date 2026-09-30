@@ -296,7 +296,10 @@ function sizeFor(r, budget) {
 const limitOf = s => s && s.fills && s.fills.length ? s.fills[s.fills.length - 1][0] : null;
 function legHtml(l, s) {
   const cls = l.exchange === "Kalshi" ? "kalshi" : "poly";
-  const what = s && s.n
+  const what = s && s.n && l.maker
+    ? `Post <b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> · <b>${s.n.toLocaleString()}</b> shares · limit <b>${cents(s.avg)}</b>
+       <span class="muted">resting, Good 'til canceled</span>`
+    : s && s.n
     ? `<b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> · <b>${s.n.toLocaleString()}</b> shares · limit <b>${cents(limitOf(s))}</b>
        <span class="muted">= ${money(s.cost + s.fee)}</span>`
     : `<b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> @ ${cents(l.price)}`;
@@ -613,7 +616,7 @@ function mathHtml(r, z) {
     return `<tr><td class="num">${i}</td><td>${l.exchange}</td><td><b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b></td>
       <td class="num"><b>${n.toLocaleString()}</b></td><td class="num"><b>${cents(limitOf(leg))}</b></td>
       <td class="num">${cents(leg.avg)}</td><td class="num">${money(leg.cost)}</td>
-      <td class="num">${money(leg.fee)}</td><td class="num"><b>${money(leg.cost + leg.fee)}</b></td></tr>`;
+      <td class="num">${leg.fee < 0 ? `${money(-leg.fee)} rebate` : money(leg.fee)}</td><td class="num"><b>${money(leg.cost + leg.fee)}</b></td></tr>`;
   };
   const same = r.scenarios.every(sc => Math.abs(sc.total - r.payout) < 1e-9);
   const back = same
@@ -624,7 +627,14 @@ function mathHtml(r, z) {
       r.scenarios.map(sc => { const pl = sc.total * n - z.capital;
         return `<tr><td>${esc(sc.outcome)}</td><td class="num">${money(sc.kalshi)}</td><td class="num">${money(sc.polymarket)}</td>
           <td class="num">${money(sc.total * n)}</td><td class="num profit">${pl >= 0 ? "+" : ""}${money(pl)}</td></tr>`; }).join("")}</tbody></table>`;
-  return `<div class="math">
+  const m = r.maker, lp_ = r.legs[1];
+  const makerSteps = !m ? "" : `<div class="callout" style="border-left-color:var(--accent)"><b>How to do it</b><ol style="margin:4px 0 0 18px;padding:0">
+      <li>Polymarket: <b>Buy → ${lp_.side === "yes" ? "Yes" : "No"}</b>, <b>Limit ${cents(m.cost)}</b>, ${z.n.toLocaleString()} shares,
+        Good 'til canceled. It waits in the book${lp_.side === "no" ? ` (an offer to sell Yes at ${cents(m.post_yes_price)})` : ""}.</li>
+      <li>As soon as any shares fill: Kalshi <b>Buy → ${r.legs[0].side === "yes" ? "Yes" : "No"}</b> the same number, limit
+        <b>≤ ${m.hedge_limit ? cents(m.hedge_limit) : "–"}</b>. "Match your fill" below works it out exactly.</li>
+      <li>If Kalshi moves above ${m.hedge_limit ? cents(m.hedge_limit) : "that"} before you're filled, cancel the Polymarket order.</li></ol></div>`;
+  return makerSteps + `<div class="math">
     <div class="sumgrid">
       <div class="sumcard"><div class="label">You pay</div><div class="big">${money(z.capital)}</div>
         <div class="sub">${money(z.k.cost + z.k.fee)} Kalshi + ${money(z.p.cost + z.p.fee)} Polymarket, fees included</div></div>
@@ -635,7 +645,7 @@ function mathHtml(r, z) {
     <table class="steps"><thead><tr><th class="num">Step</th><th>Site</th><th>Click</th><th class="num">Shares</th>
       <th class="num">Limit price</th><th class="num">Avg fill</th><th class="num">Cost</th><th class="num">Fee</th>
       <th class="num">Total</th></tr></thead>
-      <tbody>${step(1, lk, z.k)}${step(2, lp, z.p)}</tbody></table>
+      <tbody>${r.maker ? step(1, lp, z.p) + step(2, lk, z.k) : step(1, lk, z.k) + step(2, lp, z.p)}</tbody></table>
     <div class="sub muted" style="margin:-2px 0 8px">Use a limit order at the limit price: the whole size fills at or below
       it, and the average works out to the avg fill. Prices are from the last scan; press "Check live depth" first.</div>
     ${outcomes}</div>`;
@@ -647,28 +657,30 @@ function checksHtml(r) {
   const ns = r.not_simple || [];
   const simple = ns.length ? `<div><span class="warn" title="${esc(ns.join("; "))}">Not simple: ${esc(ns[0])}${ns.length > 1 ? ` +${ns.length - 1}` : ""}</span></div>`
     : `<div><span class="warn">${OK_ICON}Simple: YES here, NO there</span></div>`;
-  const on = tradingOn(), key = esc(rowKey(r));
+  const on = tradingOn() && !r.maker, key = esc(rowKey(r));
   const match = !r.pair ? "" : r.pair.auto
     ? `<div class="warn" style="margin-top:6px">${WARN_ICON}<b>Auto-matched</b>: verify</div>
        <div><button data-action="verify" data-key="${key}">Correct match</button>
             <button data-action="wrong" data-key="${key}">Wrong match</button></div>`
     : `<div class="warn" style="margin-top:6px">${OK_ICON}Match verified by you</div>`;
   return w + simple + match + `<div><button data-action="track" data-key="${key}" title="Add it to My arbs after you place both orders yourself">Track this arb</button></div><div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
-    title="${on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
+    title="${r.maker ? "Maker orders rest in the book, so place them yourself (see the steps in the row)" : on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
 }
 // ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
 const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
-const MINE = "My arbs";
+const MINE = "My arbs", MAKER = "Maker mode";
 let currentTab = "All";
 try { currentTab = localStorage.getItem("arb-tab") || "All"; } catch (e) {}
-const inTab = r => currentTab === "All" || (r.tab || "Other") === currentTab;
+const inTab = r => currentTab === "All" || currentTab === MAKER || (r.tab || "Other") === currentTab;
 function renderTabs(rows) {
   const counts = { All: rows.length };
   for (const r of rows) counts[r.tab || "Other"] = (counts[r.tab || "Other"] || 0) + 1;
   document.getElementById("tabs-bar").innerHTML = TAB_ORDER
     .filter(t => t === "All" || counts[t] || t === currentTab || t === "Sports")
     .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
-    .join("") + `<button role="tab" aria-selected="${currentTab === MINE}" class="mine ${currentTab === MINE ? "on" : ""}"
+    .join("") + `<button role="tab" aria-selected="${currentTab === MAKER}" class="mine ${currentTab === MAKER ? "on" : ""}"
+      data-tab="${MAKER}" title="Near-misses that turn profitable when the Polymarket leg rests as a maker order">${MAKER}<span class="n">${(state?.maker || []).length}</span></button>`
+    + `<button role="tab" aria-selected="${currentTab === MINE}" class="${currentTab === MINE ? "on" : ""}"
       data-tab="${MINE}">${MINE}<span class="n">${myArbs.filter(a => !a.settled).length}</span></button>`;
   document.getElementById("opps-wrap").style.display = currentTab === MINE ? "none" : "";
   document.getElementById("myarbs").style.display = currentTab === MINE ? "" : "none";
@@ -875,11 +887,12 @@ function render(force) {
 
   const minP = +document.getElementById("f-min").value || 0, minR = (+document.getElementById("f-roi").value || 0) / 100;
   const budget = +document.getElementById("f-budget").value || 0;
-  const sized = s.opportunities.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
+  const sizeRows = rows => rows.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
     .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR);
+  const sized = sizeRows(s.opportunities);
   renderTabs(sized.map(o => o.r));
   if (s.last_prices) checkAlerts(sized);
-  const opps = sized.filter(o => inTab(o.r))
+  const opps = (currentTab === MAKER ? sizeRows(s.maker || []) : sized).filter(o => inTab(o.r))
     .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || b.z.profit - a.z.profit);
   // Rows you're mid-trade on: refresh their snapshot while the arb exists, keep showing it after.
   const live = new Set(s.opportunities.map(rowKey));

@@ -1,5 +1,6 @@
 """Find cross-exchange arbitrage pairs and size them against real order-book depth."""
 
+import copy
 import math
 import re
 from collections import defaultdict
@@ -56,6 +57,48 @@ def _ended(c, now):
     """True once a contract's trading window is over: its outcome is known and old quotes are stale."""
     t = _parse_time(c.trade_until) if c.trade_until else None
     return bool(t and t <= now)
+
+
+def maker_quote(pm, side, max_spread=1.0):
+    """Where to rest the Polymarket leg as a maker: one tick better than the best price on that
+    side, or joining it when the spread is a single tick. Buy YES rests a bid; Buy NO rests an offer
+    to sell YES (costing 1 - price). Returns (yes_price_to_post, cost_per_share) or None."""
+    ask = pm.yes_ask
+    bid = round(1 - pm.no_ask, 4) if pm.no_ask is not None else None
+    if ask is None or bid is None or ask - bid > max_spread + 1e-9:
+        return None
+    t = getattr(pm, "tick", 0.01) or 0.01
+    if side == YES:
+        price = bid + t if bid + t < ask - 1e-9 else bid
+        return round(price, 4), round(price, 4)
+    price = ask - t if ask - t > bid + 1e-9 else ask
+    return round(price, 4), round(1 - price, 4)
+
+
+def maker_candidate(cand, pm, rebate, max_spread=1.0):
+    """The same pair with the Polymarket leg resting as a maker: it earns `rebate` x p x (1-p)
+    instead of paying the taker fee, at the price maker_quote picks. The Kalshi leg is still taken."""
+    q = maker_quote(pm, cand["sp"], max_spread)
+    if not q or not 0 < q[1] < 1:
+        return None
+    k = cand["k"]
+    p = copy.copy(cand["p"])
+    p.fee_coef = -rebate                      # a negative fee: the rebate
+    edge = cand["payout"] - cand["ak"] - q[1] - fee_per_contract(k.fee_coef, cand["ak"]) + rebate * q[1] * (1 - q[1])
+    return {**cand, "p": p, "ap": q[1], "edge": edge,
+            "maker": {"post_yes_price": q[0], "cost": q[1], "tick": getattr(pm, "tick", 0.01)}}
+
+
+def hedge_limit(payout, maker_cost, rebate, kalshi_coef):
+    """Highest Kalshi price (whole cents) that still locks a profit once the maker leg filled at
+    maker_cost per share."""
+    room = payout - maker_cost + rebate * maker_cost * (1 - maker_cost)
+    best = None
+    for c in range(1, 100):
+        price = c / 100
+        if price + fee_per_contract(kalshi_coef, price) < room - 1e-9:
+            best = price
+    return best
 
 
 def _take(levels, n):

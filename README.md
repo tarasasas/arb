@@ -280,6 +280,24 @@ Streams need the `websocket-client` package; `start-dashboard.bat` installs it t
 no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
 missed Kalshi update forces a fresh book.
 
+## Maker mode
+
+The **Maker mode** tab lists pairs that aren't arbs when you take both prices, but become profitable
+if you post the Polymarket leg as a resting limit order instead. A resting (maker) order earns a
+rebate of 0.0125 × p × (1 − p) per share instead of paying the 0.0695 taker fee, and the scanner posts
+it one tick better than the current best price. Each row's details say exactly what to do:
+
+1. On Polymarket, post the Buy Yes/No limit order shown, Good 'til canceled.
+2. As soon as any shares fill, buy the same number on Kalshi at no more than the hedge limit.
+   **Match your fill** works out the exact numbers.
+3. If Kalshi moves past the hedge limit first, cancel the Polymarket order.
+
+The risk: a resting order tends to fill just as the price moves against you, and Kalshi may have
+moved too by then. So maker mode only looks at Polymarket markets whose bid–ask gap is 3¢ or less,
+needs at least 0.5¢ profit per pair, and sizes each row to at most $1,000 (`MAKER_MAX_CAPITAL`,
+`MAKER_MAX_SPREAD` and `MAKER_MIN_EDGE` in `arb/config.py`). **Make trade** doesn't place maker
+orders: place them yourself.
+
 ## Alerts
 
 **On the dashboard:** above the table, set **Alert at $** (default 5). When a new arb at or above

@@ -46,6 +46,7 @@ class PMMarket:
     no_ask: float | None = None
     levels: dict = field(default_factory=dict)
     state: str = ""
+    tick: float = 0.01   # price step (orderPriceMinTickSize); maker mode posts one step better
 
 
 def _q(v):
@@ -128,6 +129,7 @@ def parse_market(m):
         title=m.get("question") or slug, rules=m.get("description") or "",
         start_time=m.get("gameStartTime") or m.get("endDate") or "",
         fee_coef=float(m.get("feeCoefficient") or config.POLYMARKET_DEFAULT_COEF), team_names=names,
+        tick=float(m.get("orderPriceMinTickSize") or 0.01),
     )
     set_quotes(pm, m)
     return pm

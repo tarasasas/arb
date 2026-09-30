@@ -601,7 +601,8 @@ def pm_market_obj(m, default_coef):
                   period="", team=None, op=">", line=0.5, tie_half=False,
                   title=f"{m.get('question') or ''} — {m.get('title') or ''}".strip(" —"),
                   rules=m.get("description") or "", start_time=m.get("endDate") or "",
-                  fee_coef=float(m.get("feeCoefficient") or default_coef), team_names={})
+                  fee_coef=float(m.get("feeCoefficient") or default_coef), team_names={},
+                  tick=float(m.get("orderPriceMinTickSize") or 0.01))
     bid, ask = _q(m.get("bestBidQuote")), _q(m.get("bestAskQuote"))
     pm.yes_ask, pm.no_ask = ask, (round(1 - bid, 4) if bid is not None else None)
     return pm

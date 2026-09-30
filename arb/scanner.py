@@ -412,6 +412,8 @@ class Scanner:
             if len(near) < config.MAX_NEAR_MISSES and _cand_key(cand) not in unchecked:
                 near.append(engine.to_row(cand, None, now))
 
+        maker = self._maker_rows(cands, source, now) if stream_groups is None else None
+
         # A pass only replaces the rows it actually re-checked. The hot pass covers a few markets and
         # fetches at most 15 books, so without this the table dropped from ~50 rows to 15 between sweeps.
         covered = {(c.exchange, c.market_id) for c in contracts}
@@ -432,7 +434,8 @@ class Scanner:
                                "hot_count": sum(len(v) for v in self.hot_groups.values()),
                                "streams": {ex: s.status() for ex, s in self.streams.items()}})
             if stream_groups is None:
-                self.state.update({"near_misses": near, "hot_seconds" if hot else "scan_seconds": secs})
+                self.state.update({"near_misses": near, "hot_seconds" if hot else "scan_seconds": secs,
+                                   "maker": maker})
             if not hot:
                 self.state["last_full"] = now.isoformat()
         self.merge_lock.release()
@@ -440,6 +443,41 @@ class Scanner:
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
                      f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")
+
+    def _maker_rows(self, cands, source, now):
+        """Near-misses that become profitable with the Polymarket leg resting as a maker order."""
+        rows = []
+        for cand in cands:
+            if cand["edge"] > 0:
+                continue                          # already an arb as a taker
+            pm = source.get(("polymarket", cand["p"].market_id))
+            km = source.get(("kalshi", cand["k"].market_id))
+            if not pm or not km:
+                continue
+            mc = engine.maker_candidate(cand, pm, config.POLYMARKET_MAKER_REBATE, config.MAKER_MAX_SPREAD)
+            if not mc or mc["edge"] < config.MAKER_MIN_EDGE:
+                continue
+            levels_k = km.levels.get(cand["sk"], []) if km.levels else []
+            if not levels_k:
+                continue
+            cap = int(config.MAKER_MAX_CAPITAL / (mc["ak"] + mc["ap"]))
+            sizing = engine.size_opportunity(mc, levels_k, [(mc["ap"], cap)])
+            if not sizing or sizing["profit"] < config.MIN_PROFIT_DOLLARS:
+                continue
+            mc["depth"] = {"kalshi": levels_k[:DEPTH_LEVELS], "polymarket": [(mc["ap"], sizing["size"])]}
+            row = engine.to_row(mc, sizing, now)
+            m = mc["maker"]
+            m["hedge_limit"] = engine.hedge_limit(mc["payout"], m["cost"], config.POLYMARKET_MAKER_REBATE,
+                                                  cand["k"].fee_coef)
+            row["maker"] = m
+            row["legs"][1]["maker"] = True
+            row["warnings"].insert(0, "MAKER MODE: your Polymarket order rests in the book and only fills when someone "
+                                      "takes it, often just as the price moves against you. Buy the Kalshi leg as soon "
+                                      "as any shares fill, at no more than the hedge limit, and cancel what's left if "
+                                      "Kalshi moves past it.")
+            rows.append(row)
+        rows.sort(key=lambda r: -r["profit"])
+        return rows
 
     def _stream_wanted(self, cands):
         """Stream the near-arb markets (closest first) plus every non-sports and crypto pair."""

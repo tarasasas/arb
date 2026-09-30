@@ -94,6 +94,12 @@ LEAGUES = {
 # Polymarket US: feeCoefficient (0.0695 today) x C x p x (1-p), banker's rounding to the cent.
 KALSHI_TAKER_COEF = 0.07
 POLYMARKET_DEFAULT_COEF = 0.0695
+POLYMARKET_MAKER_REBATE = 0.0125   # paid to resting orders: 0.0125 x C x p x (1-p) (docs.polymarket.us/fees)
+MAKER_MAX_CAPITAL = 1000.0         # size maker-mode rows to at most this much money (a resting order
+                                   # can be any size, so Kalshi depth alone would suggest millions of shares)
+MAKER_MIN_EDGE = 0.005             # per pair: below half a cent a maker fill isn't worth the waiting
+MAKER_MAX_SPREAD = 0.03            # only where Polymarket's bid-ask gap is this tight: in a wide gap a
+                                   # resting order fills only when the price jumps, and Kalshi jumps too
 
 # Scanner settings.
 CATALOG_REFRESH_SECS = 300     # full market lists + game matching
