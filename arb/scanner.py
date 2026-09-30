@@ -42,6 +42,8 @@ class Scanner:
         self.market_groups = {}         # (exchange, market id) -> pair groups it's in
         self.dirty, self.dirty_lock = set(), threading.Lock()
         self.merge_lock = threading.Lock()   # one pass at a time merges into the opportunities list
+        from .alerts import Alerter
+        self.alerter = Alerter(self.log)
         self.sports_cat, self.pairs_cat = ([], {}), ([], {})
         self.series_fees = {}
         self.fee_overrides = {}         # Kalshi per-event fee overrides (e.g. playoff games)
@@ -78,6 +80,10 @@ class Scanner:
     def start_message(self):
         self.log(f"Kalshi access: {self.kalshi.auth_info}")
         self.log(f"Trading: {self.trading_status}")
+        self.log("Phone alerts: " + (f"{', '.join(self.alerter.channels())} for arbs of ${self.alerter.min_profit:g}+"
+                                     if self.alerter.enabled else "off (see Alerts in the README)"))
+        with self.lock:
+            self.state["stats"]["alerts"] = {"channels": self.alerter.channels(), "min_profit": self.alerter.min_profit}
 
     def log(self, msg):
         line = f"{time.strftime('%H:%M:%S')} {msg}"
@@ -430,6 +436,7 @@ class Scanner:
             if not hot:
                 self.state["last_full"] = now.isoformat()
         self.merge_lock.release()
+        self.alerter.check(opportunities)
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
                      f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")

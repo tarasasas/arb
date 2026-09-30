@@ -280,6 +280,28 @@ Streams need the `websocket-client` package; `start-dashboard.bat` installs it t
 no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
 missed Kalshi update forces a fresh book.
 
+## Alerts
+
+**On the dashboard:** above the table, set **Alert at $** (default 5). When a new arb at or above
+that profit appears, the dashboard beeps, puts "(1 new)" in the tab title and, with **Desktop
+notification** ticked, shows a Windows notification. An arb that stays on screen, or drops off and
+comes back within 10 minutes, doesn't alert again.
+
+**On your phone, with the dashboard closed or minimized:** add either of these to `.env`, restart,
+then press **Test phone alert**:
+
+```
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...   # channel settings → Integrations → Webhooks
+TELEGRAM_BOT_TOKEN=123456:ABC...                          # create a bot with @BotFather
+TELEGRAM_CHAT_ID=123456789                                # message your bot, then open
+                                                          # https://api.telegram.org/bot<token>/getUpdates
+ALERT_MIN_PROFIT=5            # optional, dollars
+ALERT_COOLDOWN_MINS=30        # optional: repeat an arb only after this long, or once its profit grows by half
+```
+
+Each message says what to buy on each site, with shares and limit prices. Rows marked too good to
+be true, or with ONE-WAY RULES, different settlement sources or contradicting prices, never alert.
+
 ## Things the numbers assume
 
 - **Taker fees only.**

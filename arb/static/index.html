@@ -169,6 +169,11 @@
     <label>Settles within <input id="f-days" type="number" min="0" step="1" placeholder="any" style="width:60px"> days</label>
     <label><input id="f-expand" type="checkbox"> Show math for all</label>
     <label><input id="f-search" type="search" placeholder="Search team, market…"></label>
+    <label title="Beep and show a notification when a new arb at or above this profit appears">Alert at $
+      <input id="f-alert" type="number" min="0" step="1" value="5" style="width:60px"></label>
+    <label><input id="f-sound" type="checkbox" checked> Sound</label>
+    <label><input id="f-notify" type="checkbox"> Desktop notification</label>
+    <button id="alert-test" type="button" title="Send a test to your phone (Discord/Telegram set in .env)">Test phone alert</button>
   </div>
 
   <h2>Opportunities</h2>
@@ -812,6 +817,47 @@ function openTrack(r, existing) {
   };
 }
 
+// ---- alerts: beep + desktop notification for new arbs above the threshold ------------------------
+let alertSeen = null;                       // row key -> last time it was on screen (null until the first load)
+const ALERT_REPEAT_MS = 10 * 60 * 1000;     // an arb that flickers off and back on doesn't beep again
+function beep() {
+  try { const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.18].forEach(t => { const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 880; g.gain.setValueAtTime(0.15, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.15);
+      o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.16); });
+  } catch (e) {}
+}
+function checkAlerts(opps) {
+  const min = +document.getElementById("f-alert").value || 0;
+  const now = Date.now(), first = alertSeen === null;
+  alertSeen ??= new Map();
+  const fresh = first ? [] : opps.filter(o => !(now - (alertSeen.get(rowKey(o.r)) ?? -Infinity) < ALERT_REPEAT_MS)
+                                              && !o.r.suspicious && o.z.profit >= min);
+  for (const o of opps) alertSeen.set(rowKey(o.r), now);
+  if (!fresh.length) return;
+  if (document.getElementById("f-sound").checked) beep();
+  if (document.getElementById("f-notify").checked && "Notification" in window && Notification.permission === "granted") {
+    for (const { r, z } of fresh.slice(0, 3)) {
+      const n = new Notification(`${money(z.profit)} arb · ${r.tab || r.league}`, {
+        body: `${r.game}\n${r.legs.map(l => `${l.exchange}: Buy ${l.side.toUpperCase()}`).join(" + ")}`, tag: rowKey(r) });
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+  }
+  document.title = `(${fresh.length} new) Arb Scanner`;
+  setTimeout(() => { document.title = "Arb Scanner"; }, 15000);
+}
+document.getElementById("f-notify").addEventListener("change", e => {
+  if (e.target.checked && "Notification" in window && Notification.permission !== "granted")
+    Notification.requestPermission().then(p => { if (p !== "granted") { e.target.checked = false; saveFilters(); } });
+});
+document.getElementById("alert-test").addEventListener("click", async e => {
+  const b = e.target; b.disabled = true;
+  try { const d = await post("/api/alerts/test", {}); alert("Test alert sent to " + d.channels.join(" and ")); }
+  catch (err) { alert(err.message); }
+  b.disabled = false;
+});
+
 function render(force) {
   if (!state) return;
   const s = state, st = s.stats || {};
@@ -832,6 +878,7 @@ function render(force) {
   const sized = s.opportunities.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
     .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR);
   renderTabs(sized.map(o => o.r));
+  if (s.last_prices) checkAlerts(sized);
   const opps = sized.filter(o => inTab(o.r))
     .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || b.z.profit - a.z.profit);
   // Rows you're mid-trade on: refresh their snapshot while the arb exists, keep showing it after.
@@ -936,7 +983,8 @@ opps.addEventListener("input", e => {
   const r = rowsByKey.get(k), out = opps.querySelector(`[data-result="${CSS.escape(k)}"]`);
   if (r && out) out.innerHTML = hedgeResult(r, k);
 });
-const FILTER_IDS = ["f-budget", "f-league", "f-min", "f-roi", "f-clean", "f-noshort", "f-nosus", "f-simple", "f-days", "f-expand", "f-search"];
+const FILTER_IDS = ["f-budget", "f-league", "f-min", "f-roi", "f-clean", "f-noshort", "f-nosus", "f-simple", "f-days", "f-expand", "f-search",
+                    "f-alert", "f-sound", "f-notify"];
 for (const id of FILTER_IDS) document.getElementById(id).addEventListener("input", () => { saveFilters(); render(true); });
 // Remember filter settings in this browser between visits.
 function saveFilters() {

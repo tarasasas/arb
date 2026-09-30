@@ -90,6 +90,8 @@ def serve(scanner, port, open_browser=True):
                     return self._json(200, {"ok": True})
                 if path == "/api/myarbs/save":
                     return self._json(200, scanner.my_arbs.save({**body, "edited": True}))
+                if path == "/api/alerts/test":
+                    return self._json(200, {"channels": scanner.alerter.test()})
                 if path == "/api/myarbs/sync":
                     scanner.sync_positions()
                     return self._json(200, scanner.my_arbs.state())
@@ -124,6 +126,8 @@ def serve(scanner, port, open_browser=True):
                          f"Try: python -m arb --port {port + 1}")
     threading.Thread(target=scanner.run_forever, args=(stop,), daemon=True).start()
     url = f"http://localhost:{port}"
+    if getattr(scanner, "alerter", None):
+        scanner.alerter.dashboard_url = url
     scanner.log(f"Dashboard at {url} (Ctrl+C to stop)")
     if open_browser:
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()

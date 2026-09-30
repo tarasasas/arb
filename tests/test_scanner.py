@@ -23,6 +23,7 @@ class HotPassTests(unittest.TestCase):
         s.state = {"opportunities": [], "near_misses": []}
         s.hot_groups = {}
         s.streams, s.merge_lock, s.pairs_cat = {}, __import__("threading").Lock(), ([], {})
+        s.alerter = __import__("arb.alerts", fromlist=["Alerter"]).Alerter(lambda m: None, send=lambda t: None)
 
         class K:
             def refresh_books(self, ms):
