@@ -22,6 +22,7 @@ class HotPassTests(unittest.TestCase):
         s.logs, s.log_to_console = __import__("collections").deque(maxlen=10), False
         s.state = {"opportunities": [], "near_misses": []}
         s.hot_groups = {}
+        s.streams, s.merge_lock, s.pairs_cat = {}, __import__("threading").Lock(), ([], {})
 
         class K:
             def refresh_books(self, ms):
@@ -67,6 +68,30 @@ class HotPassTests(unittest.TestCase):
         self.s.hot_groups = {k: v for k, v in self.s.hot_groups.items() if k[0] == "T:A"}
         self.s.refresh_prices(hot=True)
         self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"B"})
+
+
+    def test_streamed_update_rechecks_without_polling(self):
+        class Live:
+            connected, seen = True, {"kA", "pA", "kB", "pB"}
+
+            def status(self):
+                return {"connected": True}
+        self.s.streams = {"kalshi": Live(), "polymarket": Live()}
+
+        class NoPoll:
+            def __getattr__(self, name):
+                raise AssertionError(f"polled {name} for a streamed market")
+        self.s.kalshi, self.s.pm = NoPoll(), NoPoll()
+        self.s.market_groups = {}
+        for g, by_ex in self.s.groups.items():
+            for lst in by_ex.values():
+                for c in lst:
+                    self.s.market_groups.setdefault((c.exchange, c.market_id), set()).add(g)
+        self.s.dirty, self.s.dirty_lock = set(), __import__("threading").Lock()
+        self.s.on_stream_update("polymarket", "pA")           # a price moved on game A
+        gs = set().union(*(self.s.market_groups[d] for d in self.s.dirty))
+        self.s.refresh_prices(stream_groups=gs)
+        self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"A"})
 
 
 if __name__ == "__main__":

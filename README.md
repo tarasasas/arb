@@ -267,6 +267,19 @@ trigger orders. The server listens on localhost only.
    - Kalshi rounds the fee up to the cent.
    - Polymarket uses banker's rounding.
 
+## Live prices (WebSocket streams)
+
+With your API keys in `.env`, the scanner opens a live stream to each exchange and subscribes to up
+to 2,000 markets on each: every near-arb found by the full sweep, plus every non-sports and crypto
+pair. Each price change re-checks just the pairs that market is in, within about 0.1 seconds,
+instead of waiting for the next poll. The header shows **Live prices: Kalshi ● N mkts ·
+Polymarket ● N mkts**. The full sweep keeps polling everything else and adds new near-arbs to the
+streams as it finds them.
+
+Streams need the `websocket-client` package; `start-dashboard.bat` installs it the first time. With
+no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
+missed Kalshi update forces a fresh book.
+
 ## Things the numbers assume
 
 - **Taker fees only.**

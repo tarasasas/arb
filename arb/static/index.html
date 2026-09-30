@@ -145,6 +145,7 @@
     <span class="status" id="updated"></span>
     <span class="status" id="access"></span>
     <span class="status" id="trading"></span>
+    <span class="status" id="live"></span>
   </header>
 
   <section class="tiles">
@@ -820,6 +821,11 @@ function render(force) {
   document.getElementById("updated").textContent = s.last_prices ? "Prices updated " + ago(s.last_prices) : "";
   document.getElementById("access").textContent = st.kalshi_access ? "Kalshi: " + st.kalshi_access : "";
   document.getElementById("trading").textContent = st.trading ? "Trading: " + st.trading : "";
+  const feeds = Object.entries(s.streams || {});
+  document.getElementById("live").innerHTML = feeds.length ? "Live prices: " + feeds.map(([ex, v]) =>
+    `<span title="${esc(v.error || "")}">${ex === "kalshi" ? "Kalshi" : "Polymarket"} ${v.connected
+      ? `<span style="color:var(--good)">●</span> ${compact(v.live)} mkts` : `<span style="color:var(--critical)">●</span> reconnecting`}</span>`).join(" · ")
+    : "Live prices: off (polling)";
 
   const minP = +document.getElementById("f-min").value || 0, minR = (+document.getElementById("f-roi").value || 0) / 100;
   const budget = +document.getElementById("f-budget").value || 0;

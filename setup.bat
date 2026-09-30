@@ -4,7 +4,7 @@ rem (The scanner itself runs on plain Python; this is only for the optional key.
 title Arb Scanner - setup
 cd /d "%~dp0"
 where python >nul 2>nul || (echo Python was not found on PATH. Install Python 3.10+ from python.org. & pause & exit /b 1)
-python -m pip install --upgrade cryptography
+python -m pip install --upgrade cryptography websocket-client
 echo.
 if not exist ".env" (
   copy ".env.example" ".env" >nul

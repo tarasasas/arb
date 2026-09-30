@@ -38,6 +38,10 @@ class Scanner:
         self.store = MatchStore()
         self.my_arbs = MyArbs()
         self.accounts = None            # built on first sync (needs the API keys in .env)
+        self.streams = {}               # live order-book streams, by exchange (need API keys)
+        self.market_groups = {}         # (exchange, market id) -> pair groups it's in
+        self.dirty, self.dirty_lock = set(), threading.Lock()
+        self.merge_lock = threading.Lock()   # one pass at a time merges into the opportunities list
         self.sports_cat, self.pairs_cat = ([], {}), ([], {})
         self.series_fees = {}
         self.fee_overrides = {}         # Kalshi per-event fee overrides (e.g. playoff games)
@@ -170,6 +174,15 @@ class Scanner:
         with self.lock:
             self.contracts, self.source, self.groups = contracts, source, groups
             self.contract_index = {(c.exchange, c.market_id): c for c in contracts}
+            idx = {}
+            for g, by_ex in groups.items():
+                for lst in by_ex.values():
+                    for c in lst:
+                        idx.setdefault((c.exchange, c.market_id), set()).add(g)
+            self.market_groups = idx
+        for ex, stream in self.streams.items():
+            stream.markets = {mid: m for (e, mid), m in source.items() if e == ex}
+        with self.lock:
             self.state["stats"].update({"paired_quantities": len(groups), "paired_contracts": len(contracts),
                                         "approved_pairs": len(p_contracts) // 2,
                                         "auto_pairs": sum(1 for c in p_contracts
@@ -310,26 +323,42 @@ class Scanner:
 
     # ---- prices -----------------------------------------------------------------------
 
-    def refresh_prices(self, hot=False):
+    def _streamed(self):
+        """(exchange, market id) pairs whose book is live on a connected stream right now."""
+        return {(ex, mid) for ex, s in self.streams.items() if s.connected for mid in list(s.seen)}
+
+    def refresh_prices(self, hot=False, stream_groups=None):
         """Full sweep (hot=False): every watched contract. Hot sweep: only the quantities that
-        were within NEAR_MISS_EDGE of an arb on the last full sweep, so it takes ~1-2s."""
+        were within NEAR_MISS_EDGE of an arb on the last full sweep, so it takes ~1-2s.
+        stream_groups: re-check just these pair groups on books the live streams already hold."""
         t0 = time.time()
         with self.lock:
             contracts, source, groups = self.contracts, self.source, self.groups
             hot_keys = self.hot_groups
-        if hot:
+        streamed = self._streamed()
+        if stream_groups is not None:
+            groups = {g: groups[g] for g in stream_groups if g in groups}
+            contracts = [c for g in groups.values() for lst in g.values() for c in lst]
+            hot = True
+            if not contracts:
+                return
+        elif hot:
             # Only the markets that appear in near-arb pairs, grouped as before.
             groups = {g: {ex: [c for c in groups[g][ex] if (ex, c.market_id) in hot_keys[g]] for ex in groups[g]}
                       for g in hot_keys if g in groups}
             contracts = [c for g in groups.values() for lst in g.values() for c in lst]
             if not contracts:
                 return
-        kms = [source[("kalshi", c.market_id)] for c in contracts if c.exchange == "kalshi"]
-        pms = [source[("polymarket", c.market_id)] for c in contracts if c.exchange == "polymarket"]
-        with ThreadPoolExecutor(2) as pool:
-            jobs = [pool.submit(self.kalshi.refresh_books, kms), pool.submit(self.pm.refresh_quotes, pms)]
-            for j in jobs:
-                j.result()
+        # Streamed markets already have live books; only the rest are polled.
+        kms = [source[("kalshi", c.market_id)] for c in contracts
+               if c.exchange == "kalshi" and ("kalshi", c.market_id) not in streamed]
+        pms = [source[("polymarket", c.market_id)] for c in contracts
+               if c.exchange == "polymarket" and ("polymarket", c.market_id) not in streamed]
+        if stream_groups is None and (kms or pms):
+            with ThreadPoolExecutor(2) as pool:
+                jobs = [pool.submit(self.kalshi.refresh_books, kms), pool.submit(self.pm.refresh_quotes, pms)]
+                for j in jobs:
+                    j.result()
         matching.sync_quotes(contracts, source)
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
@@ -340,6 +369,7 @@ class Scanner:
                 ids.update({("kalshi", c["k"].market_id), ("polymarket", c["p"].market_id)})
             with self.lock:
                 self.hot_groups = hot_map
+            self._stream_wanted(cands)
         now = engine.now_utc()
         opportunities, near = [], []
         book_budget = 15 if hot else 60        # Polymarket book fetches per cycle
@@ -351,6 +381,8 @@ class Scanner:
             if cand["edge"] > 0 and (book_budget > 0 or pm_slug in fetched):
                 km = source[("kalshi", cand["k"].market_id)]
                 pm = source[("polymarket", pm_slug)]
+                if pm.slug not in fetched and ("polymarket", pm.slug) in streamed:
+                    fetched.add(pm.slug)          # live book from the stream: no fetch needed
                 if pm.slug not in fetched:
                     fetched.add(pm.slug)
                     book_budget -= 1
@@ -377,6 +409,7 @@ class Scanner:
         # A pass only replaces the rows it actually re-checked. The hot pass covers a few markets and
         # fetches at most 15 books, so without this the table dropped from ~50 rows to 15 between sweeps.
         covered = {(c.exchange, c.market_id) for c in contracts}
+        self.merge_lock.acquire()
         with self.lock:
             previous = self.state["opportunities"]
         found = {_row_key(r) for r in opportunities}
@@ -389,15 +422,52 @@ class Scanner:
         opportunities.sort(key=lambda r: -r["profit"])
         secs = round(time.time() - t0, 1)
         with self.lock:
-            self.state.update({"opportunities": opportunities, "near_misses": near,
-                               "last_prices": now.isoformat(), "status": "running",
-                               "hot_seconds" if hot else "scan_seconds": secs,
-                               "hot_count": sum(len(v) for v in self.hot_groups.values())})
+            self.state.update({"opportunities": opportunities, "last_prices": now.isoformat(), "status": "running",
+                               "hot_count": sum(len(v) for v in self.hot_groups.values()),
+                               "streams": {ex: s.status() for ex, s in self.streams.items()}})
+            if stream_groups is None:
+                self.state.update({"near_misses": near, "hot_seconds" if hot else "scan_seconds": secs})
             if not hot:
                 self.state["last_full"] = now.isoformat()
+        self.merge_lock.release()
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
                      f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")
+
+    def _stream_wanted(self, cands):
+        """Stream the near-arb markets (closest first) plus every non-sports and crypto pair."""
+        if not self.streams:
+            return
+        wanted = {"kalshi": [], "polymarket": []}
+        for c in cands:
+            wanted["kalshi"].append(c["k"].market_id)
+            wanted["polymarket"].append(c["p"].market_id)
+        for c in self.pairs_cat[0]:
+            wanted[c.exchange].append(c.market_id)
+        for ex, stream in self.streams.items():
+            ids = list(dict.fromkeys(wanted[ex]))[:config.STREAM_MAX_MARKETS]
+            stream.want(ids)
+
+    def on_stream_update(self, exchange, market_id):
+        with self.dirty_lock:
+            self.dirty.add((exchange, market_id))
+
+    def _stream_loop(self, stop_event):
+        """Re-check the pairs a streamed price change touches, within ~0.1s of the change."""
+        while not (stop_event and stop_event.is_set()):
+            with self.dirty_lock:
+                dirty, self.dirty = self.dirty, set()
+            if dirty:
+                with self.lock:
+                    idx = self.market_groups
+                gs = set().union(*(idx.get(d, set()) for d in dirty))
+                try:
+                    if gs:
+                        self.refresh_prices(stream_groups=gs)
+                except Exception as e:
+                    self.log(f"Stream re-check error: {e!r}")
+                    time.sleep(1)
+            time.sleep(config.STREAM_EVAL_SECS)
 
     # ---- loop -------------------------------------------------------------------------
 
@@ -440,6 +510,11 @@ class Scanner:
         threading.Thread(target=self._positions_loop, args=(stop_event,), daemon=True).start()
         while not self.contracts and not (stop_event and stop_event.is_set()):
             time.sleep(1)               # first catalog load
+        from . import streams
+        self.streams = streams.build(self.kalshi, self.on_stream_update, self.log, {}, {})
+        if self.streams:
+            self._publish()             # hand the streams the market objects
+            threading.Thread(target=self._stream_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._loop, args=(stop_event, False), daemon=True).start()
         self._loop(stop_event, True)
 

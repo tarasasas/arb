@@ -13,6 +13,8 @@ shift
 title Arb Scanner
 cd /d "%~dp0"
 where python >nul 2>nul || (echo Python was not found on PATH. Install Python 3.10+ from python.org. & pause & exit /b 1)
+rem Packages for API keys and live price streams; installed once, skipped after that.
+python -c "import websocket, cryptography" >nul 2>nul || python -m pip install --quiet cryptography websocket-client
 python -m arb %1 %2 %3 %4 %5 %6
 echo.
 echo Scanner stopped.
