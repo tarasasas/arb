@@ -2,76 +2,103 @@ import unittest
 from datetime import datetime, timezone
 
 from arb import crypto, engine, nonsports
-from arb.model import NO, YES
+from arb.model import NO, YES, guaranteed_payout
 
 
-def pm(slug, start, end, beat, horizon="15m", coin="btc"):
-    return {"slug": slug, "question": "BTC Up or Down: 15 min", "title": "BTC Up or Down: 15 min", "active": True,
+def pm(slug, start, end, beat, horizon="15m", coin="btc", bid=0.40, ask=0.41):
+    return {"slug": slug, "question": f"BTC Up or Down: {horizon}", "title": f"BTC Up or Down: {horizon}", "active": True,
             "closed": False, "category": "crypto", "endDate": end, "feeCoefficient": 0.0695,
             "description": "Settles Up if the price at the close is greater than or equal to the open. CF Benchmarks BRTI.",
-            "bestBidQuote": {"value": "0.40"}, "bestAskQuote": {"value": "0.41"},
+            "bestBidQuote": {"value": str(bid)}, "bestAskQuote": {"value": str(ask)},
             "assetPriceTerms": {"marketType": "ASSET_PRICE_MARKET_TYPE_UP_DOWN", "asset": {"symbol": coin},
                                 "indexSymbol": "BRTI", "horizon": horizon, "windowStart": start, "windowEnd": end,
                                 "priceToBeat": {"value": str(beat)} if beat else None}}
 
 
-def km(ticker, start, end, strike, series="KXBTC15M"):
-    return {"ticker": ticker, "event_ticker": f"{series}-26SEP301530", "status": "active", "open_time": start,
-            "close_time": end, "floor_strike": strike, "strike_type": "greater_or_equal",
-            "title": "BTC price up in next 15 mins?", "yes_sub_title": f"Target Price: ${strike:,.2f}",
-            "yes_ask_dollars": "0.44", "no_ask_dollars": "0.57", "yes_bid_dollars": "0.43",
-            "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' BRTI before 3:30 PM EDT is "
-                             "at least the average before 3:15 PM EDT, then the market resolves to Yes."}
+def km(ticker, end, strike, series="KXBTC15M", kind="greater_or_equal", yes_ask=0.44, no_ask=0.57):
+    return {"ticker": ticker, "event_ticker": f"{series}-26SEP302000", "status": "active", "open_time": S,
+            "close_time": end, "floor_strike": strike, "strike_type": kind,
+            "title": "BTC price", "yes_sub_title": f"{strike}", "yes_ask_dollars": str(yes_ask),
+            "no_ask_dollars": str(no_ask), "yes_bid_dollars": str(round(1 - no_ask, 2)),
+            "rules_primary": "If the simple average of the sixty seconds of CF Benchmarks' BRTI before 8 PM EDT is above "
+                             "the strike, then the market resolves to Yes."}
 
 
-S, E = "2026-09-30T19:15:00Z", "2026-09-30T19:30:00Z"
-NOW = datetime(2026, 9, 30, 19, 20, tzinfo=timezone.utc)      # inside the window
+S, E, H = "2026-09-30T23:45:00Z", "2026-10-01T00:00:00Z", "2026-09-30T23:00:00Z"
+NOW = datetime(2026, 9, 30, 23, 50, tzinfo=timezone.utc)
+FEE = lambda series: 0.07
 
 
-class CryptoPairTests(unittest.TestCase):
-    def test_same_window_and_price_to_beat_pairs(self):
-        rows = crypto.pairs([pm("p15", S, E, 83728.93)], [km("K1", S, E, 83728.93)], now=NOW)
-        self.assertEqual([(r["pm"], r["kalshi"], r["relation"]) for r in rows], [("p15", "K1", "same")])
-        self.assertTrue(rows[0]["structural"])
-        self.assertIn("19:15–19:30 UTC", rows[0]["label"])
+def build(pms, kms, now=NOW):
+    return crypto.price_contracts(pms, kms, FEE, 0.0695, now)
 
-    def test_mismatches_never_pair(self):
-        self.assertEqual(crypto.pairs([pm("p", S, E, 83728.93)], [km("K", S, E, 83935.01)], now=NOW), [])      # other open
-        self.assertEqual(crypto.pairs([pm("p", S, E, 83728.93)], [km("K", E, "2026-09-30T19:45:00Z", 83728.93)], now=NOW), [])
-        self.assertEqual(crypto.pairs([pm("p", S, "2026-09-30T20:15:00Z", 83728.93, horizon="1h")],
-                                      [km("K", S, E, 83728.93)], now=NOW), [])                                  # 60-min window
-        self.assertEqual(crypto.pairs([pm("p", S, E, None)], [km("K", S, E, 83728.93)], now=NOW), [])        # not started
-        self.assertEqual(crypto.pairs([pm("p", S, E, 3000.0, coin="eth")], [km("K", S, E, 3000.0)], now=NOW), [])  # coin
 
-    def test_closed_window_is_dropped(self):
-        after = datetime(2026, 9, 30, 19, 31, tzinfo=timezone.utc)
-        self.assertEqual(crypto.pairs([pm("p", S, E, 83728.93)], [km("K", S, E, 83728.93)], now=after), [])
+def by_id(cs):
+    return {c.market_id: c for c in cs}
 
-    def test_screen_ignores_contracts_past_trade_until(self):
-        rows = crypto.pairs([pm("p15", S, E, 83728.93)], [km("K1", S, E, 83728.93)], now=NOW)
-        k_obj = nonsports.kalshi_market_obj(km("K1", S, E, 83728.93), 0.07)
-        p_obj = nonsports.pm_market_obj(pm("p15", S, E, 83728.93), 0.0695)
-        k, p = nonsports.approved_contracts(rows, {"K1": k_obj}, {"p15": p_obj})[0]
-        k.ask, p.ask = {YES: 0.30, NO: 0.24}, {YES: 0.44, NO: 0.70}          # stale quotes after the close
-        self.assertEqual(engine.screen(engine.group_pairs([k, p]), 0), [])     # E is in the past
 
-    def test_wording_matcher_leaves_up_down_markets_alone(self):
-        ev = [{"event_ticker": "KXBTC15M-26SEP301530", "series_ticker": "KXBTC15M", "title": "BTC price up in next 15 mins?",
-               "sub_title": "", "category": "Crypto", "markets": [km("K1", S, E, 83728.93)]}]
-        self.assertEqual(nonsports.suggest([pm("p15", S, E, 83728.93)], ev, set(), set()), [])
+class PriceContractTests(unittest.TestCase):
+    def test_exact_twin_is_an_exact_hedge(self):
+        cs, src = build([pm("p15", S, E, 83728.93)], [km("K15", E, 83728.93)])
+        c = by_id(cs)
+        self.assertEqual((c["p15"].line, c["K15"].line), (8372893 - 0.5, 8372893 - 0.5))   # x >= open, in cents
+        self.assertTrue(engine.exact_hedge(c["K15"], NO, c["p15"], YES))
+        self.assertEqual(engine.row_tab(c["K15"]), "Crypto")
+        self.assertEqual(set(src), {("kalshi", "K15"), ("polymarket", "p15")})
+
+    def test_cross_strike_with_the_hourly_ladder(self):
+        cs, _ = build([pm("p1h", H, E, 83642.70, horizon="1h")],
+                      [km("KD-83700", E, 83699.99, series="KXBTCD", kind="greater"),
+                       km("KD-83600", E, 83599.99, series="KXBTCD", kind="greater")])
+        c = by_id(cs)
+        self.assertEqual(c["KD-83700"].line, 8369999 + 0.5)                 # "above 83,699.99" = x >= 83,700.00
+        # Up from 83,642.70 + NOT above 83,699.99: $1 either way, $2 if it closes in between.
+        self.assertEqual(guaranteed_payout([(c["KD-83700"], NO), (c["p1h"], YES)]), 1.0)
+        self.assertFalse(engine.exact_hedge(c["KD-83700"], NO, c["p1h"], YES))
+        # The other direction (Up + NOT above 83,599.99) can lose both: not an arb.
+        self.assertEqual(guaranteed_payout([(c["KD-83600"], NO), (c["p1h"], YES)]), 0.0)
+        rows = engine.outcome_table(c["KD-83700"], NO, c["p1h"], YES)
+        self.assertEqual([r["total"] for r in rows], [1.0, 2.0, 1.0])
+        self.assertEqual(rows[1]["outcome"], "BTC closes $83,642.70 to $83,699.99")
+
+    def test_only_same_coin_same_instant_open_markets_group(self):
+        cs, _ = build([pm("p", S, E, 83728.93), pm("eth", S, E, 3000.0, coin="eth"),
+                       pm("started-not", S, E, None), pm("done", "2026-09-30T23:30:00Z", "2026-09-30T23:45:00Z", 1.0)],
+                      [km("K-other-time", "2026-10-01T01:00:00Z", 83728.93),
+                       km("K-range", E, 83700, series="KXBTC", kind="between"),
+                       km("K", E, 83728.93)])
+        self.assertEqual(set(by_id(cs)), {"p", "K"})
+
+    def test_rows_from_the_engine(self):
+        cs, _ = build([pm("p1h", H, E, 83642.70, horizon="1h", bid=0.40, ask=0.41)],
+                      [km("KD", E, 83699.99, series="KXBTCD", kind="greater", yes_ask=0.30, no_ask=0.55)])
+        for c in cs:
+            c.ask = {YES: 0.41 if c.exchange == "polymarket" else 0.30, NO: 0.60 if c.exchange == "polymarket" else 0.55}
+        cands = engine.screen(engine.group_pairs(cs), -1)
+        best = max(cands, key=lambda x: x["edge"])
+        self.assertEqual((best["sk"], best["sp"]), (NO, YES))              # 55c + 41c = 96c for >= $1
+        row = engine.to_row(best, None, NOW)
+        self.assertEqual(row["tab"], "Crypto")
+        self.assertTrue(any("CF Benchmarks" in w for w in row["warnings"]))
+
+    def test_closed_window_is_dropped_and_ignored(self):
+        self.assertEqual(build([pm("p", S, E, 1.0)], [km("K", E, 1.0)], now=datetime(2026, 10, 1, 0, 1, tzinfo=timezone.utc))[0], [])
+        cs, _ = build([pm("p", S, E, 83728.93)], [km("K", E, 83728.93)])
+        for c in cs:
+            c.ask = {YES: 0.30, NO: 0.24}                                   # stale quotes once it's over
+        later = [c for c in cs]
+        for c in later:
+            c.trade_until = "2026-09-30T00:00:00Z"
+        self.assertEqual(engine.screen(engine.group_pairs(later), 0), [])
 
     def test_series_to_fetch(self):
         self.assertEqual(crypto.kalshi_series_for([pm("p", S, E, 1.0), pm("q", S, E, 1.0, coin="eth")]),
-                         ["KXBTC15M", "KXETH15M"])
+                         ["KXBTC15M", "KXBTCD", "KXETH15M", "KXETHD"])
 
-    def test_pair_becomes_verified_simple_contract(self):
-        rows = crypto.pairs([pm("p15", S, E, 83728.93)], [km("K1", S, E, 83728.93)], now=NOW)
-        k_obj = nonsports.kalshi_market_obj(km("K1", S, E, 83728.93), 0.07)
-        p_obj = nonsports.pm_market_obj(pm("p15", S, E, 83728.93), 0.0695)
-        k, p = nonsports.approved_contracts(rows, {"K1": k_obj}, {"p15": p_obj})[0]
-        self.assertEqual(k.note, "structural")
-        self.assertEqual(engine.not_simple_reasons({"k": k, "sk": NO, "p": p, "sp": YES, "edge": 0.01}), [])
-        self.assertTrue(any("contract terms" in w for w in engine.warnings_for(k, p, engine.now_utc())))
+    def test_wording_matcher_leaves_up_down_markets_alone(self):
+        ev = [{"event_ticker": "KXBTC15M-26SEP301530", "series_ticker": "KXBTC15M", "title": "BTC price up in next 15 mins?",
+               "sub_title": "", "category": "Crypto", "markets": [km("K1", E, 83728.93)]}]
+        self.assertEqual(nonsports.suggest([pm("p15", S, E, 83728.93)], ev, set(), set()), [])
 
 
 if __name__ == "__main__":

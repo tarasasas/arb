@@ -161,20 +161,29 @@ The **Non-sports tabs** table shows, for each category tab on each site, how man
 open and how many outcome pairs the matcher found. Tabs with pairs on both sites are where
 non-sports arbs can show up.
 
-## Crypto Up/Down (paired automatically, no approval needed)
+## Crypto (paired automatically, no approval needed)
 
-Polymarket US "BTC Up or Down: 15 min" and Kalshi `KXBTC15M` "BTC price up in next 15 mins?" are the
-same contract. Both settle on the 60-second average of CF Benchmarks' BRTI at the window's open and
-close, and a tie counts as Up/Yes on both.
+These markets all settle on the same number: the 60-second average of CF Benchmarks' Bitcoin index
+(BRTI) at a fixed instant.
 
-Every 20 seconds the scanner pairs windows with the same coin, the same start and end to the second,
-and the same price to beat. These rows are marked as paired by contract terms, count as simple
-trades, and settle within 15 minutes. Near 50/50 both taker fees add up to about 3.5¢, so an arb
-appears only when one site lags the other during a fast move.
+- Polymarket US **Up/Down windows** (15-minute and 60-minute). "Up" means the close is at or above
+  the window's opening price.
+- Kalshi's **15-minute Up/Down** markets (`KXBTC15M`).
+- Kalshi's **hourly price ladder** (`KXBTCD`: "above $83,700 at 8 pm").
 
-Other coins pair automatically as soon as Polymarket lists them. Kalshi already runs ETH, SOL, XRP,
-DOGE and more. Polymarket's 60-minute windows have no Kalshi twin, because Kalshi only runs
-15-minute ones.
+Every 20 seconds the scanner loads them for each coin Polymarket lists, and groups markets that
+settle at the same instant. Each becomes a threshold on the close in cents, so the engine finds:
+
+- **Exact twins:** Polymarket 15-minute Up vs Kalshi 15-minute Up, same window and opening price.
+  One leg pays whatever happens.
+- **Cross-strike pairs:** for example Polymarket "Up from $83,642.70" plus Kalshi "NOT above
+  $83,699.99". That pays $1 whichever way it goes, and $2 if the close lands between the two.
+
+Rows show under the **Crypto** tab, with the outcome table in dollars. A window drops out the moment
+it closes. Kalshi averages the 60 seconds before the close and Polymarket the 60 prices ending at it,
+so the two can differ by one second's move; that only matters if the close lands within a few
+dollars of a line. ETH, SOL, XRP, DOGE, BNB and HYPE pair the same way as soon as Polymarket lists
+them.
 
 ## My arbs (your active trades)
 

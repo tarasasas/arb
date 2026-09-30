@@ -51,7 +51,7 @@ class Scanner:
         self.suggest_state = {"status": "waiting"}
         self._pairs_pending = False
         self.auto_pairs = []            # confident non-sports matches scanned without your approval
-        self.crypto_pairs = []          # identical crypto Up/Down windows, paired by contract terms
+        self.crypto_cat = ([], {})      # crypto price markets on both sites, grouped by settlement instant
         self.trader, self.trading_status = self._make_trader()
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
                       "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
@@ -149,7 +149,7 @@ class Scanner:
         approved = self.store.approved()
         manual = {(a["pm"], a["kalshi"]) for a in approved}
         with self.lock:
-            approved += [a for a in self.auto_pairs + self.crypto_pairs if (a["pm"], a["kalshi"]) not in manual]
+            approved += [a for a in self.auto_pairs if (a["pm"], a["kalshi"]) not in manual]
         contracts, source, conflicts = [], {}, []
         if approved:
             if not self.series_fees:
@@ -174,8 +174,9 @@ class Scanner:
     def _publish(self):
         s_contracts, s_source = self.sports_cat
         p_contracts, p_source = self.pairs_cat
-        contracts = s_contracts + p_contracts
-        source = {**s_source, **p_source}
+        c_contracts, c_source = self.crypto_cat
+        contracts = s_contracts + p_contracts + c_contracts
+        source = {**s_source, **p_source, **c_source}
         groups = engine.group_pairs(contracts)
         with self.lock:
             self.contracts, self.source, self.groups = contracts, source, groups
@@ -195,16 +196,24 @@ class Scanner:
                                                           if c.note == "auto" and c.exchange == "kalshi")})
 
     def refresh_crypto(self):
-        """Pair the current crypto Up/Down windows; reload pairs only when the set changes."""
+        """Crypto price markets that settle at the same instant on both sites (exact Up/Down twins and
+        Kalshi's hourly ladder strikes). Republished only when the set of markets changes."""
         pm_raw = self.pm.raw_markets(("crypto",), self.log)
         k_raw = [m for series in crypto.kalshi_series_for(pm_raw) for m in self.kalshi.open_markets(series)]
-        new = crypto.pairs(pm_raw, k_raw)
-        with self.lock:
-            changed = {(a["pm"], a["kalshi"]) for a in new} != {(a["pm"], a["kalshi"]) for a in self.crypto_pairs}
-            self.crypto_pairs = new
-        if changed:
-            self.log(f"Crypto Up/Down: {len(new)} identical window(s) on both exchanges")
-            self.refresh_pairs()
+        contracts, source = crypto.price_contracts(
+            pm_raw, k_raw, lambda series: self.series_fees.get(series, config.KALSHI_TAKER_COEF),
+            config.POLYMARKET_DEFAULT_COEF)
+        kalshi.apply_fee_overrides([m for (ex, _), m in source.items() if ex == "kalshi"], self.fee_overrides,
+                                   engine.now_utc(), config.CATALOG_REFRESH_SECS + 60)
+        for c in contracts:
+            if c.exchange == "kalshi":
+                c.fee_coef = source[("kalshi", c.market_id)].fee_coef
+        old_ids = {(c.exchange, c.market_id) for c in self.crypto_cat[0]}
+        if {(c.exchange, c.market_id) for c in contracts} != old_ids:
+            self.crypto_cat = (contracts, source)
+            groups = {c.game_key for c in contracts}
+            self.log(f"Crypto: {len(contracts)} price markets across {len(groups)} settlement time(s) on both sites")
+            self._publish()
 
     def sync_positions(self):
         """Live position check: read both accounts, pair positions into arbs in My arbs."""
@@ -399,10 +408,14 @@ class Scanner:
                         pm.levels, pm.yes_ask, pm.no_ask = {}, None, None
                 if not pm.levels:
                     continue
-                # Re-read top of book after the fresh fetch.
+                # Re-read top of book after the fresh fetch, and the edge with it: the screen used the
+                # quotes from before the fetch, which on a fast market (crypto windows) can be seconds old.
                 cand["ap"] = pm.yes_ask if cand["sp"] == "yes" else pm.no_ask
                 if cand["ap"] is None:
                     continue
+                cand["edge"] = (cand["payout"] - cand["ak"] - cand["ap"]
+                                - engine.fee_per_contract(cand["k"].fee_coef, cand["ak"])
+                                - engine.fee_per_contract(cand["p"].fee_coef, cand["ap"]))
                 levels_k, levels_p = km.levels.get(cand["sk"], []), pm.levels.get(cand["sp"], [])
                 sizing = engine.size_opportunity(cand, levels_k, levels_p)
                 cand["depth"] = {"kalshi": levels_k[:DEPTH_LEVELS], "polymarket": levels_p[:DEPTH_LEVELS]}
@@ -487,7 +500,7 @@ class Scanner:
         for c in cands:
             wanted["kalshi"].append(c["k"].market_id)
             wanted["polymarket"].append(c["p"].market_id)
-        for c in self.pairs_cat[0]:
+        for c in self.pairs_cat[0] + self.crypto_cat[0]:
             wanted[c.exchange].append(c.market_id)
         for ex, stream in self.streams.items():
             ids = list(dict.fromkeys(wanted[ex]))[:config.STREAM_MAX_MARKETS]

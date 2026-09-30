@@ -293,6 +293,11 @@ def warnings_for(k, p, now):
             w.append(f"Close dates differ by {abs((dk - dp).days)} days (Kalshi {dk:%b %d, %Y}, Polymarket "
                      f"{dp:%b %d, %Y}); money may be tied up until the later one.")
         return w
+    if k.var[0] == "price":
+        w.append("Both sites settle on the 60-second average of CF Benchmarks' BRTI at the close. Kalshi averages "
+                 "the 60 seconds before the close and Polymarket the 60 prices ending at it, so the two can differ "
+                 "by a second's move: only a close within a few dollars of a line could split them.")
+        return w
     if k.integer_line or p.integer_line:
         w.append("Whole-number line: a push is assumed to pay $0 on both sides (conservative).")
     ok, op = _ot_rule(k.rules), _ot_rule(p.rules)
@@ -314,6 +319,8 @@ def leg_text(c, side, price):
 
 
 def describe_var(var, note=""):
+    if var[0] == "price":
+        return f"{var[1].upper()} settlement price (CF Benchmarks 60-second average)"
     if var[0] == "event":
         return {"structural": "Paired by contract terms", "auto": "Auto-matched by wording"}.get(note, "Your approved match")
     kind, period = var[0], var[1]
@@ -343,7 +350,18 @@ PERIOD_NAMES = {"1H": "1st half", "2H": "2nd half", "1Q": "1st quarter", "2Q": "
                 "3P": "3rd period", "F5": "First 5 innings"}
 
 
+def _dollars(c):
+    return f"${c / 100:,.2f}"
+
+
 def outcome_text(var, lo, hi):
+    if var[0] == "price":                   # x in cents
+        coin = var[1].upper()
+        if lo is None:
+            return f"{coin} closes below {_dollars(hi + 1)}"
+        if hi is None:
+            return f"{coin} closes at {_dollars(lo)} or more"
+        return f"{coin} closes {_dollars(lo)} to {_dollars(hi)}"
     if var[0] == "event":
         return "It happens (Kalshi market resolves YES)" if (lo or 0) >= 1 else "It doesn't happen (Kalshi resolves NO)"
     per = var[1]
@@ -369,6 +387,21 @@ def outcome_text(var, lo, hi):
 def outcome_table(k, sk, p, sp):
     """Every distinct outcome region with what each leg pays per contract."""
     var = k.var
+    if var[0] == "price":
+        # Prices in cents run to millions: evaluate one point per region between the lines.
+        cuts = sorted({math.ceil(c.line) for c in (k, p)})
+        starts = [None] + cuts
+        regions = []
+        for i, lo in enumerate(starts):
+            x = cuts[0] - 1 if lo is None else lo
+            hi = cuts[i] - 1 if i < len(cuts) else None
+            pay = (payout(k, sk, x), payout(p, sp, x))
+            if regions and regions[-1]["pay"] == pay:
+                regions[-1]["hi"] = hi
+            else:
+                regions.append({"lo": lo, "hi": hi, "pay": pay})
+        return [{"outcome": outcome_text(var, r["lo"], r["hi"]), "kalshi": r["pay"][0], "polymarket": r["pay"][1],
+                 "total": r["pay"][0] + r["pay"][1]} for r in regions]
     nonneg = var[0] != "margin"
     pts = sample_points([k, p], nonneg)
     lo_x, hi_x = (0 if nonneg else min(pts) - 1), max(pts) + 1
@@ -397,6 +430,8 @@ TABS = {"politics": "Politics", "geopolitics": "Politics", "culture": "Culture",
 
 
 def row_tab(k):
+    if k.var[0] == "price":
+        return "Crypto"
     if k.var[0] != "event":
         return "Sports"
     return TABS.get(k.game_key.split(":", 1)[0].lower(), "Other")
