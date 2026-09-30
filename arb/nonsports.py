@@ -457,7 +457,7 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
                 s -= 0.2                                        # a US state on one side only
             op, ok = _offices(pm_docs[qi]), _offices(k_docs[i])
             if op and ok and not op & ok:
-                s -= 0.3                                        # House vs Governor, etc.
+                continue                                        # House vs Governor is never the same race
             if (p_set ^ k_set) & HARD_CONCEPTS:
                 continue                                        # Grammy winner is never Grammy nominee
             pi, ki = p_set & INDICATORS, k_set & INDICATORS
@@ -504,6 +504,8 @@ def _pair_outcomes(q, k, score, decided):
                     continue                    # "20-25%" bucket is not the same market as "25+"
                 if not outcomes_compatible(_pm_outcome_text(q, pm), km.get("yes_sub_title") or km.get("title") or ""):
                     continue
+                if len(pms) > 1 and _values(_pm_label(pm)) and not _values(km.get("yes_sub_title") or ""):
+                    continue                    # "Governors: 20-21" (a count) is not a plain yes/no question
                 if len(pms) > 1 and _is_deadline(km.get("yes_sub_title")) and not _is_deadline(_pm_label(pm)):
                     continue                    # "Which company…? Z.ai" (who) is not "Before 2027" (when)
                 ky, py = years(km.get("yes_sub_title") or ""), pm_years(f"{q['question']} {_pm_label(pm)}")

@@ -90,6 +90,14 @@ class MatcherTests(unittest.TestCase):
                "markets": [k_market("KXBESTLLMCHINA-27", "KXBESTLLMCHINA-27", "Before 2027", 0.05, 0.06)]}]
         self.assertEqual(nonsports.suggest(pm, ev, set(), set()), [])
 
+    def test_governor_count_is_not_house_control(self):
+        pm = [pm_market(f"g-{r}", "How Many Republican Governors After the Midterms?", r, 0.19, 0.2)
+              for r in ("20-21", "22-23", "24-25")]
+        ev = [{"event_ticker": "KXLOSEMAJORITY-27JAN01", "category": "Politics", "sub_title": "",
+               "title": "Will Republicans lose the House majority before the 2026 midterms?",
+               "markets": [k_market("KXLOSEMAJORITY-27JAN01", "KXLOSEMAJORITY-27JAN01", "Before Nov 3, 2026", 0.04, 0.05)]}]
+        self.assertEqual(nonsports.suggest(pm, ev, set(), set()), [])
+
     def test_at_large_and_cities(self):
         self.assertIn("alaska", nonsports.tokens("AK-AL House Election Winner"))
         self.assertNotIn("maine", nonsports.tokens("MEAL DEAL"))
