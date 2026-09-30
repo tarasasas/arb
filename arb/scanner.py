@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import config, crypto, engine, kalshi, matching, nonsports
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
+from .myarbs import MyArbs
 from .polymarket import PolymarketClient
 
 DEPTH_LEVELS = 25      # order-book price levels kept per leg for the dashboard
@@ -35,6 +36,7 @@ class Scanner:
         self.hot_groups = {}            # (game_key, var) -> {(exchange, market_id)} near an arb
         self.catalog_time = 0.0
         self.store = MatchStore()
+        self.my_arbs = MyArbs()
         self.sports_cat, self.pairs_cat = ([], {}), ([], {})
         self.series_fees = {}
         self.fee_overrides = {}         # Kalshi per-event fee overrides (e.g. playoff games)

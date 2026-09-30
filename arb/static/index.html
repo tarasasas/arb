@@ -99,6 +99,11 @@
   .tabs button { padding: 5px 12px; border-radius: 999px; font-size: 13px; }
   .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tabs .n { opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
+  .tabs button.mine { margin-left: auto; }
+  .state { font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+  .state.settled { border-color: var(--good); color: var(--good-text); }
+  .form-grid { display: grid; grid-template-columns: auto 1fr 1fr; gap: 8px 12px; align-items: center; margin: 10px 0; }
+  .form-grid input { width: 100%; box-sizing: border-box; }
   button.trade { margin-top: 8px; font-weight: 600; border-color: var(--accent); color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 6px 16px; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start;
@@ -167,6 +172,8 @@
 
   <h2>Opportunities</h2>
   <div class="tabs" id="tabs-bar" role="tablist"></div>
+  <div id="myarbs" style="display:none"></div>
+  <div id="opps-wrap">
   <div class="table-wrap">
     <table>
       <thead><tr>
@@ -180,6 +187,7 @@
     rounding; set "Max to invest" to size every arb to your stake. Profit is locked in only if both legs fill at these prices. Quotes from the two exchanges are
     fetched seconds apart and move constantly — re-check both books before trading. On Polymarket, Buy NO costs 1 − the YES bid per
     share, the price shown here. Opportunities can share a leg, so don't add their profits together.</p>
+  </div>
 
   <h2>Closest to breaking even</h2>
   <div class="table-wrap">
@@ -433,14 +441,16 @@ function renderPlan(plan, r) {
     el.textContent = left > 0 ? `Prices valid for ${left}s` : "Expired: close and press Make trade again";
     if (left <= 0) { document.getElementById("confirm-btn").disabled = true; clearInterval(countdown); } left--; };
   tick(); countdown = setInterval(tick, 1000);
-  document.getElementById("confirm-btn").onclick = () => executePlan(plan);
+  document.getElementById("confirm-btn").onclick = () => executePlan(plan, r);
 }
 
-async function executePlan(plan) {
+async function executePlan(plan, r) {
   clearInterval(countdown);
   showModal(`<h3>Placing orders…</h3><div class="muted">Don't close this window.</div>`);
   try {
-    const res = await post("/api/trade/execute", { plan_id: plan.id });
+    const res = await post("/api/trade/execute", { plan_id: plan.id,
+      row: r ? { game: r.game, tab: r.tab, closes: r.closes } : null });
+    loadMyArbs();
     const unhedged = res.unhedged_shares > 0;
     showModal(`<h3>${res.status === "ok" ? "Trade complete" : res.status === "no_fill" ? "Nothing traded" :
                   res.status === "partial" ? "Trade partly completed" : "Check your accounts"}</h3>
@@ -637,11 +647,12 @@ function checksHtml(r) {
        <div><button data-action="verify" data-key="${key}">Correct match</button>
             <button data-action="wrong" data-key="${key}">Wrong match</button></div>`
     : `<div class="warn" style="margin-top:6px">${OK_ICON}Match verified by you</div>`;
-  return w + simple + match + `<div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
+  return w + simple + match + `<div><button data-action="track" data-key="${key}" title="Add it to My arbs after you place both orders yourself">Track this arb</button></div><div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
     title="${on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
 }
 // ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
 const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
+const MINE = "My arbs";
 let currentTab = "All";
 try { currentTab = localStorage.getItem("arb-tab") || "All"; } catch (e) {}
 const inTab = r => currentTab === "All" || (r.tab || "Other") === currentTab;
@@ -651,12 +662,16 @@ function renderTabs(rows) {
   document.getElementById("tabs-bar").innerHTML = TAB_ORDER
     .filter(t => t === "All" || counts[t] || t === currentTab || t === "Sports")
     .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
-    .join("");
+    .join("") + `<button role="tab" aria-selected="${currentTab === MINE}" class="mine ${currentTab === MINE ? "on" : ""}"
+      data-tab="${MINE}">${MINE}<span class="n">${myArbs.filter(a => !a.settled).length}</span></button>`;
+  document.getElementById("opps-wrap").style.display = currentTab === MINE ? "none" : "";
+  document.getElementById("myarbs").style.display = currentTab === MINE ? "" : "none";
 }
 document.getElementById("tabs-bar").addEventListener("click", e => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
   currentTab = b.dataset.tab;
   try { localStorage.setItem("arb-tab", currentTab); } catch (e) {}
+  if (currentTab === MINE) loadMyArbs();
   render(true);
 });
 
@@ -671,6 +686,104 @@ function passes(r) {
   if (days > 0 && (!r.closes || new Date(r.closes) - Date.now() > days * 86400000)) return false;
   if (q && !JSON.stringify([r.game, r.legs]).toLowerCase().includes(q)) return false;
   return true;
+}
+
+// ---- My arbs: trades you've placed, tracked until they settle (saved in my_arbs.json) ----------
+let myArbs = [];
+async function loadMyArbs() {
+  try { myArbs = (await (await fetch("/api/myarbs")).json()).arbs || []; renderMyArbs(); } catch (e) {}
+}
+const sideName = l => `Buy ${l.side.toUpperCase()}`;
+function legCell(l) {
+  const st = l.state === "settled" ? `<span class="state settled">settled: ${esc((l.result || "").toUpperCase())}</span>`
+    : `<span class="state">${esc(l.state || "")}</span>`;
+  return `<div><span class="ex ${l.exchange === "kalshi" ? "kalshi" : "poly"}">${l.exchange === "kalshi" ? "KALSHI" : "POLYMARKET"}</span>
+    <b>${sideName(l)}</b> · ${compact(l.shares)} shares · paid ${money(l.paid)} ${st}
+    <div class="muted" style="font-size:12px">${esc(l.title)}</div></div>`;
+}
+function renderMyArbs() {
+  const el = document.getElementById("myarbs"); if (!el) return;
+  const open = myArbs.filter(a => !a.settled), done = myArbs.filter(a => a.settled);
+  const tot = k => open.reduce((s, a) => s + (a[k] || 0), 0);
+  const rows = list => list.map(a => `<tr>
+      <td><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
+        <div class="muted">pays out ${esc(localTime(a.closes))}${a.source === "make_trade" ? " · via Make trade" : ""}</div>
+        ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}</td>
+      <td>${a.legs.map(legCell).join("")}
+        ${a.unhedged.length ? `<div class="warn" style="white-space:normal">${WARN_ICON}${a.unhedged.map(u =>
+          `${compact(u.shares)} ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"} not hedged`).join("; ")}</div>` : ""}</td>
+      <td class="num">${money(a.paid)}</td><td class="num">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
+      <td class="num profit">${money(a.profit)}<div class="muted">${pct(a.roi)}</div></td>
+      <td class="num">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
+      <td><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
+          <button data-mine="del" data-id="${esc(a.id)}">${a.settled ? "Remove" : "Delete"}</button></td></tr>`).join("");
+  const head = `<thead><tr><th>Market</th><th>Your orders</th><th class="num">Paid</th><th class="num">Pays whatever happens</th>
+    <th class="num">Locked profit</th><th class="num" title="If you sold both legs at the best bids right now, before fees">Worth now</th><th></th></tr></thead>`;
+  el.innerHTML = `
+    <div class="sumgrid" style="max-width:none">
+      <div class="sumcard"><div class="label">Active arbs</div><div class="big">${open.length}</div>
+        <div class="sub">${done.length} settled</div></div>
+      <div class="sumcard"><div class="label">Money in active arbs</div><div class="big">${money(tot("paid"))}</div>
+        <div class="sub">pays back ${money(tot("guaranteed"))} whatever happens</div></div>
+      <div class="sumcard"><div class="label">Locked profit</div><div class="big profit">${money(tot("profit"))}</div>
+        <div class="sub">across active arbs, fees included</div></div>
+    </div>
+    <div style="margin:4px 0 10px"><button data-mine="add">Add an arb by hand</button>
+      <span class="muted">Make trade adds arbs automatically. For orders you place yourself, use "Track this arb" on an opportunity.</span></div>
+    <div class="table-wrap"><table>${head}<tbody>${rows(open) ||
+      `<tr><td colspan="7" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
+    ${done.length ? `<h2 style="font-size:15px">Settled or closed</h2><div class="table-wrap"><table>${head}<tbody>${rows(done)}</tbody></table></div>` : ""}
+    <p class="caveat">Locked profit counts only shares held on both sites; any extra shares on one side are treated as worth $0.
+      Status is re-checked every 30 seconds. Saved on this computer in my_arbs.json.</p>`;
+}
+document.getElementById("myarbs").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-mine]"); if (!b) return;
+  const a = myArbs.find(x => x.id === b.dataset.id);
+  if (b.dataset.mine === "add") openTrack(null);
+  if (b.dataset.mine === "edit" && a) openTrack(null, a);
+  if (b.dataset.mine === "del" && a && confirm(`Remove "${a.game}" from My arbs?`)) {
+    try { await post("/api/myarbs/delete", { id: a.id }); } catch (err) { alert(err.message); }
+    loadMyArbs();
+  }
+});
+// Form to record the orders you actually placed. From an opportunity it starts with the dashboard's sizing.
+function openTrack(r, existing) {
+  const budget = +document.getElementById("f-budget").value || 0;
+  const z = r ? sizeFor(r, budget) : null;
+  const legs = existing ? existing.legs : r ? r.legs.map((l, i) => { const s = i === 0 ? z.k : z.p;
+      return { exchange: l.exchange.toLowerCase(), market_id: l.market_id, side: l.side, title: l.title,
+               shares: s.n, paid: +(s.cost + s.fee).toFixed(2) }; })
+    : [{ exchange: "kalshi", market_id: "", side: "yes", title: "", shares: "", paid: "" },
+       { exchange: "polymarket", market_id: "", side: "no", title: "", shares: "", paid: "" }];
+  const info = existing || (r ? { game: r.game, tab: r.tab, closes: r.closes, payout: r.payout } : { payout: 1 });
+  const idField = (i, f, ph) => `<input data-leg="${i}" data-f="${f}" value="${esc(legs[i][f])}" placeholder="${ph}">`;
+  const legRow = (l, i) => `
+    <b>${l.exchange === "kalshi" ? "Kalshi" : "Polymarket"}</b>
+    <label>Shares <input type="number" min="0" step="1" data-leg="${i}" data-f="shares" value="${esc(l.shares)}"></label>
+    <label>Paid incl. fees $ <input type="number" min="0" step="0.01" data-leg="${i}" data-f="paid" value="${esc(l.paid)}"></label>
+    ${r || existing ? "" : `<span></span><label>Market id ${idField(i, "market_id", l.exchange === "kalshi" ? "KXBTC15M-…" : "cpc-btc-…")}</label>
+      <label>Side <select data-leg="${i}" data-f="side"><option ${l.side === "yes" ? "selected" : ""}>yes</option>
+        <option ${l.side === "no" ? "selected" : ""}>no</option></select></label>`}`;
+  showModal(`<h3>${existing ? "Edit" : "Track"} arb</h3>
+    <div class="muted">${r || existing ? esc(info.game) : "Enter both orders you placed."}</div>
+    ${r || existing ? "" : `<label>Name <input id="t-game" placeholder="e.g. BTC Up or Down 15 min"></label>`}
+    <div class="muted" style="margin-top:8px">Enter what actually filled: the shares on each site and the total you paid,
+      fees included (the "Cost" each site shows).</div>
+    <div class="form-grid">${legs.map(legRow).join("")}</div>
+    <label>Note <input id="t-note" value="${esc(existing?.note || "")}" style="width:60%"></label>
+    <div class="alert" id="t-err" style="display:none"></div>
+    <div class="actions"><button onclick="closeModal()">Cancel</button><button class="primary" id="t-save">Save</button></div>`);
+  document.getElementById("t-save").onclick = async () => {
+    for (const el of document.querySelectorAll("#modal [data-leg]")) {
+      const l = legs[+el.dataset.leg]; l[el.dataset.f] = el.dataset.f === "shares" || el.dataset.f === "paid" ? +el.value : el.value; }
+    const game = document.getElementById("t-game")?.value || info.game;
+    try {
+      await post("/api/myarbs/save", { id: existing?.id, game, tab: info.tab, closes: info.closes, payout: info.payout,
+                                       note: document.getElementById("t-note").value, legs });
+      closeModal(); currentTab = MINE; try { localStorage.setItem("arb-tab", MINE); } catch (e) {}
+      await loadMyArbs(); render(true);
+    } catch (e) { const el = document.getElementById("t-err"); el.style.display = ""; el.textContent = e.message; }
+  };
 }
 
 function render(force) {
@@ -777,6 +890,7 @@ opps.addEventListener("click", e => {
     const k = btn.dataset.key;
     if (btn.dataset.action === "live") checkLive(k);
     if (btn.dataset.action === "trade") openTrade(k);
+    if (btn.dataset.action === "track") openTrack(rowsByKey.get(k));
     if (btn.dataset.action === "verify" || btn.dataset.action === "wrong") verifyMatch(k, btn);
     if (btn.dataset.action === "unpin") { pinned.delete(k); delete ui[k]; render(true); }
     return;
@@ -808,6 +922,7 @@ async function poll() {
     document.getElementById("status").textContent = "Scanner not reachable"; document.getElementById("dot").className = "dot err"; }
 }
 poll(); setInterval(poll, 2000);
+loadMyArbs(); setInterval(loadMyArbs, 15000);
 loadMatching(true);
 </script>
 </body>

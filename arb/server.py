@@ -47,6 +47,8 @@ def serve(scanner, port, open_browser=True):
             path, _, query = self.path.partition("?")
             if path == "/api/state":
                 return self._json(200, scanner.snapshot())
+            if path == "/api/myarbs":
+                return self._json(200, {"arbs": scanner.my_arbs.snapshot(scanner.kalshi, scanner.pm)})
             if path == "/api/matching":
                 q = {k: v[0] for k, v in parse_qs(query).items()}
                 return self._json(200, scanner.matching_snapshot(q.get("q", ""), q.get("category", ""),
@@ -85,14 +87,24 @@ def serve(scanner, port, open_browser=True):
                     scanner.log(f"Match {rel}: {body.get('pm') or body.get('pm_event')} ↔ "
                                 f"{body.get('kalshi') or body.get('kalshi_event')}")
                     return self._json(200, {"ok": True})
+                if path == "/api/myarbs/save":
+                    return self._json(200, scanner.my_arbs.save(body))
+                if path == "/api/myarbs/delete":
+                    scanner.my_arbs.delete(body.get("id", ""))
+                    return self._json(200, {"ok": True})
                 if path == "/api/trade/execute":
                     result = scanner.trader.execute(body.get("plan_id", ""))
+                    try:
+                        if result.get("plan"):
+                            scanner.my_arbs.add_from_trade(result["plan"], result, body.get("row"))
+                    except Exception as e:
+                        scanner.log(f"Couldn't add the trade to My arbs: {e!r}")
                     scanner.log(f"Trade {result['status']}: {result['hedged_pairs']:g} pairs hedged, "
                                 f"net ${result['net']:.2f}" +
                                 (f", {result['unhedged_shares']:g} UNHEDGED" if result["unhedged_shares"] else ""))
                     return self._json(200, result)
                 return self._json(404, {"error": "Not found"})
-            except TradeError as e:
+            except (TradeError, ValueError, KeyError) as e:
                 return self._json(400, {"error": str(e)})
             except Exception as e:
                 scanner.log(f"Trade error: {e!r}")

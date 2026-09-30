@@ -248,7 +248,12 @@ class Trader:
         sold_qty = sold.qty if sold else 0
         sellback_pnl = (sold.amount - sold.fee - a_per * sold_qty) if sold else 0
         unhedged = max(0.0, fa.qty - hedged - sold_qty)
-        return {"status": status, "steps": steps, "note": note, "hedged_pairs": hedged,
+        B = plan["legs"]["polymarket" if plan["first"] == "kalshi" else "kalshi"]
+        kept_a = fa.qty - sold_qty
+        legs_filled = {A["exchange"]: {"shares": kept_a, "paid": round(a_per * kept_a, 2)},
+                       B["exchange"]: {"shares": sum(f.qty for f in fills_b), "paid": round(b_spent, 2)}}
+        return {"status": status, "steps": steps, "note": note, "hedged_pairs": hedged, "legs_filled": legs_filled,
+                "plan": {"payout": plan["payout"], "legs": plan["legs"]},
                 "locked_profit": round(locked, 2), "sellback_pnl": round(sellback_pnl, 2),
                 "net": round(locked + sellback_pnl, 2), "unhedged_shares": round(unhedged, 4),
                 "unhedged_exchange": NAMES[A["exchange"]] if unhedged > 1e-9 else None,

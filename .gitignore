@@ -9,3 +9,7 @@ trades.jsonl
 # Python
 __pycache__/
 *.pyc
+
+# Your tracked arbs (My arbs tab)
+my_arbs.json
+my_arbs.tmp

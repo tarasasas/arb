@@ -176,6 +176,26 @@ Other coins pair automatically as soon as Polymarket lists them. Kalshi already 
 DOGE and more. Polymarket's 60-minute windows have no Kalshi twin, because Kalshi only runs
 15-minute ones.
 
+## My arbs (your active trades)
+
+The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actually placed:
+
+- **Make trade** adds each trade that hedged at least one pair, with the shares and costs that filled.
+- **Track this arb** on any opportunity opens a form filled in with the dashboard's sizing. Change
+  it to what actually filled on each site (shares, and the total paid including fees), then save.
+  **Add an arb by hand** does the same for anything else.
+
+For each arb it shows:
+
+- your two orders and what each cost;
+- what the pairs pay back whatever happens, and your locked profit;
+- any shares held on one side only (counted as worth $0);
+- what both legs would sell for right now;
+- each market's live state: open, closed, or settled with Kalshi's result.
+
+Arbs move to **Settled or closed** once both markets are done. Edit or delete them any time.
+Everything is saved on your computer in `my_arbs.json`, which updates never touch.
+
 ## Checking what the dashboard found
 
 With the dashboard running, run this in a second window:
