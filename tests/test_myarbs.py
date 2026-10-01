@@ -335,3 +335,23 @@ class LivePayoutDateTests(unittest.TestCase):
             snap = store.snapshot(K(), P())
             self.assertEqual(snap[0]["closes"], "2027-01-01T15:00:00+00:00")
             self.assertEqual(m.MyArbs(Path(d) / "my_arbs.json").items[0]["closes"], "2027-01-01T15:00:00+00:00")
+
+
+class ClaimTests(unittest.TestCase):
+    def test_tracked_pair_with_an_unlisted_market_is_not_one_sided(self):
+        import tempfile
+        from pathlib import Path
+        from arb import myarbs as m
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        mine = m.MyArbs(Path(d.name) / "my_arbs.json")
+        mine.save({"source": "account", "game": "Vance VP", "payout": 1.0, "legs": [
+            {"exchange": "kalshi", "market_id": "KXVP", "side": "no", "shares": 34, "paid": 32.35},
+            {"exchange": "polymarket", "market_id": "vance-vp", "side": "yes", "shares": 34, "paid": 0.73}]})
+        unpaired = [{"exchange": "kalshi", "market_id": "KXVP", "side": "no", "shares": 34},
+                    {"exchange": "polymarket", "market_id": "vance-vp", "side": "yes", "shares": 34},
+                    {"exchange": "kalshi", "market_id": "KXOTHER", "side": "yes", "shares": 3}]
+        mine.sync_from_accounts([], {}, {}, unpaired, None)
+        self.assertEqual(mine.known_pairs, 1)
+        self.assertEqual([u["market_id"] for u in mine.unpaired], ["KXOTHER"])
+

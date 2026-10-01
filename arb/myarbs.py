@@ -104,6 +104,7 @@ class MyArbs:
         self.items = []
         self._live, self._live_time = {}, 0.0
         self.unpaired = []                          # live positions with no partner on the other site
+        self.known_pairs = 0                        # pairs kept from My arbs that the scanner can't match now
         self.sync_state = {"status": "never"}
         if path.exists():
             try:
@@ -170,7 +171,23 @@ class MyArbs:
                 "Polymarket cost estimated from the account: check it" if pp.get("paid_estimated") else "")
             self.save({"id": arb_id, "source": "account", "payout": payout, "legs": legs, "note": note,
                        **row_info(kc)})
-        self.unpaired = unpaired
+        self.unpaired, self.known_pairs = self.claim(unpaired)
+
+    def claim(self, unpaired):
+        """Positions the scanner couldn't pair right now (usually because one of the markets left its list,
+        e.g. that site stopped trading it) that an open tracked arb already pairs: they're still that arb,
+        not one-sided. Returns (still unpaired, number of tracked arbs that claimed positions)."""
+        have = {(u["exchange"], u["market_id"], u.get("side")) for u in unpaired}
+        claimed, n = set(), 0
+        with self.lock:
+            for a in self.items:
+                if a.get("closed"):
+                    continue
+                keys = [(l["exchange"], l["market_id"], l["side"]) for l in a["legs"]]
+                if len(keys) == 2 and all(k in have and k not in claimed for k in keys):
+                    claimed.update(keys)
+                    n += 1
+        return [u for u in unpaired if (u["exchange"], u["market_id"], u.get("side")) not in claimed], n
 
     def reconcile(self, kpos, ppos, read=("kalshi", "polymarket")):
         """Make every tracked leg hold what your account really holds, read through the sites' APIs.

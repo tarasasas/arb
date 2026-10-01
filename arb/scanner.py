@@ -345,7 +345,8 @@ class Scanner:
         except Exception as e:
             self.log(f"My arbs: couldn't compare with your positions ({e!r})")
         self.my_arbs.sync_state = {"status": "ok", "time": engine.now_utc().isoformat(), "missing": acc.missing,
-                                   "positions": len(kpos) + len(ppos), "paired": len(pairs)}
+                                   "positions": len(kpos) + len(ppos),
+                                   "paired": len(pairs) + self.my_arbs.known_pairs}
 
     def refresh_balances(self):
         """Read your cash on both sites (needs the API keys) for sizing opportunities to it."""
