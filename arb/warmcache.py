@@ -14,7 +14,7 @@ import time
 from . import config
 
 PATH = config.PROJECT_ROOT / "cache" / "warm.pkl"
-VERSION = 4
+VERSION = 5            # bump whenever a saved class gains or loses a field (5: pay_cache, quoted_at)
 MAX_AGE_SECS = 12 * 3600
 
 

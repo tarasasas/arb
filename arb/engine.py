@@ -30,6 +30,9 @@ def screen(groups, min_edge, now=None):
         for k in g["kalshi"]:
             if _ended(k, now):
                 continue
+            cache = getattr(k, "pay_cache", None)
+            if cache is None:                    # a contract restored from an older warm-start file
+                cache = k.pay_cache = {}
             for p in g["polymarket"]:
                 if _ended(p, now):
                     continue
@@ -44,9 +47,9 @@ def screen(groups, min_edge, now=None):
                         if ak + ap >= 1 - min_edge:      # guaranteed payout is at most ~1
                             continue
                         key = (sk, p.market_id, p.var, p.op, p.line, sp)
-                        pay = k.pay_cache.get(key)
+                        pay = cache.get(key)
                         if pay is None:              # once per pair, not every sweep (was ~20s of CPU)
-                            pay = k.pay_cache[key] = guaranteed_payout([(k, sk), (p, sp)])
+                            pay = cache[key] = guaranteed_payout([(k, sk), (p, sp)])
                         if pay <= 0:
                             continue
                         edge = pay - ak - ap - fee_per_contract(k.fee_coef, ak) - fee_per_contract(p.fee_coef, ap)

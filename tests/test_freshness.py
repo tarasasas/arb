@@ -123,6 +123,24 @@ class PayoutCacheTests(unittest.TestCase):
                          [(c["sk"], c["sp"], c["payout"], c["edge"]) for c in second])
         self.assertEqual(first[0]["payout"], 1.0)
 
+    def test_contract_saved_by_older_code_still_screens(self):
+        import pickle
+        var = ("total", "FG")
+        k = Contract("kalshi", "k", "G", var, ">", 5.5, "t", fee_coef=0.07)
+        p = Contract("polymarket", "p", "G", var, ">", 5.5, "t", fee_coef=0.0695)
+        del k.__dict__["pay_cache"], p.__dict__["pay_cache"]       # as unpickled from before the field existed
+        k, p = pickle.loads(pickle.dumps((k, p)))
+        k.ask, p.ask = {"yes": 0.45, "no": 0.56}, {"yes": 0.47, "no": 0.50}
+        self.assertEqual(engine.screen(engine.group_pairs([k, p]), -0.05)[0]["payout"], 1.0)
+
+    def test_market_saved_by_older_code_takes_fresh_quotes(self):
+        import pickle
+        m = km()
+        del m.__dict__["quoted_at"]
+        m = pickle.loads(pickle.dumps(m))
+        kalshi_client(lambda _s, p, q: {"orderbooks": [{"ticker": "K-1", "orderbook_fp": BOOK}]}).refresh_books([m])
+        self.assertEqual(m.yes_ask, 0.45)
+
 
 if __name__ == "__main__":
     unittest.main()
