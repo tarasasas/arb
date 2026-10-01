@@ -1,7 +1,7 @@
 """Tiny rate-limited JSON client on http.client (no third-party dependencies).
 
-GETs reuse one keep-alive connection per thread (a fresh TLS handshake costs ~150ms, a reused
-connection ~50ms) and ask for gzip (market listings shrink 10-20x)."""
+Requests reuse keep-alive connections from a small pool (a fresh TLS handshake costs ~150ms, a
+reused connection ~50ms) and ask for gzip (market listings shrink 10-20x)."""
 
 import gzip
 import http.client
@@ -16,6 +16,10 @@ import urllib.request
 from base64 import b64encode
 
 USER_AGENT = "kalshi-polymarket-arb-scanner/0.1"
+GET_MAX_IDLE = 30.0     # reuse a pooled connection for a GET if it was last used this recently
+POST_MAX_IDLE = 15.0    # ...and for an order only if it's this fresh (a socket the server closed could
+                        # fail after the order was received, leaving its outcome unknown). Both
+                        # exchanges were seen keeping idle connections open for 50s+.
 
 
 class ApiError(Exception):
@@ -51,7 +55,7 @@ class RateLimitedClient:
         self._cv = threading.Condition()
         self._next_slot = 0.0
         self._high_waiting = 0
-        self._local = threading.local()
+        self._pool, self._pool_lock = [], threading.Lock()     # idle connections: [(conn, last_used)]
         self._ssl = ssl.create_default_context()
         self._proxy = _proxy_for(self.host)
         self.request_count = 0
@@ -92,34 +96,40 @@ class RateLimitedClient:
             conn = http.client.HTTPSConnection(self.host, self.port, timeout=self.timeout, context=self._ssl)
         return conn
 
-    def _drop_conn(self):
-        conn = getattr(self._local, "conn", None)
-        self._local.conn = None
-        if conn:
-            conn.close()
+    def _take_conn(self, max_idle):
+        """The most recently used pooled connection if it's fresh enough, else None."""
+        now = time.monotonic()
+        with self._pool_lock:
+            while self._pool:
+                conn, last = self._pool.pop()
+                if now - last <= max_idle:
+                    return conn
+                conn.close()
+        return None
 
-    def _send(self, method, path, body=None, headers=None, reuse=True):
+    def _give_back(self, conn):
+        with self._pool_lock:
+            self._pool.append((conn, time.monotonic()))
+            extra, self._pool[:] = self._pool[:-16], self._pool[-16:]
+        for c, _ in extra:
+            c.close()
+
+    def _send(self, method, path, body=None, headers=None, max_idle=GET_MAX_IDLE):
         """One HTTP exchange -> (status, headers, decoded body text)."""
-        conn = getattr(self._local, "conn", None) if reuse else None
+        conn = self._take_conn(max_idle)
         if conn is None:
             conn = self._new_conn()
-            if reuse:
-                self._local.conn = conn
         try:
             conn.request(method, self.base_path + path, body=body, headers=headers or {})
             resp = conn.getresponse()
             raw = resp.read()
         except BaseException:
-            if reuse:
-                self._drop_conn()
-            else:
-                conn.close()
+            conn.close()
             raise
-        if not reuse or resp.will_close:
-            if reuse:
-                self._drop_conn()
-            else:
-                conn.close()
+        if resp.will_close:
+            conn.close()
+        else:
+            self._give_back(conn)
         if resp.getheader("Content-Encoding", "").lower() == "gzip":
             raw = gzip.decompress(raw)
         return resp.status, resp.headers, raw.decode("utf-8", "replace")
@@ -135,19 +145,25 @@ class RateLimitedClient:
     def post(self, path, body):
         """POST JSON. Orders are not idempotent, so the only retry is on 429 (the request
         was refused before reaching the exchange). Other failures raise ApiError at once.
-        Each POST opens a fresh connection: a stale keep-alive socket could fail after the
-        exchange already received the order, leaving its outcome unknown."""
+        Orders don't wait for the read-rate budget: exchanges meter writes separately."""
         data = json.dumps(body).encode()
         for attempt in range(self.max_retries):
-            self._wait_turn(high=True)
             headers = self._headers("POST", path, {"Content-Type": "application/json"})
-            status, _, text = self._send("POST", path, data, headers, reuse=False)
+            status, _, text = self._send("POST", path, data, headers, max_idle=POST_MAX_IDLE)
             if status < 300:
                 return json.loads(text) if text.strip() else {}
             if status == 429 and attempt < self.max_retries - 1:
-                time.sleep(0.5 * (attempt + 1))
+                time.sleep(0.2 * (attempt + 1))
                 continue
             raise ApiError(status, text[:500])
+
+    def warm(self):
+        """Have a fresh connection ready so the next order skips the TLS handshake."""
+        conn = self._take_conn(POST_MAX_IDLE)
+        if conn is None:
+            conn = self._new_conn()
+            conn.connect()
+        self._give_back(conn)
 
     def get(self, path, params=None, high=False):
         """GET base_url + path. `params` may be a dict or a list of (key, value) pairs
@@ -156,16 +172,13 @@ class RateLimitedClient:
         full = path + ("?" + urllib.parse.urlencode(params, doseq=True) if params else "")
         for attempt in range(self.max_retries):
             self._wait_turn(high)
-            reused = getattr(self._local, "conn", None) is not None
             try:
                 status, hdrs, text = self._send("GET", full, headers=self._headers("GET", full))
             except (http.client.HTTPException, OSError) as e:
-                # Timeouts, dropped connections, truncated bodies. A reused keep-alive socket the
-                # server already closed fails on first use: retry that at once on a new one.
-                if reused and attempt == 0:
-                    continue
+                # Timeouts, dropped connections, truncated bodies, or a pooled keep-alive socket
+                # the server already closed. GETs are safe to repeat.
                 if attempt < self.max_retries - 1:
-                    time.sleep(min(2 ** attempt, 20))
+                    time.sleep(0 if attempt == 0 else min(2 ** attempt, 20))
                     continue
                 raise urllib.error.URLError(e) from e
             if status >= 300:

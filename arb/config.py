@@ -35,7 +35,10 @@ POLYMARKET_TRADE_BASE = "https://api.polymarket.us"
 # ---- trading ("Make trade" button) ----------------------------------------------------------
 MAX_TRADE_DOLLARS = 100.0          # hard cap per trade, both legs combined (fees included)
 TRADE_PLAN_TTL_SECS = 20           # a confirmed plan must be executed within this window
-SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg before selling back
+SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg before closing out
+SECOND_LEG_RETRY_PAUSE = 0.25      # seconds between those attempts, for the book to refill
+CLOSE_OUT_MAX_LOSS = 0.05          # unhedged shares may be hedged up to this far ($/share) above break-even
+                                   # when that loses less than selling them back
 SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks below the best bid
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
 

@@ -95,8 +95,8 @@ about 17 market-data requests per second.
 4. Put the downloaded private key file in this folder as `kalshi.key`. Alternatively, point
    `KALSHI_PRIVATE_KEY_PATH` at wherever the file lives.
 
-`.env` and `*.key` are git-ignored. The key is only used to sign read requests, and the
-scanner never places orders. The dashboard header shows which access mode is active.
+`.env` and `*.key` are git-ignored. The scanner only signs read requests with the key; orders
+are placed only when you confirm a **Make trade**. The dashboard header shows which access mode is active.
 
 ## Politics, economics, culture & more (you approve the matches)
 
@@ -192,17 +192,28 @@ dashboard header shows `Trading: on`. Clicking **Make trade** on an opportunity:
      "Max to invest", and at each account's cash.
 2. **Shows a confirm dialog** with both orders, limit prices, costs, and expected profit.
    The prices are valid for 20 seconds.
-3. **Places the first leg** on the thinner book, as an immediate-or-cancel limit order.
-4. **Places the second leg** for exactly the shares that filled, capped at the break-even
-   price. It retries twice on fresh prices.
-5. **Sells back** any first-leg shares that still aren't hedged, straight away.
-6. **Shows the result:**
+3. **Re-checks on confirm.** Both books and balances are fetched again the moment you confirm.
+   - The trade shrinks if depth thinned, but never grows beyond what you confirmed.
+   - If the arb is gone at live prices, nothing is sent.
+4. **Places the first leg** on the thinner book, as an immediate-or-cancel limit order.
+5. **Places the second leg** for exactly the shares that filled, with its limit at the
+   break-even price. Immediate-or-cancel orders fill at the resting prices, so this costs
+   nothing extra when the book hasn't moved, and still hedges when it moved a little. It
+   retries twice on fresh prices.
+6. **Closes any first-leg shares still unhedged**, whichever way loses less:
+   - selling them back; or
+   - hedging them slightly above break-even, by at most 5¢ a share (`CLOSE_OUT_MAX_LOSS`).
+7. **Shows the result:**
    - hedged pairs;
    - locked profit;
    - sell-back gain or loss;
    - any shares left unhedged, in red.
 
-Every order and response is appended to `trades.jsonl` in this folder.
+If an order's response is lost (a timeout or dropped connection), Kalshi orders are looked
+up by their client order ID and the trade carries on. Polymarket orders can't be looked up
+that way, so the trade stops and asks you to check that account.
+
+Every order, its response and its round-trip time are appended to `trades.jsonl` in this folder.
 
 Trade requests need a token that only the dashboard page receives, so other websites can't
 trigger orders. The server listens on localhost only.

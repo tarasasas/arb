@@ -16,6 +16,7 @@ class FakeVenue:
         self.name, self.min_qty, self.bal = name, min_qty, balance
         self.book = {"yes": list(yes or []), "no": list(no or [])}
         self.orders, self.refills, self.fractional_fill = [], [], fractional_fill
+        self.after_buy = None                         # callback(): the market moves right after our order
 
     def levels(self, _mid):
         return {s: [lv for lv in self.book[s] if lv[1] > 0] for s in ("yes", "no")}
@@ -41,6 +42,9 @@ class FakeVenue:
         if self.refills:                              # liquidity that appears after this order
             self.book[side] = sorted(self.book[side] + [self.refills.pop(0)])
         n = sum(q for _, q in fills)
+        if self.after_buy:
+            self.after_buy()
+            self.after_buy = None
         return Fill(qty=n, amount=sum(p * q for p, q in fills), fee=total_fee(self.name, fills, coef))
 
     def sell(self, mid, side, qty, min_price, coef):
@@ -92,8 +96,11 @@ class TraderTests(unittest.TestCase):
         t = make(k, p)
         plan = t.prepare(LEGS)                                   # 30 pairs, polymarket thinner -> first
         self.assertEqual(plan["first"], "polymarket")
-        k.book["yes"] = [(0.40, 10)]                            # kalshi thins out before we trade...
-        k.refills = [(0.41, 100)]                               # ...then more arrives at 0.41
+
+        def thin():                                             # kalshi thins out while the first leg fills...
+            k.book["yes"] = [(0.40, 10)]
+            k.refills = [(0.41, 100)]                           # ...then more arrives at 0.41
+        p.after_buy = thin
         res = t.execute(plan["id"])
         self.assertEqual(res["hedged_pairs"], 30)
         self.assertEqual(res["status"], "ok")
@@ -103,7 +110,7 @@ class TraderTests(unittest.TestCase):
         p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.55, 100)])   # yes book lets us sell NO back
         t = make(k, p)
         plan = t.prepare(LEGS)
-        k.book["yes"] = [(0.40, 5), (0.60, 1000)]               # only 5 left below break-even
+        p.after_buy = lambda: k.book.update(yes=[(0.40, 5), (0.60, 1000)])   # only 5 left below break-even
         res = t.execute(plan["id"])
         self.assertEqual(res["hedged_pairs"], 5)
         self.assertEqual(res["status"], "partial")
@@ -113,15 +120,80 @@ class TraderTests(unittest.TestCase):
         # never paid above break-even: no Kalshi buy at 0.60
         self.assertTrue(all(o[3] < 0.6 for o in k.orders if o[0] == "buy"))
 
-    def test_first_leg_no_fill(self, *_):
+    def test_arb_gone_at_confirm_sends_nothing(self, *_):
         k = FakeVenue("kalshi", yes=[(0.40, 1000)])
         p = FakeVenue("polymarket", no=[(0.50, 20)])
         t = make(k, p)
         plan = t.prepare(LEGS)
-        p.book["no"] = [(0.70, 20)]                              # price ran away before our order
+        p.book["no"] = [(0.70, 20)]                              # price ran away while the dialog was open
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "moved")
+        self.assertEqual((k.orders, p.orders), ([], []))         # no order on either exchange
+
+    def test_confirm_resizes_to_live_depth(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 30)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        self.assertEqual(plan["size"], 30)
+        p.book["no"] = [(0.50, 12), (0.70, 100)]                 # only 12 still profitable at confirm
+        res = t.execute(plan["id"])
+        self.assertEqual(p.orders[0][2], 12)                     # first leg re-sized, not sent for 30
+        self.assertEqual((res["status"], res["hedged_pairs"]), ("ok", 12))
+
+    def test_confirm_never_grows_the_trade(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 30)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.book["no"] = [(0.45, 1000)]                            # better and deeper at confirm
+        t.execute(plan["id"])
+        self.assertEqual(p.orders[0][2], 30)
+
+    def test_first_leg_no_fill(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], fractional_fill=0)   # gone by the time the order lands
+        t = make(k, p)
+        plan = t.prepare(LEGS)
         res = t.execute(plan["id"])
         self.assertEqual(res["status"], "no_fill")
         self.assertEqual(k.orders, [])                           # second leg never sent
+
+    def test_second_leg_limit_is_break_even_not_planned_price(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        self.assertEqual(plan["first"], "polymarket")
+        p.after_buy = lambda: k.book.update(yes=[(0.43, 1000)])  # kalshi ticks up 3c while leg 1 fills
+        res = t.execute(plan["id"])
+        buys = [o for o in k.orders if o[0] == "buy"]
+        self.assertEqual(len(buys), 1)                           # hedged on the first attempt
+        self.assertGreaterEqual(buys[0][3], 0.43)
+        self.assertEqual((res["status"], res["hedged_pairs"]), ("ok", 20))
+        self.assertGreaterEqual(res["net"], 0)                   # never below break-even
+
+    def test_close_out_hedges_above_break_even_when_cheaper_than_selling_back(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.60, 100)])   # selling NO back gets only 0.40
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.after_buy = lambda: k.book.update(yes=[(0.40, 5), (0.52, 1000)])   # 0.52 is ~2c above break-even
+        res = t.execute(plan["id"])
+        self.assertEqual([o for o in p.orders if o[0] == "sell"], [])
+        self.assertEqual((res["status"], res["hedged_pairs"], res["unhedged_shares"]), ("ok", 20, 0))
+        sell_back_net = 15 * (0.40 - 0.517)                      # what selling back would have lost, roughly
+        self.assertGreater(res["net"], sell_back_net)
+
+    def test_close_out_never_hedges_beyond_the_loss_limit(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)])             # no bids to sell back into at all
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.after_buy = lambda: k.book.update(yes=[(0.40, 5), (0.80, 1000)])
+        res = t.execute(plan["id"])
+        self.assertTrue(all(o[3] < 0.6 for o in k.orders if o[0] == "buy"))
+        self.assertEqual(res["unhedged_shares"], 15)             # left for you to handle, flagged in red
 
     def test_fractional_first_fill_matches_whole_contracts(self, *_):
         k = FakeVenue("kalshi", yes=[(0.05, 1000)], min_qty=1.0)

@@ -70,13 +70,51 @@ class KalshiVenue:
     def balance(self):
         return float(self.client.http.get("/portfolio/balance", high=True)["balance"]) / 100
 
+    def warm(self):
+        self.client.http.warm()
+
     def _order(self, ticker, book_side, qty, yes_price, reduce_only=False):
         body = {"ticker": ticker, "side": book_side, "count": f"{qty:.2f}", "price": f"{yes_price:.4f}",
                 "time_in_force": "immediate_or_cancel", "self_trade_prevention_type": "taker_at_cross",
                 "client_order_id": str(uuid.uuid4())}
         if reduce_only:
             body["reduce_only"] = True
-        return body, self.client.http.post("/portfolio/events/orders", body)
+        sent = time.time()
+        try:
+            return body, self.client.http.post("/portfolio/events/orders", body)
+        except ApiError:
+            raise                       # the exchange answered: refused, nothing traded
+        except Exception:
+            # The response was lost (timeout, dropped connection): the order may or may not
+            # exist. Look it up by our client_order_id before giving up on it.
+            r = self._recover(ticker, body["client_order_id"], sent)
+            if r is None:
+                raise
+            return body, r
+
+    def _recover(self, ticker, client_order_id, sent):
+        """A lost order's final result, in the create-order response format, or None if it
+        can't be found (then its outcome stays unknown)."""
+        for wait in (0.3, 0.7, 1.5):
+            time.sleep(wait)
+            try:
+                d = self.client.http.get("/portfolio/orders", {"ticker": ticker, "min_ts": int(sent) - 60,
+                                                               "limit": 100}, high=True)
+            except Exception:
+                continue
+            o = next((o for o in d.get("orders") or [] if o.get("client_order_id") == client_order_id), None)
+            if not o or o.get("status") not in ("canceled", "executed"):    # IOC: final once it's either
+                continue
+            n = float(o.get("fill_count_fp") or 0)
+            r = {"order_id": o.get("order_id", ""), "fill_count": str(n), "recovered": True}
+            if n > 0:
+                cost = sum(float(o.get(k) or 0) for k in ("taker_fill_cost_dollars", "maker_fill_cost_dollars"))
+                r["average_fill_price"] = str(cost / n)
+                fee_keys = [k for k in ("taker_fees_dollars", "maker_fees_dollars") if o.get(k) is not None]
+                if fee_keys:
+                    r["average_fee_paid"] = str(sum(float(o[k]) for k in fee_keys) / n)
+            return r
+        return None
 
     def buy(self, ticker, side, qty, limit, fee_coef):
         # buy YES at <= limit: bid at limit.  buy NO at <= limit: sell YES (ask) at >= 1 - limit.
@@ -112,6 +150,9 @@ class PolymarketVenue:
 
     def levels(self, slug):
         return self.public.live_levels(slug)
+
+    def warm(self):
+        self.http.warm()
 
     def market_info(self, slug):
         m = self.public.http.get(f"/market/slug/{slug}", high=True)["market"]
@@ -150,8 +191,8 @@ class PolymarketVenue:
         if any(o.get("state") in self.TERMINAL for o in orders):
             return best
         oid = r.get("id") or best.get("id")
-        for _ in range(20):
-            time.sleep(0.25)
+        for i in range(30):                 # ~12s in all
+            time.sleep(0.2 if i < 10 else 0.5)
             d = self.http.get(f"/v1/order/{oid}")
             o = d.get("order", d)
             if o.get("state") in self.TERMINAL:
