@@ -51,6 +51,10 @@ def main(ask=input):
         print("Automatic rebalancing now: " + (", ".join(f"shard {a['exchange_index']} {a['percent']}%" for a in cur) or "off"))
     except ApiError:
         pass
+    from . import config
+    if config.KALSHI_AUTO_SHARD_FUNDING:
+        print("\nNote: the dashboard moves cash onto a market's shard as each trade needs it, and turns this "
+              "rebalancing off when it starts. To keep a fixed split, add KALSHI_AUTO_SHARD_FUNDING=0 to .env first.")
     print(f"\nSplit to keep, in % for shards {', '.join(str(i) for i, _ in SHARDS)} "
           f"(Enter for {' '.join(str(DEFAULT[i]) for i, _ in SHARDS)}; 100 0 0 turns rebalancing off):")
     while True:

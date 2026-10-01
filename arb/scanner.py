@@ -79,6 +79,21 @@ class Scanner:
         with self.lock:
             return self.contract_index.get((exchange, market_id))
 
+    def take_over_shard_funding(self):
+        """With KALSHI_AUTO_SHARD_FUNDING the app moves cash between Kalshi shards as each trade needs it.
+        Kalshi's own rebalancing would move it back every 10 seconds, so turn that off."""
+        kv = (self.trader.venues or {}).get("kalshi") if self.trader else None
+        if not (config.KALSHI_AUTO_SHARD_FUNDING and kv and hasattr(kv, "stop_kalshi_rebalancing")):
+            return
+        try:
+            was = kv.stop_kalshi_rebalancing()
+            if was:
+                self.log("Kalshi shards: turned off Kalshi's automatic rebalancing (" +
+                         ", ".join(f"shard {a.get('exchange_index')} {a.get('percent')}%" for a in was) +
+                         "); the app now moves cash onto a market's shard only when a trade needs it")
+        except Exception as e:
+            self.log(f"Kalshi shards: couldn't check Kalshi's automatic rebalancing ({e!r})")
+
     def start_message(self):
         self.log(f"Kalshi access: {self.kalshi.auth_info}")
         self.log(f"Trading: {self.trading_status}")
@@ -690,6 +705,7 @@ class Scanner:
 
     def run_forever(self, stop_event=None):
         self.start_message()
+        threading.Thread(target=self.take_over_shard_funding, daemon=True).start()
         try:
             self.load_warm()
         except Exception as e:

@@ -59,3 +59,26 @@ class BalanceBreakdownTests(unittest.TestCase):
                                                                 {"exchange_index": 2, "balance": "20.00"}]}
         a.kalshi_http = H()
         self.assertEqual(a.balances(), {"kalshi": 120.0, "kalshi_shards": {"0": 100.0, "2": 20.0}})
+
+
+class TakeOverTests(unittest.TestCase):
+    def test_app_turns_off_kalshis_rebalancing(self):
+        from arb.venues import KalshiVenue
+
+        class HTTP:
+            def __init__(self, cur):
+                self.cur, self.posts = cur, []
+
+            def get(self, path, params=None):
+                return {"allocations": self.cur}
+
+            def post(self, path, body):
+                self.posts.append((path, body))
+                self.cur = body["allocations"]
+                return {}
+        on = HTTP([{"exchange_index": 0, "percent": 50}, {"exchange_index": 2, "percent": 50}])
+        self.assertEqual(len(KalshiVenue(mock.Mock(http=on)).stop_kalshi_rebalancing()), 2)
+        self.assertEqual(on.posts, [("/portfolio/target_balance_allocation", {"allocations": []})])
+        off = HTTP([])
+        self.assertEqual(KalshiVenue(mock.Mock(http=off)).stop_kalshi_rebalancing(), [])
+        self.assertEqual(off.posts, [])
