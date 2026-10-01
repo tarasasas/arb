@@ -63,32 +63,46 @@ class RateLimitedClient:
         self.signer = signer
         self._lock = threading.Lock()
         self._next_slot = 0.0
-        self._priority_waiting = 0
+        self._priority_waiting = self._bg_waiting = self._priority_streak = 0
         self.request_count = 0
 
     def set_rate(self, rps):
         self.min_interval = 1.0 / rps
 
+    PRIORITY_BURST = 3     # while background work waits, it gets every 4th slot (it must never starve)
+
     def _wait_turn(self):
         """Take the next request slot. Slots are claimed only when due (not reserved ahead), so a
-        priority request waits at most about one slot, however many background threads are queued."""
+        priority request waits about one slot however many background threads are queued; background
+        work still gets one slot in every PRIORITY_BURST + 1 while it's waiting."""
         pri = is_priority()
-        if pri:
-            with self._lock:
+        with self._lock:
+            if pri:
                 self._priority_waiting += 1
+            else:
+                self._bg_waiting += 1
         try:
             while True:
                 with self._lock:
                     now = time.monotonic()
-                    if now >= self._next_slot and (pri or not self._priority_waiting):
-                        self._next_slot = max(now, self._next_slot) + self.min_interval
-                        return
+                    if now >= self._next_slot:
+                        bg_turn = self._bg_waiting and self._priority_streak >= self.PRIORITY_BURST
+                        if pri and not bg_turn:
+                            self._priority_streak += 1 if self._bg_waiting else 0
+                            self._next_slot = max(now, self._next_slot) + self.min_interval
+                            return
+                        if not pri and (bg_turn or not self._priority_waiting):
+                            self._priority_streak = 0
+                            self._next_slot = max(now, self._next_slot) + self.min_interval
+                            return
                     wait = self._next_slot - now
                 time.sleep(min(max(wait, 0.002), self.min_interval))
         finally:
-            if pri:
-                with self._lock:
+            with self._lock:
+                if pri:
                     self._priority_waiting -= 1
+                else:
+                    self._bg_waiting -= 1
 
     def post(self, path, body):
         """POST JSON. Orders are not idempotent, so the only retry is on 429 (the request

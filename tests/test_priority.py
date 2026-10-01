@@ -34,3 +34,29 @@ class PriorityLaneTests(unittest.TestCase):
             self.assertEqual(list(pool.map(lambda _: is_priority(), range(4))), [True] * 4)
         with LanePool(2) as pool:
             self.assertEqual(list(pool.map(lambda _: is_priority(), range(4))), [False] * 4)
+
+
+class FairShareTests(unittest.TestCase):
+    def test_background_still_gets_slots_under_constant_priority_load(self):
+        c = RateLimitedClient("https://example.com", rps=100)
+        stop = time.monotonic() + 0.5
+        counts = {"pri": 0, "bg": 0}
+
+        def worker(lane):
+            def run():
+                while time.monotonic() < stop:
+                    if lane == "pri":
+                        with priority():
+                            c._wait_turn()
+                    else:
+                        c._wait_turn()
+                    counts[lane] += 1
+            return run
+        threads = [threading.Thread(target=worker("pri")) for _ in range(4)] + [threading.Thread(target=worker("bg"))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        total = counts["pri"] + counts["bg"]
+        self.assertGreater(counts["bg"], total * 0.15)       # ~1 in 4
+        self.assertGreater(counts["pri"], total * 0.6)
