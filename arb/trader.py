@@ -195,22 +195,36 @@ class Trader:
                            "limit": fills[-1][0] if fills else None}
             return out
 
-        def fits(n, kalshi_cash=None):
+        def fits(n, kalshi_cash=None, pm_cash=None):
             c = cost_at(n)
             spend = {ex: c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES}
-            cash = {**balance, "kalshi": balance["kalshi"] if kalshi_cash is None else kalshi_cash}
+            cash = {"kalshi": balance["kalshi"] if kalshi_cash is None else kalshi_cash,
+                    "polymarket": balance["polymarket"] if pm_cash is None else pm_cash}
             return (sum(spend.values()) <= cap and all(spend[ex] <= cash[ex] for ex in EXCHANGES)
                     and payout * n - sum(spend.values()) > 0)
 
-        def largest(kalshi_cash=None):
+        def largest(kalshi_cash=None, pm_cash=None):
             n = floor_to(full["size"], step)
-            if fits(n, kalshi_cash):
+            if fits(n, kalshi_cash, pm_cash):
                 return n
             lo, hi = 0, int(n // step)
             while lo < hi:
                 mid = (lo + hi + 1) // 2
-                lo, hi = (mid, hi) if fits(mid * step, kalshi_cash) else (lo, mid - 1)
+                lo, hi = (mid, hi) if fits(mid * step, kalshi_cash, pm_cash) else (lo, mid - 1)
             return lo * step
+
+        # If even unlimited Kalshi cash wouldn't make one pair fit, Kalshi isn't the limit: say what is.
+        if largest(kalshi_cash=math.inf) <= 0 and checks.get("polymarket_cash") == "cached":
+            balance["polymarket"] = self.venues["polymarket"].balance(None)    # don't fail on a stale reading
+            checks["polymarket_cash"] = "download"
+        if largest(kalshi_cash=math.inf) <= 0:
+            one = cost_at(step)
+            if largest(kalshi_cash=math.inf, pm_cash=math.inf) > 0:
+                need = one["polymarket"]["amount"] + one["polymarket"]["fee"]
+                raise TradeError(f"Polymarket buying power is ${balance['polymarket']:.2f}, not enough for even one pair "
+                                 f"(about ${need:.2f} on Polymarket). Nothing was traded.")
+            raise TradeError(f"Not profitable at live prices within your ${cap:.2f} limit any more (the books moved). "
+                             f"Nothing was traded.")
 
         # Kalshi cash is held per exchange shard. If this market's shard is short, move what the trade
         # needs onto it from your other shards first (same account), then size against what arrived.

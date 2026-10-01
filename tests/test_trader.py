@@ -508,3 +508,26 @@ class TimelineTests(unittest.TestCase):
             s.note_latency({"Kalshi order": ms})
         summ = s.latency_summary()["Kalshi order"]
         self.assertEqual((summ["n"], summ["p50"], summ["p95"]), (50, 76, 98))   # last 50: 51..100
+
+
+class LimitMessageTests(unittest.TestCase):
+    def test_polymarket_cash_is_named_not_the_kalshi_shard(self):
+        class ShardVenue(FakeVenue):
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return 0.0 if shard == 2 else 39.29
+
+            def shard_balances(self):
+                return {0: 39.29, 2: 0.0}
+
+            def fund_shard(self, shard, dollars):
+                raise AssertionError("moved Kalshi cash for a trade Polymarket can't fund")
+        k = ShardVenue("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)], balance=0.0)
+        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+            with self.assertRaises(TradeError) as cm:
+                make(k, p).prepare(LEGS)
+        self.assertIn("Polymarket buying power is $0.00", str(cm.exception))
+        self.assertNotIn("shard", str(cm.exception))
