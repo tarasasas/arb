@@ -146,3 +146,16 @@ class HotPassTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartupTests(unittest.TestCase):
+    def test_trading_status_is_published_at_start(self):
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock = __import__("threading").Lock()
+        s.logs, s.log_to_console = __import__("collections").deque(maxlen=10), False
+        s.state = {"stats": {}}
+        s.kalshi = type("K", (), {"auth_info": "API key, basic tier"})()
+        s.trading_status = "on (cap $100 per trade)"
+        s.alerter = __import__("arb.alerts", fromlist=["Alerter"]).Alerter(lambda m: None, send=lambda t: None)
+        s.start_message()
+        self.assertEqual(s.state["stats"]["trading"], "on (cap $100 per trade)")

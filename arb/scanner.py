@@ -86,6 +86,8 @@ class Scanner:
                                      if self.alerter.enabled else "off (see Alerts in the README)"))
         with self.lock:
             self.state["stats"]["alerts"] = {"channels": self.alerter.channels(), "min_profit": self.alerter.min_profit}
+            # The trader is ready now; don't make the dashboard wait for the first market-list load.
+            self.state["stats"].update({"kalshi_access": self.kalshi.auth_info, "trading": self.trading_status})
 
     def log(self, msg):
         line = f"{time.strftime('%H:%M:%S')} {msg}"
