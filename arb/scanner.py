@@ -507,11 +507,15 @@ class Scanner:
         with self.lock:
             previous = self.state["opportunities"]
         found = {_row_key(r) for r in opportunities}
+        with self.lock:
+            index = self.contract_index
         for r in previous:
             key = _row_key(r)
             if key in found or (r.get("trade_until") and r["trade_until"].replace("Z", "+00:00") <= now.isoformat()):
                 continue
             legs = {("kalshi", key[0]), ("polymarket", key[2])}
+            if not all(leg in index for leg in legs):
+                continue                   # a market left the scanner's list (closed, or the match was removed)
             if key in unchecked or legs & failed or (hot and not legs <= covered):
                 opportunities.append(r)    # not re-checked this pass (or its request failed): keep it
         opportunities.sort(key=lambda r: -r["profit"])

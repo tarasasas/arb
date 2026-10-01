@@ -66,7 +66,9 @@ class Trader:
             raise TradeError("A trade needs one Kalshi leg and one Polymarket leg.")
         contracts = {ex: self.scanner.find_contract(ex, by_ex[ex]["market_id"]) for ex in EXCHANGES}
         if not all(contracts.values()):
-            raise TradeError("These markets are no longer in the scanner's list (closed or delisted).")
+            gone = " and ".join(NAMES[ex] for ex in EXCHANGES if not contracts[ex])
+            raise TradeError(f"The {gone} market is no longer in the scanner's list: it closed, or its match was removed "
+                             f"(e.g. an auto-match held back for review). Nothing was traded; the row will drop off the list.")
         sides = {ex: by_ex[ex]["side"] for ex in EXCHANGES}
         payout = guaranteed_payout([(contracts[ex], sides[ex]) for ex in EXCHANGES])
         if payout <= 0:

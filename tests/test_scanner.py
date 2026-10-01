@@ -46,6 +46,7 @@ class HotPassTests(unittest.TestCase):
             src[("kalshi", k.market_id)] = FakeMarket(k.market_id, 0.45, 0.56)
             src[("polymarket", p.market_id)] = FakeMarket(p.market_id, 0.45, 0.56)
         s.contracts, s.source = cs, src
+        s.contract_index = {(c.exchange, c.market_id): c for c in cs}
         s.groups = scanner.engine.group_pairs(cs)
         self._sync = scanner.matching.sync_quotes
         scanner.matching.sync_quotes = lambda contracts, source: [
@@ -71,6 +72,14 @@ class HotPassTests(unittest.TestCase):
         self.s.refresh_prices(hot=True)
         self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"B"})
 
+
+    def test_rows_for_markets_that_left_the_list_are_dropped(self):
+        self.s.refresh_prices(hot=False)
+        self.assertEqual(len(self.s.state["opportunities"]), 2)
+        self.s.contract_index = {k: v for k, v in self.s.contract_index.items() if k[1] not in ("kB", "pB")}
+        self.s.hot_groups = {k: v for k, v in self.s.hot_groups.items() if k[0] == "T:A"}
+        self.s.refresh_prices(hot=True)                         # game B not re-checked, but its markets are gone
+        self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"A"})
 
     def test_full_sweep_keeps_a_row_whose_request_failed(self):
         self.s.refresh_prices(hot=False)
