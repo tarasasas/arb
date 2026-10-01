@@ -278,6 +278,20 @@ class VerifyTests(unittest.TestCase):
         self.m.verify(lambda ex, mid: None)
         self.assertEqual(self.m.items[0]["check"]["structure"], "unknown")
 
+    def test_a_market_in_several_pairs_is_checked_against_each(self):
+        # Kalshi "16-100%" is matched to two Polymarket markets; the pairing in your account is the second.
+        from arb.model import Contract
+        var = ("event", "x")
+        other = Contract("kalshi", "K", "POL:other|K", ("event", "other|K"), ">", 0.5, "16-100%")
+        mine_k = Contract("kalshi", "K", "POL:p|K", ("event", "p|K"), ">", 0.5, "16-100%")
+        mine_p = Contract("polymarket", "p", "POL:p|K", ("event", "p|K"), ">", 0.5, "16%+")
+        lookup = {("kalshi", "K"): [other, mine_k], ("polymarket", "p"): [mine_p]}
+        self.track("yes", "no")
+        self.m.verify(lambda ex, mid: lookup.get((ex, mid)))
+        self.assertEqual(self.m.items[0]["check"]["structure"], "ok")
+        self.m.verify(lambda ex, mid: [other] if ex == "kalshi" else [mine_p])   # not matched together
+        self.assertEqual(self.m.items[0]["check"]["structure"], "unknown")
+
 
 class PayoutDateTests(VerifyTests):
     def test_payout_date_follows_the_markets(self):

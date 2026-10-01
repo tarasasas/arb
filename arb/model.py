@@ -125,3 +125,23 @@ def polymarket_fee(fills, coef):
 
 def total_fee(exchange, fills, coef):
     return kalshi_fee(fills, coef) if exchange == "kalshi" else polymarket_fee(fills, coef)
+
+
+def as_list(x):
+    return [] if x is None else list(x) if isinstance(x, (list, tuple)) else [x]
+
+
+def best_match(kalshi, poly, kside, pside):
+    """The matched pair (kalshi contract, polymarket contract, payout) these two positions form, or None.
+    kalshi/poly: a contract or a list of them (a market can be matched in several pairs, each with its
+    own contract); the pair must come from the same match (same game and question)."""
+    best = None
+    for kc in as_list(kalshi):
+        for pc in as_list(poly):
+            if (kc.game_key, kc.var) != (pc.game_key, pc.var):
+                continue
+            pay = guaranteed_payout([(kc, kside), (pc, pside)])
+            if best is None or pay > best[2]:
+                best = (kc, pc, pay)
+    return best
+

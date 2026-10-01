@@ -6,7 +6,7 @@ Polymarket US: GET /v1/portfolio/positions (netPosition > 0 is YES; < 0 is a sho
 
 from . import config
 from .http import RateLimitedClient
-from .model import guaranteed_payout
+from .model import as_list, best_match, guaranteed_payout
 
 
 def _f(v):
@@ -75,16 +75,16 @@ def pair_positions(kpos, ppos, lookup):
     Returns (arbs, unpaired): arbs as [(ticker, slug, kalshi contract, pm contract, payout)]."""
     arbs, used_p = [], set()
     for ticker, kp in sorted(kpos.items()):
-        kc = lookup("kalshi", ticker)
-        if not kc:
+        kcs = as_list(lookup("kalshi", ticker))
+        if not kcs:
             continue
         for slug, pp in sorted(ppos.items()):
             if slug in used_p:
                 continue
-            pc = lookup("polymarket", slug)
-            if not pc or (pc.game_key, pc.var) != (kc.game_key, kc.var):
+            m = best_match(kcs, lookup("polymarket", slug), kp["side"], pp["side"])
+            if not m:
                 continue
-            pay = guaranteed_payout([(kc, kp["side"]), (pc, pp["side"])])
+            kc, pc, pay = m
             if pay > 0:
                 arbs.append((ticker, slug, kc, pc, pay))
                 used_p.add(slug)

@@ -265,7 +265,7 @@ class MyArbs:
         pay out whatever happens (the payout per pair is refreshed from that). lookup(exchange,
         market id) -> Contract or None. Stores a["check"] = {"structure": ok | broken | unknown, "why"}.
         Returns the arbs whose check changed."""
-        from .model import guaranteed_payout
+        from .model import as_list, best_match
         changed = []
         with self.lock:
             for a in self.items:
@@ -273,14 +273,16 @@ class MyArbs:
                     continue
                 legs = {l["exchange"]: l for l in a["legs"]}
                 kl, pl = legs.get("kalshi"), legs.get("polymarket")
-                kc = lookup("kalshi", kl["market_id"]) if kl else None
-                pc = lookup("polymarket", pl["market_id"]) if pl else None
-                if not kc or not pc:
+                kcs = as_list(lookup("kalshi", kl["market_id"])) if kl else []
+                pcs = as_list(lookup("polymarket", pl["market_id"])) if pl else []
+                m = best_match(kcs, pcs, kl["side"], pl["side"]) if kcs and pcs else None
+                if not kcs or not pcs:
                     check = {"structure": "unknown", "why": "can't re-check the match: a market is no longer listed"}
-                elif (kc.game_key, kc.var) != (pc.game_key, pc.var):
-                    check = {"structure": "broken", "why": "these two markets aren't a matched pair"}
+                elif not m:
+                    check = {"structure": "unknown",
+                             "why": "these two markets aren't matched to each other in the scanner right now"}
                 else:
-                    pay = guaranteed_payout([(kc, kl["side"]), (pc, pl["side"])])
+                    kc, pc, pay = m
                     if pay <= 0:
                         check = {"structure": "broken",
                                  "why": "these positions don't pay out in every outcome: one result loses both"}
