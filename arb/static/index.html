@@ -701,7 +701,7 @@ function renderAuto(s) {
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
     <span class="muted">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with rule warnings ·
       ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit" : ""} ·
-      ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade · profit ≥ ${money(a.min_profit)} ·
+      ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade${a.min_profit > 0 ? ` · profit ≥ ${money(a.min_profit)}` : ""} ·
       stops after ${money(a.max_daily_loss)} lost in a day · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</span>
     ${a.spent_today > 0 && a.net_today != null ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
       <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}

@@ -16,3 +16,6 @@ my_arbs.tmp
 
 # Warm-start cache (matched markets, rebuilt automatically)
 cache/
+
+# Trade report output (your account activity)
+trade-report.txt

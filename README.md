@@ -206,7 +206,8 @@ require your check.
   (and your **Max to invest**, if you set one).
 - **Auto-trade** (the bar above the tabs): places qualifying arbs by itself, one at a time.
   - It's **off every time the scanner starts**, and you're asked once when you turn it on.
-  - It only trades when the profit at live prices is at least `AUTO_TRADE_MIN_PROFIT`.
+  - It only trades when the return at live prices is at least `AUTO_TRADE_MIN_ROI` (0.5%), at the size
+    it can actually take (capped per trade). `AUTO_TRADE_MIN_PROFIT` adds an optional dollar floor (off).
   - It never spends more than `AUTO_TRADE_MAX_TRADE` per trade or `AUTO_TRADE_DAILY_LIMIT` per day.
   - It waits `AUTO_TRADE_COOLDOWN_SECS` before trying the same pair again.
   - It **turns itself off** (and alerts your phone, if alerts are set up) if a trade leaves shares
@@ -228,7 +229,7 @@ FAST_ALLOW_TOO_GOOD=1           # 0 = skip rows flagged too good to be true
 FAST_MAX_TRADE=50
 AUTO_TRADE_MAX_TRADE=25
 AUTO_TRADE_DAILY_LIMIT=100
-AUTO_TRADE_MIN_PROFIT=0.50
+AUTO_TRADE_MIN_PROFIT=0         # optional dollar floor; ROI minimum below is what counts
 AUTO_TRADE_MIN_ROI=0.5          # percent
 AUTO_TRADE_COOLDOWN_SECS=60
 ```

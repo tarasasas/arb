@@ -109,7 +109,7 @@ class AutoTraderTests(unittest.TestCase):
         s.my_arbs.add_from_trade.assert_called_once()
 
     def test_skips_rows_not_fast_or_too_small(self):
-        s, a = self.make([row(fast=False), row(profit=0.01, k="K2", p="p2")])
+        s, a = self.make([row(fast=False), row(roi=0.004, k="K2", p="p2")])
         a.set(True)
         self.assertIsNone(a.check(s.state["opportunities"]))
 
