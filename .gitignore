@@ -19,3 +19,4 @@ cache/
 
 # Trade report output (your account activity)
 trade-report.txt
+latency-report.txt

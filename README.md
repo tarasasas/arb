@@ -338,6 +338,12 @@ break-even, with up to 2 retries on fresh prices. Whatever still can't be matche
 order's result can't be confirmed (e.g. a network error), it stops and tells you to check both accounts.
 `TRADE_LEGS_TOGETHER=0` goes back to sending the thinner book first and sizing the second order to its fill.
 
+**How fast is a trade?** Double-click `latency-test.bat` (or run `python -m arb.latency`). It times each
+step a trade goes through on both sites (market info, order book, cash) using the trading code itself.
+Then, if you answer `y`, it sends real test orders on each site alone and on both at once: 1 share at a
+1¢ limit, immediate-or-cancel, on markets nobody is selling anywhere near 1¢. They cancel unfilled
+(worst case about 2¢). The report is saved to `latency-report.txt`.
+
 ## How it works
 
 1. **Load markets.** Loads every open sports market in the configured leagues
