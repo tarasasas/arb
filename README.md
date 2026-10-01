@@ -369,6 +369,14 @@ Instead install [Tailscale](https://tailscale.com) (free) on the PC and the phon
 Tailscale address in place of the Wi-Fi one. The connection is then encrypted and private to your
 devices.
 
+## Faster Kalshi scanning (free Advanced tier)
+
+Kalshi's free Basic tier allows 20 requests a second. The Advanced tier allows 30, and it's free and
+permanent once at least 1 of your last 100 Kalshi orders was placed through the API (a **Make trade**
+counts; orders placed on kalshi.com don't). Double-click `upgrade-kalshi.bat` (or run
+`python -m arb.upgrade`) once. It prints your tier before and after. Then restart the dashboard:
+it reads your tier at start-up and uses the higher limit by itself.
+
 ## Fast restarts (warm start)
 
 Matching every market on both sites takes a few minutes. So every 5 minutes the scanner saves its
