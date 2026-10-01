@@ -66,6 +66,7 @@ def make(kalshi, poly):
 
 @mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
 @mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
+@mock.patch.object(trader_mod.config, "TRADE_LEGS_TOGETHER", False)
 class TraderTests(unittest.TestCase):
     def test_cap_and_full_hedge(self, *_):
         k = FakeVenue("kalshi", yes=[(0.40, 500)])
@@ -267,3 +268,64 @@ class KalshiVenueFundTests(unittest.TestCase):
             "source": "event_contract", "destination": "event_contract", "amount": 1_000_000,
             "source_exchange_shard": 3, "destination_exchange_shard": 2}))
         self.assertAlmostEqual(now, 111.0)
+
+
+
+@mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
+@mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
+@mock.patch.object(trader_mod.config, "TRADE_LEGS_TOGETHER", True)
+class TogetherTests(unittest.TestCase):
+    def test_both_orders_are_in_flight_at_once(self, *_):
+        import threading
+        barrier = threading.Barrier(2, timeout=2)        # each buy waits for the other: deadlocks if sequential
+
+        class Waiting(FakeVenue):
+            def buy(self, *a):
+                barrier.wait()
+                return super().buy(*a)
+        k, p = Waiting("kalshi", yes=[(0.40, 500)]), Waiting("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        res = t.execute(t.prepare(LEGS)["id"])
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(res["hedged_pairs"], 107)
+        self.assertEqual([o[2] for o in k.orders + p.orders], [107, 107])
+
+    def test_uneven_fills_are_evened_up(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.book["no"] = [(0.50, 60)]                            # only 60 left at the planned price...
+        p.refills = [(0.51, 500)]                              # ...and more shows up a bit higher
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(res["hedged_pairs"], plan["size"])   # Kalshi filled all; Polymarket caught up
+        self.assertEqual(p.orders[0][2], plan["size"])        # first try: the full size at once
+        self.assertGreater(len(p.orders), 1)                   # then the rest on a retry
+        self.assertEqual(res["unhedged_shares"], 0)
+
+    def test_one_side_rejected_sells_the_other_back(self, *_):
+        class Rejecting(FakeVenue):
+            def buy(self, *a):
+                raise trader_mod.ApiError(400, "insufficient shard balance")
+        k = Rejecting("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        p.book["yes"] = [(0.48, 500)]                          # buyers for the sell-back
+        t = make(k, p)
+        res = t.execute(t.prepare(LEGS)["id"])
+        self.assertEqual(res["status"], "partial")
+        self.assertEqual(res["hedged_pairs"], 0)
+        self.assertIn("sell", p.orders[-1][0])
+        self.assertTrue(any("rejected" in s for s in res["steps"]))
+
+    def test_unconfirmed_order_stops_without_selling(self, *_):
+        class Broken(FakeVenue):
+            def buy(self, *a):
+                raise ConnectionError("timed out")
+        k = Broken("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        with self.assertRaises(TradeError) as cm:
+            t.execute(t.prepare(LEGS)["id"])
+        self.assertIn("Check that account", str(cm.exception))
+        self.assertEqual([o[0] for o in p.orders], ["buy"])    # no sell-back on a maybe-filled order

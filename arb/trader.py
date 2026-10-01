@@ -18,7 +18,7 @@ import uuid
 from types import SimpleNamespace
 
 from . import config, engine
-from .http import ApiError, priority
+from .http import ApiError, LanePool, priority
 from .model import YES, guaranteed_payout, total_fee
 from .venues import Fill, floor_to
 
@@ -152,6 +152,7 @@ class Trader:
         }
         plan["capital"] = sum(c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES)
         plan["shard_transfers"] = transfers
+        plan["together"] = config.TRADE_LEGS_TOGETHER
         plan["expected_profit"] = payout * n - plan["capital"]
         plan["cap"] = cap
         self.plans[plan["id"]] = (plan, info)
@@ -184,6 +185,18 @@ class Trader:
                                   "order_id": fill.order_id if fill else "", "request": fill.request if fill else None,
                                   "response": fill.response if fill else None})
 
+        fills_b, hedged, first_attempt = [], 0.0, 0
+        if plan.get("together"):
+            # 1. both legs at once at their planned limits
+            A, B, fa, fb = self._send_both(plan, record, steps, log)
+            va, vb = self.venues[A["exchange"]], self.venues[B["exchange"]]
+            if fa.qty <= 0:
+                self._write(log, status="no_fill")
+                return self._result(plan, "no_fill", steps, fa, [], None, 0,
+                                    "Neither order filled (the prices moved). Nothing was traded.")
+            fills_b, hedged, first_attempt = [fb], fb.qty, 1     # B's planned-limit try is done
+            return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record)
+
         # 1. first leg
         try:
             fa = va.buy(A["market_id"], A["side"], plan["size"], A["limit"], A["fee_coef"])
@@ -205,12 +218,56 @@ class Trader:
             self._write(log, status="no_fill")
             return self._result(plan, "no_fill", steps, fa, [], None, 0, "The first leg didn't fill (the price moved). Nothing was traded.")
 
+        return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record)
+
+    def _send_both(self, plan, record, steps, log):
+        """Send both orders at the same moment. Returns (A, B, fill A, fill B) with A the side that
+        filled more (plan["first"] is set to it). A rejected order counts as no fill; an order whose
+        outcome can't be confirmed stops everything."""
+        legs = [plan["legs"]["kalshi"], plan["legs"]["polymarket"]]
+
+        def send(leg):
+            try:
+                return self.venues[leg["exchange"]].buy(leg["market_id"], leg["side"], plan["size"], leg["limit"],
+                                                        leg["fee_coef"]), None
+            except Exception as e:
+                return None, e
+        with LanePool(2) as pool:
+            out = list(pool.map(send, legs))
+        fills, unknown = {}, []
+        for leg, (fill, err) in zip(legs, out):
+            name = NAMES[leg["exchange"]]
+            if isinstance(err, ApiError):
+                record("together", leg, error=str(err))
+                hint = (" (Kalshi keeps cash per exchange shard and this market's shard is short)"
+                        if "shard" in str(err.detail).lower() else "")
+                steps.append(f"{name}: order rejected ({err.detail}){hint}")
+                fill = Fill()
+            elif err is not None:
+                record("together", leg, error=repr(err))
+                unknown.append(f"{name} ({err})")
+                fill = Fill()
+            else:
+                record("together", leg, fill)
+                steps.append(f"{name}: bought {fill.qty:g} {leg['side'].upper()} for ${fill.amount:.2f} + ${fill.fee:.2f} fee")
+            fills[leg["exchange"]] = fill
+        if unknown:
+            self._write(log, status="unknown_together")
+            got = ", ".join(f"{NAMES[ex]} filled {f.qty:g}" for ex, f in fills.items() if f.qty)
+            raise TradeError(f"Couldn't confirm the {' and '.join(unknown)} order. {got + '. ' if got else ''}"
+                             f"Check that account and the other before doing anything else; nothing was sold back.")
+        first = max(("kalshi", "polymarket"), key=lambda ex: fills[ex].qty)
+        plan["first"] = first
+        second = "polymarket" if first == "kalshi" else "kalshi"
+        return plan["legs"][first], plan["legs"][second], fills[first], fills[second]
+
+    def _finish(self, plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record):
         # 2. second leg, sized to what actually filled, never above break-even
         target = floor_to(fa.qty, B["min_qty"])
         a_cost_per = (fa.amount + fa.fee) / fa.qty
         tick_b = info[B["exchange"]]["tick"]
-        fills_b, hedged, status, note = [], 0.0, "ok", ""
-        for attempt in range(1 + config.SECOND_LEG_RETRIES):
+        status, note = "ok", ""
+        for attempt in range(first_attempt, 1 + config.SECOND_LEG_RETRIES):
             remaining = floor_to(target - hedged, B["min_qty"])
             if remaining <= 0:
                 break

@@ -321,6 +321,12 @@ Every order and response is appended to `trades.jsonl` in this folder.
 Trade requests need a token that only the dashboard page receives, so other websites can't
 trigger orders. The server listens on localhost only.
 
+**Both orders go out at the same moment** (`TRADE_LEGS_TOGETHER=1`, the default), so neither side
+waits for the other to fill. If one side fills less, the shortfall is bought on that side, never above
+break-even, with up to 2 retries on fresh prices. Whatever still can't be matched is sold back. If an
+order's result can't be confirmed (e.g. a network error), it stops and tells you to check both accounts.
+`TRADE_LEGS_TOGETHER=0` goes back to sending the thinner book first and sizing the second order to its fill.
+
 ## How it works
 
 1. **Load markets.** Loads every open sports market in the configured leagues
