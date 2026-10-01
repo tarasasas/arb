@@ -653,12 +653,12 @@ function sortCompare(a, b) {
   return sortBy.dir === "asc" ? va - vb : vb - va;
 }
 function showSortArrows() {
-  document.querySelectorAll("th.sortable").forEach(th => {
+  document.querySelectorAll("#opps-table th.sortable").forEach(th => {
     th.classList.toggle("asc", th.dataset.sort === sortBy.key && sortBy.dir === "asc");
     th.classList.toggle("desc", th.dataset.sort === sortBy.key && sortBy.dir === "desc");
   });
 }
-document.querySelectorAll("th.sortable").forEach(th => th.addEventListener("click", () => {
+document.querySelectorAll("#opps-table th.sortable").forEach(th => th.addEventListener("click", () => {
   const k = th.dataset.sort;
   sortBy = sortBy.key === k ? { key: k, dir: sortBy.dir === "desc" ? "asc" : "desc" }
                             : { key: k, dir: k === "closes" ? "asc" : "desc" };   // soonest payout first
@@ -1188,26 +1188,51 @@ function wirePayoutChart(el, open) {
   }));
 }
 
+// My arbs: click a column heading to sort by it, again to flip the order (remembered on this device).
+let mySort = { key: "closes", dir: "asc" };
+try { mySort = JSON.parse(localStorage.getItem("arb-my-sort")) || mySort; } catch (e) {}
+const MY_SORT = {
+  game: a => (a.game || "").toLowerCase(), closes: a => a.closes ? Date.parse(a.closes) : null,
+  unhedged: a => a.unhedged.reduce((s, u) => s + u.shares, 0), paid: a => a.paid, guaranteed: a => a.guaranteed,
+  profit: a => a.profit, roi: a => a.roi, worth_now: a => a.worth_now,
+};
+function mySorted(list) {
+  const f = MY_SORT[mySort.key] || MY_SORT.closes, sign = mySort.dir === "asc" ? 1 : -1;
+  return [...list].sort((x, y) => {
+    const a = f(x), b = f(y);
+    if (a == null || b == null || Number.isNaN(a) || Number.isNaN(b))
+      return (a == null || Number.isNaN(a)) - (b == null || Number.isNaN(b));   // unknown values last
+    return sign * (typeof a === "string" ? a.localeCompare(b) : a - b);
+  });
+}
+function myTh(key, label, cls = "", title = "") {
+  const on = mySort.key === key ? ` ${mySort.dir}` : "";
+  return `<th class="sortable${cls ? " " + cls : ""}${on}" data-msort="${key}"${title ? ` title="${title}"` : ""}>${label}</th>`;
+}
+
 function renderMyArbs() {
   const el = document.getElementById("myarbs"); if (!el) return;
-  const open = myArbs.filter(a => !a.settled), done = myArbs.filter(a => a.settled);
+  const open = mySorted(myArbs.filter(a => !a.settled)), done = mySorted(myArbs.filter(a => a.settled));
   const tot = (k, list = open) => list.reduce((s, a) => s + (a[k] || 0), 0);
   const ratio = (p, c) => c > 0 ? pct(p / c) : "–";
   const rows = list => list.map(a => `<tr>
       <td><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
-        <div class="muted">pays out ${esc(localTime(a.closes))}${a.source === "make_trade" ? " · via Make trade"
-          : a.source === "account" ? ` · from your accounts${a.edited ? " (edited)" : ""}` : ""}</div>
+        <div class="muted">${a.source === "make_trade" ? "via Make trade"
+          : a.source === "account" ? `from your accounts${a.edited ? " (edited)" : ""}` : "added by hand"}</div>
         ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}${a.settled ? "" : verdictHtml(a)}</td>
+      <td style="white-space:nowrap">${esc(localTime(a.closes))}</td>
       <td>${a.legs.map(legCell).join("")}
         ${a.unhedged.length ? `<div class="warn" style="white-space:normal">${WARN_ICON}${a.unhedged.map(u =>
           `${compact(u.shares)} ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"} not hedged`).join("; ")}</div>` : ""}</td>
       <td class="num">${money(a.paid)}</td><td class="num">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
-      <td class="num profit">${money(a.profit)}<div class="muted">${pct(a.roi)}</div></td>
+      <td class="num profit">${money(a.profit)}</td><td class="num">${pct(a.roi)}</td>
       <td class="num">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
       <td><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
           <button data-mine="del" data-id="${esc(a.id)}">${a.settled ? "Remove" : "Delete"}</button></td></tr>`).join("");
-  const head = `<thead><tr><th>Market</th><th>Your orders</th><th class="num">Paid</th><th class="num">Pays whatever happens</th>
-    <th class="num">Locked profit</th><th class="num" title="If you sold both legs at the best bids right now, before fees">Worth now</th><th></th></tr></thead>`;
+  const head = `<thead><tr>${myTh("game", "Market")}${myTh("closes", "Pays out", "", "Sort by when it pays out")}${
+    myTh("unhedged", "Your orders", "", "Sort by shares not hedged")}${myTh("paid", "Paid", "num")}${
+    myTh("guaranteed", "Pays whatever happens", "num")}${myTh("profit", "Locked profit", "num")}${myTh("roi", "ROI", "num")}${
+    myTh("worth_now", "Worth now", "num", "If you sold both legs at the best bids right now, before fees")}<th></th></tr></thead>`;
   el.innerHTML = `
     <div class="sumgrid" style="max-width:none">
       <div class="sumcard"><div class="label">Active arbs</div><div class="big">${open.length}</div>
@@ -1227,7 +1252,7 @@ function renderMyArbs() {
     <div style="margin:0 0 10px"><button data-mine="add">Add an arb by hand</button>
       <span class="muted">Positions on both sites are paired automatically. Anything else: "Track this arb" on an opportunity.</span></div>
     <div class="table-wrap"><table>${head}<tbody>${rows(open) ||
-      `<tr><td colspan="7" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
+      `<tr><td colspan="9" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
     ${myUnpaired.length ? `<h2 style="font-size:15px">Only on one site <span class="muted" style="font-weight:400">
       open positions with no matching position on the other exchange: not hedged</span></h2>
       <div class="table-wrap"><table><thead><tr><th>Site</th><th>Market</th><th>Position</th><th class="num">Shares</th>
@@ -1242,6 +1267,15 @@ function renderMyArbs() {
   wirePayoutChart(el, open);
 }
 document.getElementById("myarbs").addEventListener("click", async e => {
+  const th = e.target.closest("th[data-msort]");
+  if (th) {
+    const k = th.dataset.msort;
+    mySort = mySort.key === k ? { key: k, dir: mySort.dir === "asc" ? "desc" : "asc" }
+                              : { key: k, dir: ["game", "closes"].includes(k) ? "asc" : "desc" };
+    try { localStorage.setItem("arb-my-sort", JSON.stringify(mySort)); } catch (e) {}
+    renderMyArbs();
+    return;
+  }
   const b = e.target.closest("button[data-mine]"); if (!b) return;
   const a = myArbs.find(x => x.id === b.dataset.id);
   if (b.dataset.mine === "add") openTrack(null);
