@@ -190,3 +190,80 @@ class ShardTests(unittest.TestCase):
         t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
         plan = t.prepare(LEGS)
         self.assertLessEqual(plan["legs"]["kalshi"]["amount"] + plan["legs"]["kalshi"]["fee"], 20.0)
+
+
+class ShardFundingTests(unittest.TestCase):
+    def test_trade_moves_cash_onto_the_markets_shard_first(self):
+        class ShardVenue(FakeVenue):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.cash, self.funded = {0: 500.0, 2: 0.0}, []
+
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return self.cash[shard] if shard is not None else sum(self.cash.values())
+
+            def fund_shard(self, shard, dollars):
+                self.funded.append((shard, dollars))
+                self.cash[0] -= dollars
+                self.cash[shard] += dollars
+                return [(0, dollars)], self.cash[shard]
+        k = ShardVenue("kalshi", yes=[(0.40, 500)])
+        t = make(k, FakeVenue("polymarket", no=[(0.50, 500)]))
+        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+            plan = t.prepare(LEGS)
+        self.assertEqual(plan["size"], 107)                      # full $100 cap, as if the cash were there
+        self.assertEqual(len(k.funded), 1)
+        kalshi_spend = plan["legs"]["kalshi"]["amount"] + plan["legs"]["kalshi"]["fee"]
+        self.assertGreaterEqual(k.funded[0][1], kalshi_spend)     # moved enough for the Kalshi leg
+        self.assertLess(k.funded[0][1], kalshi_spend + 0.10)      # and not much more
+        self.assertEqual(plan["shard_transfers"], [{"from": 0, "to": 2, "amount": k.funded[0][1]}])
+
+    def test_off_means_no_transfer(self):
+        class ShardVenue(FakeVenue):
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return 0.0 if shard == 2 else 500.0
+
+            def fund_shard(self, shard, dollars):
+                raise AssertionError("moved cash with funding off")
+        t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
+        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", False):
+            with self.assertRaises(TradeError):
+                t.prepare(LEGS)
+
+
+class KalshiVenueFundTests(unittest.TestCase):
+    def test_moves_from_richest_in_centicents_and_waits(self):
+        from arb.venues import KalshiVenue
+
+        class HTTP:
+            def __init__(self):
+                self.cash, self.posts, self.reads = {0: 30.0, 3: 100.0, 2: 1.0}, [], 0
+
+            def get(self, path, params=None):
+                if params and "exchange_index" in params:
+                    self.reads += 1
+                    if self.reads < 2:                            # not arrived on the first check
+                        return {"balance": 100}
+                    return {"balance": int(self.cash[params["exchange_index"]] * 100)}
+                return {"balance_breakdown": [{"exchange_index": i, "balance": f"{b:.2f}"} for i, b in self.cash.items()]}
+
+            def post(self, path, body):
+                self.posts.append((path, body))
+                src, dst, amt = body["source_exchange_shard"], body["destination_exchange_shard"], body["amount"] / 10_000
+                self.cash[src] -= amt
+                self.cash[dst] += amt
+                return {"transfer_id": "t1"}
+        http = HTTP()
+        v = KalshiVenue(mock.Mock(http=http))
+        moves, now = v.fund_shard(2, 110.0, wait=5, sleep=lambda s: None)
+        self.assertEqual(moves, [(3, 100.0), (0, 10.0)])         # richest first, then the next
+        self.assertEqual(http.posts[0], ("/portfolio/intra_exchange_instance_transfer", {
+            "source": "event_contract", "destination": "event_contract", "amount": 1_000_000,
+            "source_exchange_shard": 3, "destination_exchange_shard": 2}))
+        self.assertAlmostEqual(now, 111.0)

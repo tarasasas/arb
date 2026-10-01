@@ -420,7 +420,9 @@ function calc(r, n) {
 function cashLimits(r) {
   const b = state?.balances, on = document.getElementById("f-cash")?.checked;
   if (!(on && b && (b.kalshi != null || b.polymarket != null))) return null;
-  const shards = b.kalshi_shards, k = shards ? (shards[String(r?.kalshi_shard || 0)] ?? 0) : b.kalshi;
+  // With auto shard funding a trade first moves what it needs onto its shard, so all Kalshi cash counts.
+  const shards = b.auto_shard_funding ? null : b.kalshi_shards;
+  const k = shards ? (shards[String(r?.kalshi_shard || 0)] ?? 0) : b.kalshi;
   return { kalshi: k, polymarket: b.polymarket, shard: shards ? (r?.kalshi_shard || 0) : null };
 }
 // What stops a size from fitting: your "Max to invest", or the cash on one site (each leg is paid
@@ -593,6 +595,8 @@ function renderPlan(plan, r) {
     ${r.warnings.length ? `<ul class="${r.pair?.auto ? "alert" : ""}" style="margin:0 0 8px 18px;padding:0">
       ${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     <div class="muted">Live prices just now. Orders are immediate-or-cancel: they fill what's available at your limit and cancel the rest.</div>
+    ${(plan.shard_transfers || []).length ? `<div class="muted">Kalshi keeps cash per exchange shard: moved ${plan.shard_transfers.map(t =>
+      `${money(t.amount)} from shard ${t.from}`).join(" and ")} to shard ${plan.shard_transfers[0].to} for this market (your own account).</div>` : ""}
     <table><thead><tr><th>#</th><th>Exchange</th><th>Order</th><th class="num">Limit</th><th class="num">Est. cost + fee</th>
       <th class="num">Available at limit</th><th class="num">Your cash</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="eq">Total cost <b>${money(plan.capital)}</b> · guaranteed payout <b>${money(plan.payout * plan.size)}</b> ·

@@ -74,6 +74,42 @@ class KalshiVenue:
         params = {"exchange_index": shard} if shard is not None else None
         return float(self.client.http.get("/portfolio/balance", params)["balance"]) / 100
 
+    def shard_balances(self):
+        d = self.client.http.get("/portfolio/balance")
+        return {int(b.get("exchange_index", 0)): float(b.get("balance") or 0) for b in d.get("balance_breakdown") or []}
+
+    def transfer(self, source_shard, dest_shard, dollars):
+        """Move cash between your own exchange shards (POST /portfolio/intra_exchange_instance_transfer;
+        the amount is in centicents). Kalshi processes it asynchronously."""
+        body = {"source": "event_contract", "destination": "event_contract", "amount": int(round(dollars * 10_000)),
+                "source_exchange_shard": source_shard, "destination_exchange_shard": dest_shard}
+        return self.client.http.post("/portfolio/intra_exchange_instance_transfer", body)
+
+    def fund_shard(self, shard, dollars, wait=None, sleep=time.sleep):
+        """Move up to `dollars` onto `shard` from your other shards (richest first), then wait for it
+        to arrive. Returns ([(from shard, amount)], cash now on `shard`)."""
+        have = self.shard_balances()
+        start, moves, left = have.get(shard, 0.0), [], dollars
+        for src, bal in sorted(((i, b) for i, b in have.items() if i != shard), key=lambda t: -t[1]):
+            amount = math.floor(min(left, bal) * 100) / 100
+            if left < 0.01:
+                break
+            if amount < 0.01:
+                continue
+            self.transfer(src, shard, amount)
+            moves.append((src, amount))
+            left -= amount
+        now = start
+        if moves:
+            target = start + sum(a for _, a in moves) - 0.01
+            deadline = time.time() + (config.SHARD_TRANSFER_WAIT_SECS if wait is None else wait)
+            while True:
+                now = self.balance(shard)
+                if now >= target or time.time() >= deadline:
+                    break
+                sleep(0.5)
+        return moves, now
+
     def _order(self, ticker, book_side, qty, yes_price, reduce_only=False):
         body = {"ticker": ticker, "side": book_side, "count": f"{qty:.2f}", "price": f"{yes_price:.4f}",
                 "time_in_force": "immediate_or_cancel", "self_trade_prevention_type": "taker_at_cross",

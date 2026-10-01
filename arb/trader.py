@@ -100,23 +100,39 @@ class Trader:
                            "limit": fills[-1][0] if fills else None}
             return out
 
-        def fits(n):
+        def fits(n, kalshi_cash=None):
             c = cost_at(n)
             spend = {ex: c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES}
-            return (sum(spend.values()) <= cap and all(spend[ex] <= balance[ex] for ex in EXCHANGES)
+            cash = {**balance, "kalshi": balance["kalshi"] if kalshi_cash is None else kalshi_cash}
+            return (sum(spend.values()) <= cap and all(spend[ex] <= cash[ex] for ex in EXCHANGES)
                     and payout * n - sum(spend.values()) > 0)
 
-        n = floor_to(full["size"], step)
-        if not fits(n):
+        def largest(kalshi_cash=None):
+            n = floor_to(full["size"], step)
+            if fits(n, kalshi_cash):
+                return n
             lo, hi = 0, int(n // step)
             while lo < hi:
                 mid = (lo + hi + 1) // 2
-                lo, hi = (mid, hi) if fits(mid * step) else (lo, mid - 1)
-            n = lo * step
+                lo, hi = (mid, hi) if fits(mid * step, kalshi_cash) else (lo, mid - 1)
+            return lo * step
+
+        # Kalshi cash is held per exchange shard. If this market's shard is short, move what the trade
+        # needs onto it from your other shards first (same account), then size against what arrived.
         shard = info["kalshi"].get("shard") or 0
+        transfers = []
+        if shard and config.KALSHI_AUTO_SHARD_FUNDING and hasattr(self.venues["kalshi"], "fund_shard"):
+            want = largest(kalshi_cash=math.inf)
+            c = cost_at(want)
+            short = c["kalshi"]["amount"] + c["kalshi"]["fee"] - balance["kalshi"]
+            if want > 0 and short > 0.005:
+                moves, balance["kalshi"] = self.venues["kalshi"].fund_shard(shard, math.ceil((short + 0.05) * 100) / 100)
+                transfers = [{"from": src, "to": shard, "amount": amt} for src, amt in moves]
+        n = largest()
         if n <= 0 and shard and balance["kalshi"] < 1:
+            moved = f" (moved ${sum(t['amount'] for t in transfers):.2f} there, not arrived yet)" if transfers else ""
             raise TradeError(f"This Kalshi market trades on exchange shard {shard} ({SHARD_NAMES.get(shard, 'a separate shard')}), "
-                             f"and you have ${balance['kalshi']:.2f} there. Kalshi only lets an order use cash on its own shard: "
+                             f"and you have ${balance['kalshi']:.2f} there{moved}. Kalshi only lets an order use cash on its own shard: "
                              f"move some at kalshi.com/account/exchange-indexes, or run kalshi-shards.bat once to have "
                              f"Kalshi keep every shard funded automatically. Nothing was traded.")
         if n <= 0:
@@ -135,6 +151,7 @@ class Trader:
                           "available_at_limit": n + spare[ex], "balance": balance[ex]} for ex in EXCHANGES},
         }
         plan["capital"] = sum(c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES)
+        plan["shard_transfers"] = transfers
         plan["expected_profit"] = payout * n - plan["capital"]
         plan["cap"] = cap
         self.plans[plan["id"]] = (plan, info)

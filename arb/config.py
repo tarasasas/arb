@@ -41,6 +41,11 @@ TRADE_PLAN_TTL_SECS = 20           # a confirmed plan must be executed within th
 SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg before selling back
 SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks below the best bid
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
+# Kalshi keeps cash per exchange shard and an order can only use its market's shard. With this on, a
+# trade first moves the cash it needs onto that shard from your other shards (your own money, same
+# account). Set KALSHI_AUTO_SHARD_FUNDING=0 in .env to turn it off.
+KALSHI_AUTO_SHARD_FUNDING = os.environ.get("KALSHI_AUTO_SHARD_FUNDING", "1").strip().lower() not in ("0", "false", "no", "off")
+SHARD_TRANSFER_WAIT_SECS = 8.0     # how long to wait for a shard transfer to show up before trading
 
 
 def _env_num(name, default):

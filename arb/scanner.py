@@ -249,7 +249,8 @@ class Scanner:
             return
         try:
             bal = self.accounts.balances()
-            info = {**bal, "time": engine.now_utc().isoformat(), "missing": self.accounts.missing}
+            info = {**bal, "time": engine.now_utc().isoformat(), "missing": self.accounts.missing,
+                    "auto_shard_funding": config.KALSHI_AUTO_SHARD_FUNDING}
         except Exception as e:
             with self.lock:
                 old = dict(self.state.get("balances") or {})
