@@ -415,9 +415,13 @@ function calc(r, n) {
   return { n, k, p, capital, payout, profit: payout - capital, roi, annualized: days ? roi * 365 / days : null };
 }
 // Your cash on each site (live, with API keys) when "Size to my cash" is on; null otherwise.
-function cashLimits() {
+// Kalshi keeps cash per exchange shard (crypto is on 2, some sports on 3), and an order can only use
+// the cash on its own market's shard.
+function cashLimits(r) {
   const b = state?.balances, on = document.getElementById("f-cash")?.checked;
-  return on && b && (b.kalshi != null || b.polymarket != null) ? { kalshi: b.kalshi, polymarket: b.polymarket } : null;
+  if (!(on && b && (b.kalshi != null || b.polymarket != null))) return null;
+  const shards = b.kalshi_shards, k = shards ? (shards[String(r?.kalshi_shard || 0)] ?? 0) : b.kalshi;
+  return { kalshi: k, polymarket: b.polymarket, shard: shards ? (r?.kalshi_shard || 0) : null };
 }
 // What stops a size from fitting: your "Max to invest", or the cash on one site (each leg is paid
 // from its own site's balance).
@@ -429,12 +433,13 @@ function overLimits(z, budget, cash) {
   return out;
 }
 function sizeFor(r, budget) {
-  const cash = cashLimits(), full = calc(r, r.size), over = overLimits(full, budget, cash);
+  const cash = cashLimits(r), full = calc(r, r.size), over = overLimits(full, budget, cash);
   if (!over.length) return full;
   let lo = 0, hi = r.size;                        // largest n that fits every limit (cost grows with n)
   while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); overLimits(calc(r, mid), budget, cash).length ? hi = mid - 1 : lo = mid; }
   const z = calc(r, lo);
   z.limitedBy = overLimits(calc(r, lo + 1), budget, cash);   // the limit one more share would break
+  z.shard = cash?.shard;
   return z;
 }
 const LIMIT_TEXT = { budget: "your Max to invest", kalshi: "your Kalshi cash", polymarket: "your Polymarket cash" };
@@ -1131,7 +1136,10 @@ function render(force) {
   document.getElementById("trading").textContent = st.trading ? "Trading: " + st.trading : "";
   const bal = s.balances;
   document.getElementById("cash").innerHTML = bal && (bal.kalshi != null || bal.polymarket != null)
-    ? `Cash: ${bal.kalshi != null ? `Kalshi <b>${money(bal.kalshi)}</b>` : ""}${bal.kalshi != null && bal.polymarket != null ? " · " : ""}${
+    ? `Cash: ${bal.kalshi != null ? `<span title="${esc(bal.kalshi_shards ? "By Kalshi exchange shard: " + Object.entries(bal.kalshi_shards)
+        .map(([i, v]) => `${i}: ${money(v)}`).join(", ") + ". Orders only use cash on their market's shard (crypto is 2)." : "")}">Kalshi <b>${money(bal.kalshi)}</b>${
+        bal.kalshi_shards && Object.keys(bal.kalshi_shards).length > 1 ? ` <span class="muted">(${Object.entries(bal.kalshi_shards)
+        .filter(([i, v]) => v > 0.005 || i === "0").map(([i, v]) => `#${i} ${money(v)}`).join(", ")})</span>` : ""}</span>` : ""}${bal.kalshi != null && bal.polymarket != null ? " · " : ""}${
         bal.polymarket != null ? `Polymarket <b>${money(bal.polymarket)}</b>` : ""}${bal.error ? ` <span title="${esc(bal.error)}">(stale)</span>` : ""}`
     : "";
   renderAuto(s);
@@ -1200,7 +1208,7 @@ function render(force) {
     const row = `<tr class="row" data-key="${esc(key)}">
       <td class="num profit c-profit" data-label="Profit">${money(z.profit)}</td><td class="num c-roi" data-label="ROI">${pct(z.roi)}</td><td class="num c-ann" data-label="Annualized">${pct(z.annualized)}</td>
       <td class="num c-n" data-label="Shares">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}${z.limitedBy
-        ? `<br>limited by ${z.limitedBy.map(x => LIMIT_TEXT[x]).join(" and ")}` : ""}</div>` : ""}</td>
+        ? `<br>limited by ${z.limitedBy.map(x => x === "kalshi" && z.shard ? `your Kalshi cash on shard ${z.shard}` : LIMIT_TEXT[x]).join(" and ")}` : ""}</div>` : ""}</td>
       <td class="num c-cap" data-label="Capital">${money(z.capital)}</td>
       <td class="c-game"><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}
         <div class="secondary g-quantity">${esc(r.quantity)}</div>

@@ -123,6 +123,11 @@ class Accounts:
             d = self.kalshi_http.get("/portfolio/balance")
             dollars = _f(d.get("balance_dollars"))
             out["kalshi"] = dollars if dollars is not None else (_f(d.get("balance")) or 0) / 100
+            # Kalshi splits cash by exchange shard; an order only uses its market's shard's cash.
+            shards = {str(b.get("exchange_index", 0)): _f(b.get("balance")) or 0.0
+                      for b in d.get("balance_breakdown") or []}
+            if shards:
+                out["kalshi_shards"] = shards
         if self.pm_http:
             bals = self.pm_http.get("/v1/account/balances").get("balances") or []
             usd = next((b for b in bals if b.get("currency") in (None, "", "USD")), bals[0] if bals else {})

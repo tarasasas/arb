@@ -382,6 +382,24 @@ Instead install [Tailscale](https://tailscale.com) (free) on the PC and the phon
 Tailscale address in place of the Wi-Fi one. The connection is then encrypted and private to your
 devices.
 
+## Kalshi exchange shards (crypto and some sports)
+
+Kalshi now runs some markets on separate exchange "shards": crypto and commodities on shard 2, and
+tennis, baseball and basketball on shard 3. Everything else is on the main shard 0. **An order can only
+use cash held on its own market's shard.** With all your cash on shard 0, a crypto order fails with
+`insufficient shard balance`.
+
+- The header shows your Kalshi cash per shard (e.g. `Kalshi $505.00 (#0 $500.00, #2 $5.00)`). Each arb
+  is sized to the cash on its own shard, and a row cut down by it says *limited by your Kalshi cash
+  on shard 2*.
+- **Fix it once:** double-click `kalshi-shards.bat` (or run `python -m arb.shards`). It shows your
+  cash per shard, asks for a split (Enter = 50% main, 30% crypto, 20% tennis/baseball/basketball), and
+  turns on Kalshi's automatic rebalancing. Kalshi then moves cash between your shards every 10
+  seconds to keep that split. Run it again to change the split; `100 0 0` turns it off. You can also
+  move cash by hand at kalshi.com/account/exchange-indexes.
+- **Make trade**, **Fast trade** and **Auto-trade** check the market's shard before ordering. If it's
+  empty they tell you, and nothing is traded.
+
 ## Faster Kalshi scanning (free Advanced tier)
 
 Kalshi's free Basic tier allows 20 requests a second. The Advanced tier allows 30, and it's free and

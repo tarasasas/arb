@@ -23,6 +23,7 @@ from .model import YES, guaranteed_payout, total_fee
 from .venues import Fill, floor_to
 
 EXCHANGES = ("kalshi", "polymarket")
+SHARD_NAMES = {0: "main", 1: "combos", 2: "crypto and commodities", 3: "tennis, baseball and basketball"}
 NAMES = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
 
 
@@ -78,7 +79,7 @@ class Trader:
             if not info[ex]["open"]:
                 raise TradeError(f"The {NAMES[ex]} market isn't open for trading.")
             levels[ex] = v.levels(mid)[sides[ex]]
-            balance[ex] = v.balance()
+            balance[ex] = v.balance(info[ex].get("shard"))
 
         k, p = contracts["kalshi"], contracts["polymarket"]
         cand = {"k": SimpleNamespace(exchange="kalshi", fee_coef=k.fee_coef),
@@ -112,8 +113,15 @@ class Trader:
                 mid = (lo + hi + 1) // 2
                 lo, hi = (mid, hi) if fits(mid * step) else (lo, mid - 1)
             n = lo * step
+        shard = info["kalshi"].get("shard") or 0
+        if n <= 0 and shard and balance["kalshi"] < 1:
+            raise TradeError(f"This Kalshi market trades on exchange shard {shard} ({SHARD_NAMES.get(shard, 'a separate shard')}), "
+                             f"and you have ${balance['kalshi']:.2f} there. Kalshi only lets an order use cash on its own shard: "
+                             f"move some at kalshi.com/account/exchange-indexes, or run kalshi-shards.bat once to have "
+                             f"Kalshi keep every shard funded automatically. Nothing was traded.")
         if n <= 0:
-            limits = f"cap ${cap:.2f}, Kalshi cash ${balance['kalshi']:.2f}, Polymarket buying power ${balance['polymarket']:.2f}"
+            where = f" on shard {shard}" if shard else ""
+            limits = f"cap ${cap:.2f}, Kalshi cash{where} ${balance['kalshi']:.2f}, Polymarket buying power ${balance['polymarket']:.2f}"
             raise TradeError(f"Can't fit even one profitable pair within your limits ({limits}).")
 
         c = cost_at(n)
@@ -165,7 +173,10 @@ class Trader:
         except ApiError as e:
             record("first", A, error=str(e))
             self._write(log, status="failed_first_leg")
-            raise TradeError(f"{NAMES[A['exchange']]} rejected the first order, nothing was traded: {e.detail}")
+            hint = (" Kalshi keeps cash separately per exchange shard and this market's shard has none: run "
+                    "kalshi-shards.bat once, or move cash at kalshi.com/account/exchange-indexes."
+                    if "shard" in str(e.detail).lower() else "")
+            raise TradeError(f"{NAMES[A['exchange']]} rejected the first order, nothing was traded: {e.detail}{hint}")
         except Exception as e:          # sent, but the outcome couldn't be confirmed
             record("first", A, error=repr(e))
             self._write(log, status="unknown_first_leg")

@@ -49,6 +49,9 @@ class KalshiMarket:
     no_ask_size: float | None = None
     # Depth for buying each side: [(price, qty)] best first.
     levels: dict = field(default_factory=dict)
+    # Kalshi exchange shard the market trades on (0 default, 2 crypto/commodities, 3 some sports).
+    # Orders only use cash held on that shard.
+    shard: int = 0
 
 
 def parse_series(series_ticker):
@@ -115,6 +118,7 @@ def parse_market(m, series_info, fee_coef):
         team=team, op=op, line=line, title=m.get("title") or m["ticker"], name=m.get("yes_sub_title") or "",
         rules=((m.get("rules_primary") or "") + "\n\n" + (m.get("rules_secondary") or "")).strip(),
         close_time=m.get("expected_expiration_time") or m.get("close_time") or "", fee_coef=fee_coef,
+        shard=int(m.get("exchange_index") or 0),
     )
     km.yes_ask, km.no_ask = _f(m.get("yes_ask_dollars")), _f(m.get("no_ask_dollars"))
     km.yes_ask_size = _f(m.get("yes_ask_size_fp"))

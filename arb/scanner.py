@@ -473,7 +473,9 @@ class Scanner:
                 sizing = engine.size_opportunity(cand, levels_k, levels_p)
                 cand["depth"] = {"kalshi": levels_k[:DEPTH_LEVELS], "polymarket": levels_p[:DEPTH_LEVELS]}
                 if sizing and sizing["profit"] >= config.MIN_PROFIT_DOLLARS:
-                    opportunities.append(engine.to_row(cand, sizing, now))
+                    row = engine.to_row(cand, sizing, now)
+                    row["kalshi_shard"] = getattr(km, "shard", 0)   # Kalshi cash is held per shard
+                    opportunities.append(row)
                     continue
             if len(near) < config.MAX_NEAR_MISSES and _cand_key(cand) not in unchecked:
                 near.append(engine.to_row(cand, None, now))

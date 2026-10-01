@@ -65,10 +65,14 @@ class KalshiVenue:
             return 0.01
 
         return {"open": m.get("status") == "active", "tick": tick,
-                "min_qty": 0.01 if m.get("fractional_trading_enabled") else 1.0}
+                "min_qty": 0.01 if m.get("fractional_trading_enabled") else 1.0,
+                "shard": int(m.get("exchange_index") or 0)}
 
-    def balance(self):
-        return float(self.client.http.get("/portfolio/balance")["balance"]) / 100
+    def balance(self, shard=None):
+        """Cash available for orders: on one exchange shard if given (orders can only use cash on
+        their market's shard), else in total."""
+        params = {"exchange_index": shard} if shard is not None else None
+        return float(self.client.http.get("/portfolio/balance", params)["balance"]) / 100
 
     def _order(self, ticker, book_side, qty, yes_price, reduce_only=False):
         body = {"ticker": ticker, "side": book_side, "count": f"{qty:.2f}", "price": f"{yes_price:.4f}",
@@ -119,7 +123,7 @@ class PolymarketVenue:
         return {"open": bool(m.get("active")) and not m.get("closed") and m.get("status") == "MARKET_STATUS_OPEN",
                 "tick": lambda _p: tick, "min_qty": float(m.get("minimumTradeQty") or 1)}
 
-    def balance(self):
+    def balance(self, shard=None):
         bals = self.http.get("/v1/account/balances").get("balances") or []
         usd = next((b for b in bals if b.get("currency") in (None, "", "USD")), bals[0] if bals else {})
         return float(usd.get("buyingPower") or 0)

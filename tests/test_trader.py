@@ -23,7 +23,7 @@ class FakeVenue:
     def market_info(self, _mid):
         return {"open": True, "tick": lambda _p: 0.01, "min_qty": self.min_qty}
 
-    def balance(self):
+    def balance(self, shard=None):
         return self.bal
 
     def buy(self, mid, side, qty, limit, coef):
@@ -163,3 +163,30 @@ class TraderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ShardTests(unittest.TestCase):
+    def test_empty_shard_explains_what_to_do(self):
+        class ShardVenue(FakeVenue):
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return 0.0 if shard == 2 else 500.0
+        t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
+        with self.assertRaises(TradeError) as cm:
+            t.prepare(LEGS)
+        self.assertIn("shard 2", str(cm.exception))
+        self.assertIn("kalshi-shards.bat", str(cm.exception))
+
+    def test_shard_cash_limits_the_size(self):
+        class ShardVenue(FakeVenue):
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return 20.0 if shard == 2 else 10_000.0
+        t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
+        plan = t.prepare(LEGS)
+        self.assertLessEqual(plan["legs"]["kalshi"]["amount"] + plan["legs"]["kalshi"]["fee"], 20.0)
