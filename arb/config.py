@@ -106,6 +106,7 @@ CATALOG_REFRESH_SECS = 300     # full market lists + game matching
 SUGGEST_REFRESH_SECS = 1800    # rebuild non-sports match suggestions
 CRYPTO_REFRESH_SECS = 20       # look for new 15-minute crypto Up/Down windows
 POSITIONS_REFRESH_SECS = 60    # live position check for My arbs (needs your API keys)
+BALANCES_REFRESH_SECS = 15     # your cash on each site, used to size opportunities you can afford
 STREAM_MAX_MARKETS = 2000      # per exchange: near-arb markets and non-sports/crypto pairs streamed live
 STREAM_EVAL_SECS = 0.1         # how often streamed price changes are re-checked for arbs
 AUTO_ACCEPT_MATCHES = True     # scan non-sports matches without waiting for approval

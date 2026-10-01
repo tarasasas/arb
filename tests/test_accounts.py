@@ -98,3 +98,46 @@ class PairTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BalanceTests(unittest.TestCase):
+    def accts(self, k_pages=None, p_pages=None):
+        a = accounts.Accounts.__new__(accounts.Accounts)
+        a.kalshi_http = FakeHTTP(k_pages) if k_pages is not None else None
+        a.pm_http = FakeHTTP(p_pages) if p_pages is not None else None
+        return a
+
+    def test_both_sites(self):
+        a = self.accts([{"balance": 12345}], [{"balances": [{"currentBalance": 500, "currency": "USD",
+                                                             "buyingPower": 412.5}]}])
+        self.assertEqual(a.balances(), {"kalshi": 123.45, "polymarket": 412.5})
+        self.assertEqual(a.kalshi_http.calls[0][0], "/portfolio/balance")
+        self.assertEqual(a.pm_http.calls[0][0], "/v1/account/balances")
+
+    def test_kalshi_dollars_field_wins(self):
+        self.assertEqual(self.accts([{"balance": 100, "balance_dollars": "7.25"}]).balances(), {"kalshi": 7.25})
+
+    def test_missing_site_is_left_out(self):
+        self.assertEqual(self.accts(None, [{"balances": []}]).balances(), {"polymarket": 0.0})
+        self.assertEqual(self.accts().balances(), {})
+
+    def test_scanner_keeps_last_amounts_on_error(self):
+        from arb import scanner
+
+        class Boom:
+            missing = ["Polymarket"]
+            n = 0
+
+            def balances(self):
+                self.n += 1
+                if self.n > 1:
+                    raise ConnectionError("down")
+                return {"kalshi": 50.0}
+
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock, s.state, s.accounts = __import__("threading").Lock(), {}, Boom()
+        s.refresh_balances()
+        self.assertEqual(s.state["balances"]["kalshi"], 50.0)
+        s.refresh_balances()
+        self.assertEqual(s.state["balances"]["kalshi"], 50.0)
+        self.assertIn("down", s.state["balances"]["error"])

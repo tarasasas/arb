@@ -74,7 +74,7 @@ class PriceContractTests(unittest.TestCase):
                       [km("KD", E, 83699.99, series="KXBTCD", kind="greater", yes_ask=0.30, no_ask=0.55)])
         for c in cs:
             c.ask = {YES: 0.41 if c.exchange == "polymarket" else 0.30, NO: 0.60 if c.exchange == "polymarket" else 0.55}
-        cands = engine.screen(engine.group_pairs(cs), -1)
+        cands = engine.screen(engine.group_pairs(cs), -1, NOW)
         best = max(cands, key=lambda x: x["edge"])
         self.assertEqual((best["sk"], best["sp"]), (NO, YES))              # 55c + 41c = 96c for >= $1
         row = engine.to_row(best, None, NOW)

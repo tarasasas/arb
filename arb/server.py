@@ -100,6 +100,7 @@ def serve(scanner, port, open_browser=True):
                     return self._json(200, {"ok": True})
                 if path == "/api/trade/execute":
                     result = scanner.trader.execute(body.get("plan_id", ""))
+                    threading.Thread(target=scanner.refresh_balances, daemon=True).start()   # cash just changed
                     try:
                         if result.get("plan"):
                             scanner.my_arbs.add_from_trade(result["plan"], result, body.get("row"))

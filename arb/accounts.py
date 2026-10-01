@@ -114,6 +114,21 @@ class Accounts:
     def missing(self):
         return [name for name, h in (("Kalshi", self.kalshi_http), ("Polymarket", self.pm_http)) if not h]
 
+    def balances(self):
+        """Cash you can trade with right now, per exchange ({} for a site without a key).
+        Kalshi: balance (balance_dollars, or balance in cents). Polymarket: buying power, which is
+        what a Buy No (1 - price per share) or a Buy Yes draws on."""
+        out = {}
+        if self.kalshi_http:
+            d = self.kalshi_http.get("/portfolio/balance")
+            dollars = _f(d.get("balance_dollars"))
+            out["kalshi"] = dollars if dollars is not None else (_f(d.get("balance")) or 0) / 100
+        if self.pm_http:
+            bals = self.pm_http.get("/v1/account/balances").get("balances") or []
+            usd = next((b for b in bals if b.get("currency") in (None, "", "USD")), bals[0] if bals else {})
+            out["polymarket"] = _f(usd.get("buyingPower")) or 0.0
+        return out
+
     def positions(self):
         return (kalshi_positions(self.kalshi_http) if self.kalshi_http else {},
                 polymarket_positions(self.pm_http) if self.pm_http else {})

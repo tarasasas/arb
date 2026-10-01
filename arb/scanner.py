@@ -238,6 +238,28 @@ class Scanner:
         self.my_arbs.sync_state = {"status": "ok", "time": engine.now_utc().isoformat(), "missing": acc.missing,
                                    "positions": len(kpos) + len(ppos), "paired": len(pairs)}
 
+    def refresh_balances(self):
+        """Read your cash on both sites (needs the API keys) for sizing opportunities to it."""
+        from . import accounts
+        if self.accounts is None:
+            self.accounts = accounts.Accounts(self.kalshi)
+        if len(self.accounts.missing) == 2:
+            return
+        try:
+            bal = self.accounts.balances()
+            info = {**bal, "time": engine.now_utc().isoformat(), "missing": self.accounts.missing}
+        except Exception as e:
+            with self.lock:
+                old = dict(self.state.get("balances") or {})
+            info = {**old, "error": repr(e)}            # keep the last known amounts
+        with self.lock:
+            self.state["balances"] = info
+
+    def _balances_loop(self, stop_event):
+        while not (stop_event and stop_event.is_set()):
+            self.refresh_balances()
+            time.sleep(config.BALANCES_REFRESH_SECS)
+
     def _positions_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
             if self.contracts:                   # pairing needs the market catalog loaded
@@ -566,6 +588,7 @@ class Scanner:
         threading.Thread(target=self._suggest_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._crypto_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._positions_loop, args=(stop_event,), daemon=True).start()
+        threading.Thread(target=self._balances_loop, args=(stop_event,), daemon=True).start()
         while not self.contracts and not (stop_event and stop_event.is_set()):
             time.sleep(1)               # first catalog load
         from . import streams

@@ -20,11 +20,11 @@ def group_pairs(contracts):
     return {k: v for k, v in groups.items() if v["kalshi"] and v["polymarket"]}
 
 
-def screen(groups, min_edge):
+def screen(groups, min_edge, now=None):
     """Top-of-book screen. Returns candidates with per-contract edge > min_edge, best first.
     Edge = guaranteed payout - both prices - both unrounded taker fees."""
     out = []
-    now = datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
     for (game_key, var), g in groups.items():
         for k in g["kalshi"]:
             if _ended(k, now):

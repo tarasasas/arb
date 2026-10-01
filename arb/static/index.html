@@ -135,6 +135,7 @@
   .log { font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: var(--text-secondary);
          background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .caveat { font-size: 12.5px; color: var(--text-muted); margin-top: 8px; }
+  #cash-note:empty { display: none; }
 </style>
 </head>
 <body>
@@ -146,6 +147,7 @@
     <span class="status" id="access"></span>
     <span class="status" id="trading"></span>
     <span class="status" id="live"></span>
+    <span class="status" id="cash"></span>
   </header>
 
   <section class="tiles">
@@ -165,6 +167,7 @@
     <label><input id="f-clean" type="checkbox"> Hide rows with warnings</label>
     <label><input id="f-noshort" type="checkbox"> Hide Polymarket Buy NO</label>
     <label><input id="f-nosus" type="checkbox"> Hide too-good-to-be-true</label>
+    <label title="Size each opportunity to the cash on each site (read live with your API keys)"><input id="f-cash" type="checkbox" checked> Size to my cash</label>
     <label title="Two exact-opposite legs (every result pays $1), no whole-number line, same overtime rules and settlement source, verified match"><input id="f-simple" type="checkbox"> Simple trades only</label>
     <label>Settles within <input id="f-days" type="number" min="0" step="1" placeholder="any" style="width:60px"> days</label>
     <label><input id="f-expand" type="checkbox"> Show math for all</label>
@@ -180,6 +183,7 @@
   <div class="tabs" id="tabs-bar" role="tablist"></div>
   <div id="myarbs" style="display:none"></div>
   <div id="opps-wrap">
+  <div class="caveat" id="cash-note" style="margin:0 0 6px"></div>
   <div class="table-wrap">
     <table>
       <thead><tr>
@@ -282,13 +286,30 @@ function calc(r, n) {
   const roi = capital ? (payout - capital) / capital : 0;
   return { n, k, p, capital, payout, profit: payout - capital, roi, annualized: days ? roi * 365 / days : null };
 }
-function sizeFor(r, budget) {
-  const full = calc(r, r.size);
-  if (!(budget > 0) || full.capital <= budget) return full;
-  let lo = 0, hi = r.size;                        // largest n whose capital fits the budget
-  while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); calc(r, mid).capital <= budget ? lo = mid : hi = mid - 1; }
-  return calc(r, lo);
+// Your cash on each site (live, with API keys) when "Size to my cash" is on; null otherwise.
+function cashLimits() {
+  const b = state?.balances, on = document.getElementById("f-cash")?.checked;
+  return on && b && (b.kalshi != null || b.polymarket != null) ? { kalshi: b.kalshi, polymarket: b.polymarket } : null;
 }
+// What stops a size from fitting: your "Max to invest", or the cash on one site (each leg is paid
+// from its own site's balance).
+function overLimits(z, budget, cash) {
+  const out = [];
+  if (budget > 0 && z.capital > budget + 1e-9) out.push("budget");
+  if (cash && cash.kalshi != null && z.k.cost + z.k.fee > cash.kalshi + 1e-9) out.push("kalshi");
+  if (cash && cash.polymarket != null && z.p.cost + z.p.fee > cash.polymarket + 1e-9) out.push("polymarket");
+  return out;
+}
+function sizeFor(r, budget) {
+  const cash = cashLimits(), full = calc(r, r.size), over = overLimits(full, budget, cash);
+  if (!over.length) return full;
+  let lo = 0, hi = r.size;                        // largest n that fits every limit (cost grows with n)
+  while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); overLimits(calc(r, mid), budget, cash).length ? hi = mid - 1 : lo = mid; }
+  const z = calc(r, lo);
+  z.limitedBy = overLimits(calc(r, lo + 1), budget, cash);   // the limit one more share would break
+  return z;
+}
+const LIMIT_TEXT = { budget: "your Max to invest", kalshi: "your Kalshi cash", polymarket: "your Polymarket cash" };
 
 // Legs are worded like both sites' buttons: Buy → Yes / Buy → No. On Polymarket US, Buy No is a
 // short of YES under the hood; it costs 1 − the YES bid, which is the price shown.
@@ -879,6 +900,11 @@ function render(force) {
   document.getElementById("updated").textContent = s.last_prices ? "Prices updated " + ago(s.last_prices) : "";
   document.getElementById("access").textContent = st.kalshi_access ? "Kalshi: " + st.kalshi_access : "";
   document.getElementById("trading").textContent = st.trading ? "Trading: " + st.trading : "";
+  const bal = s.balances;
+  document.getElementById("cash").innerHTML = bal && (bal.kalshi != null || bal.polymarket != null)
+    ? `Cash: ${bal.kalshi != null ? `Kalshi <b>${money(bal.kalshi)}</b>` : ""}${bal.kalshi != null && bal.polymarket != null ? " · " : ""}${
+        bal.polymarket != null ? `Polymarket <b>${money(bal.polymarket)}</b>` : ""}${bal.error ? ` <span title="${esc(bal.error)}">(stale)</span>` : ""}`
+    : "";
   const feeds = Object.entries(s.streams || {});
   document.getElementById("live").innerHTML = feeds.length ? "Live prices: " + feeds.map(([ex, v]) =>
     `<span title="${esc(v.error || "")}">${ex === "kalshi" ? "Kalshi" : "Polymarket"} ${v.connected
@@ -887,12 +913,23 @@ function render(force) {
 
   const minP = +document.getElementById("f-min").value || 0, minR = (+document.getElementById("f-roi").value || 0) / 100;
   const budget = +document.getElementById("f-budget").value || 0;
+  const cashShortRows = [];
   const sizeRows = rows => rows.filter(passes).map(r => ({ r, z: sizeFor(r, budget) }))
-    .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR);
+    .filter(({ r, z }) => {
+      const ok = z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR;
+      if (!ok && z.limitedBy && z.limitedBy.some(x => x !== "budget")) cashShortRows.push({ r, z });
+      return ok;
+    });
   const sized = sizeRows(s.opportunities);
   renderTabs(sized.map(o => o.r));
   if (s.last_prices) checkAlerts(sized);
-  const opps = (currentTab === MAKER ? sizeRows(s.maker || []) : sized).filter(o => inTab(o.r))
+  const listed = currentTab === MAKER ? (cashShortRows.length = 0, sizeRows(s.maker || [])) : sized;
+  const short = cashShortRows.filter(o => inTab(o.r));
+  document.getElementById("cash-note").innerHTML = short.length
+    ? `${WARN_ICON} ${short.length} more arb${short.length > 1 ? "s" : ""} hidden: not enough cash (${[...new Set(short.flatMap(o =>
+        o.z.limitedBy.filter(x => x !== "budget")))].map(x => LIMIT_TEXT[x]).join(", ")}). Untick "Size to my cash" to see ${short.length > 1 ? "them" : "it"}.`
+    : "";
+  const opps = listed.filter(o => inTab(o.r))
     .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || b.z.profit - a.z.profit);
   // Rows you're mid-trade on: refresh their snapshot while the arb exists, keep showing it after.
   const live = new Set(s.opportunities.map(rowKey));
@@ -928,7 +965,8 @@ function render(force) {
     const key = rowKey(r), isPinned = pinned.has(key);
     const row = `<tr class="row" data-key="${esc(key)}">
       <td class="num profit">${money(z.profit)}</td><td class="num">${pct(z.roi)}</td><td class="num">${pct(z.annualized)}</td>
-      <td class="num">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}</div>` : ""}</td>
+      <td class="num">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}${z.limitedBy
+        ? `<br>limited by ${z.limitedBy.map(x => LIMIT_TEXT[x]).join(" and ")}` : ""}</div>` : ""}</td>
       <td class="num">${money(z.capital)}</td>
       <td><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}
         <div class="secondary">${esc(r.quantity)}</div>
@@ -997,7 +1035,7 @@ opps.addEventListener("input", e => {
   if (r && out) out.innerHTML = hedgeResult(r, k);
 });
 const FILTER_IDS = ["f-budget", "f-league", "f-min", "f-roi", "f-clean", "f-noshort", "f-nosus", "f-simple", "f-days", "f-expand", "f-search",
-                    "f-alert", "f-sound", "f-notify"];
+                    "f-alert", "f-sound", "f-notify", "f-cash"];
 for (const id of FILTER_IDS) document.getElementById(id).addEventListener("input", () => { saveFilters(); render(true); });
 // Remember filter settings in this browser between visits.
 function saveFilters() {

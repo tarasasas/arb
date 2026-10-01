@@ -185,6 +185,20 @@ so the two can differ by one second's move; that only matters if the close lands
 dollars of a line. ETH, SOL, XRP, DOGE, BNB and HYPE pair the same way as soon as Polymarket lists
 them.
 
+## Sizing to your cash
+
+With your API keys in `.env`, the scanner reads the cash on each site every 15 seconds (and right
+after **Make trade**). The header shows it as **Cash: Kalshi $X · Polymarket $Y**. With
+**Size to my cash** ticked (the default), each opportunity is sized to the most shares you can
+actually buy. The Kalshi leg has to fit your Kalshi balance, and the Polymarket leg has to fit your
+Polymarket buying power, fees included. Your **Max to invest** still applies on top of that.
+
+- A row that was cut down says why under its share count, for example
+  *of 1,400 · limited by your Kalshi cash*.
+- Arbs you can't afford even one share of are hidden, with a count above the table
+  (*3 more arbs hidden: not enough cash*).
+- Untick **Size to my cash** to size by the order books alone.
+
 ## My arbs (your active trades)
 
 The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actually placed:
