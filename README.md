@@ -261,6 +261,11 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   form an arb the scanner knows about are paired and added automatically, with the shares held and
   what they cost. Positions with no partner on the other site are listed under **Only on one site**.
   If you edit an arb found this way, the sync stops changing it.
+- **Real cost basis.** Each position check also sets every tracked leg's cost to what your account says
+  you actually paid for those shares, fees included, at the account's average cost per share. Profit and
+  ROI then use the real prices rather than the planned or typed ones. A leg updated this way shows
+  "(real cost, was $X)". Legs whose account cost is uncertain (some Polymarket Buy No positions) keep
+  the recorded cost.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
   cost cut pro rata. An arb with a leg sold out moves to **Settled or closed**, with a note saying what

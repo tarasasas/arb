@@ -316,6 +316,9 @@ class Scanner:
             read = tuple(ex for ex, name in (("kalshi", "Kalshi"), ("polymarket", "Polymarket")) if name not in acc.missing)
             for a in self.my_arbs.reconcile(kpos, ppos, read):
                 self.log(f"My arbs: {a['game']}: {a['note'].split('. ')[0]}")
+            for a in self.my_arbs.update_cost_basis(kpos, ppos, read):
+                self.log(f"My arbs: {a['game']}: cost updated from your accounts to "
+                         f"${sum(l['paid'] for l in a['legs']):.2f}")
         except Exception as e:
             self.log(f"My arbs: couldn't compare with your positions ({e!r})")
         self.my_arbs.sync_state = {"status": "ok", "time": engine.now_utc().isoformat(), "missing": acc.missing,

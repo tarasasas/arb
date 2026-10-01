@@ -180,3 +180,38 @@ class ReconcileTests(unittest.TestCase):
         self.m._live[("kalshi", "KXNPB-HAN")] = {"state": "open"}
         self.assertEqual(self.m.reconcile({}, {"npb-han-ygo": {"side": "no", "shares": 20}}, read=("polymarket",)), [])
         self.assertEqual(self.m.items[0]["legs"][0]["shares"], 20)
+
+
+class CostBasisTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from arb import myarbs as m
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "my_arbs.json"
+        self.m = m.MyArbs(self.path)
+        self.m.save({"source": "make_trade", "game": "BTC", "payout": 1.0, "legs": [
+            {"exchange": "kalshi", "market_id": "K", "side": "yes", "shares": 20, "paid": 9.00},
+            {"exchange": "polymarket", "market_id": "p", "side": "no", "shares": 20, "paid": 10.00}]})
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_real_cost_replaces_the_recorded_one(self):
+        from arb import myarbs as m
+        changed = self.m.update_cost_basis({"K": {"side": "yes", "shares": 30, "paid": 14.40}},     # 0.48/share
+                                           {"p": {"side": "no", "shares": 20, "paid": 10.00}})
+        self.assertEqual(len(changed), 1)
+        k, p = self.m.items[0]["legs"]
+        self.assertEqual((k["paid"], k["paid_recorded"], k["cost_from"]), (9.60, 9.00, "account"))
+        self.assertEqual((p["paid"], p["cost_from"]), (10.00, "account"))
+        self.assertNotIn("paid_recorded", p)                                   # unchanged leg
+        self.assertAlmostEqual(m.summarize(self.m.items[0])["profit"], 20 - 19.60)
+        again = m.MyArbs(self.path)                                            # saved
+        self.assertEqual(again.items[0]["legs"][0]["paid"], 9.60)
+
+    def test_estimated_wrong_side_or_unread_are_left_alone(self):
+        self.m.update_cost_basis({"K": {"side": "no", "shares": 20, "paid": 1.0}},
+                                 {"p": {"side": "no", "shares": 20, "paid": 1.0, "paid_estimated": True}})
+        self.m.update_cost_basis({"K": {"side": "yes", "shares": 20, "paid": 1.0}}, {}, read=("polymarket",))
+        self.assertEqual([l["paid"] for l in self.m.items[0]["legs"]], [9.00, 10.00])

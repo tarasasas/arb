@@ -1026,7 +1026,10 @@ function legCell(l) {
   const st = l.state === "settled" ? `<span class="state settled">settled: ${esc((l.result || "").toUpperCase())}</span>`
     : `<span class="state">${esc(l.state || "")}</span>`;
   return `<div><span class="ex ${l.exchange === "kalshi" ? "kalshi" : "poly"}">${l.exchange === "kalshi" ? "KALSHI" : "POLYMARKET"}</span>
-    <b>${sideName(l)}</b> · ${compact(l.shares)} shares · paid ${money(l.paid)} ${st}
+    <b>${sideName(l)}</b> · ${compact(l.shares)} shares · paid ${money(l.paid)}${l.cost_from === "account"
+      ? ` <span class="muted" title="Your account's cost for these shares, fees included${l.paid_recorded != null
+        ? `; recorded at the time as ${money(l.paid_recorded)}` : ""}">(real cost${l.paid_recorded != null && Math.abs(l.paid_recorded - l.paid) >= 0.01
+        ? `, was ${money(l.paid_recorded)}` : ""})</span>` : ""} ${st}
     <div class="muted" style="font-size:12px">${esc(l.title)}</div></div>`;
 }
 // ---- payouts by day: what your active arbs pay out, per calendar day -----------------------------

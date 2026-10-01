@@ -207,6 +207,38 @@ class MyArbs:
                 self._save()
         return changed
 
+    def update_cost_basis(self, kpos, ppos, read=("kalshi", "polymarket")):
+        """Set each tracked leg's cost to what your account says you really paid (fees included), at the
+        account's average cost per share, so profit and ROI use real prices rather than planned ones.
+        Legs whose account cost is uncertain (estimated) are left as recorded. Returns the arbs whose
+        cost changed."""
+        changed, dirty = [], False
+        with self.lock:
+            for a in self.items:
+                if a.get("closed"):
+                    continue
+                moved = False
+                for leg in a["legs"]:
+                    if leg["exchange"] not in read or leg["shares"] <= 0:
+                        continue
+                    pos = (kpos if leg["exchange"] == "kalshi" else ppos).get(leg["market_id"])
+                    if (not pos or pos.get("side") != leg["side"] or not pos.get("shares")
+                            or pos.get("paid") is None or pos.get("paid_estimated")):
+                        continue
+                    real = round(pos["paid"] / pos["shares"] * leg["shares"], 2)
+                    if abs(real - leg["paid"]) >= 0.01:
+                        leg.setdefault("paid_recorded", leg["paid"])     # what was recorded at the time
+                        leg["paid"] = real
+                        moved = True
+                    if leg.get("cost_from") != "account":
+                        leg["cost_from"] = "account"
+                        dirty = True
+                if moved:
+                    changed.append(a)
+            if changed or dirty:
+                self._save()
+        return changed
+
     def delete(self, arb_id):
         with self.lock:
             self.items = [a for a in self.items if a["id"] != arb_id]
