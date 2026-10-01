@@ -90,3 +90,25 @@ class PasswordRequiredTests(unittest.TestCase):
     def test_phone_mode_refuses_to_start_without_a_password(self):
         with self.assertRaises(SystemExit):
             server.serve(FakeScanner(), free_port(), open_browser=False, phone=True, password="short")
+
+
+class QuietDisconnectTests(unittest.TestCase):
+    def test_dropped_browser_connections_print_nothing(self):
+        import io
+        import sys
+        from contextlib import redirect_stderr
+        srv = server.ExclusiveServer.__new__(server.ExclusiveServer)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            for exc in (ConnectionAbortedError(10053, "aborted"), ConnectionResetError(), BrokenPipeError()):
+                try:
+                    raise exc
+                except OSError:
+                    srv.handle_error(None, ("127.0.0.1", 1))
+        self.assertEqual(err.getvalue(), "")
+        with redirect_stderr(err):
+            try:
+                raise ValueError("a real bug")
+            except ValueError:
+                srv.handle_error(None, ("127.0.0.1", 1))
+        self.assertIn("a real bug", err.getvalue())

@@ -66,6 +66,14 @@ class ExclusiveServer(ThreadingHTTPServer):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 
+    def handle_error(self, request, client_address):
+        """A browser that closes its connection mid-reply (refresh, closed tab, phone going to sleep)
+        isn't an error worth a traceback; anything else still prints one."""
+        import sys
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
 
 def serve(scanner, port, open_browser=True, phone=False, password=""):
     """phone=True also listens on your local network, for the dashboard on your phone. Devices
