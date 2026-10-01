@@ -1022,6 +1022,22 @@ function syncLine() {
   return "Live position check starts once the markets finish loading…";
 }
 const sideName = l => `Buy ${l.side.toUpperCase()}`;
+// Is it really an arb? Structure from the markets' rules, economics from your real cost per pair.
+function arbVerdict(a) {
+  const c = a.check || {};
+  if (c.structure === "broken") return { ok: false, text: `Not an arb: ${c.why}` };
+  if (a.pairs > 0 && a.pair_edge < 0) return { ok: false,
+    text: `Not an arb at your cost: you paid ${money(a.pair_cost)} per pair for a ${money(a.payout)} payout (${a.profit < 0 ? "−" : ""}${money(Math.abs(a.profit))} overall)` };
+  if (c.structure === "ok") return { ok: true, text: `Arb at your cost: ${money(a.pair_edge)} per pair locked · ${c.why}` };
+  return { ok: null, text: a.pairs > 0 ? `${money(a.pair_edge)} per pair at your cost · ${c.why || "match not re-checked yet"}` : "" };
+}
+function verdictHtml(a) {
+  const v = arbVerdict(a);
+  if (!v.text) return "";
+  return `<div class="warn" style="margin-top:4px;white-space:normal;${v.ok === false ? "color:var(--critical)" : ""}">${
+    v.ok === false ? WARN_ICON : v.ok ? OK_ICON : ""}${esc(v.text)}</div>`;
+}
+
 function legCell(l) {
   const st = l.state === "settled" ? `<span class="state settled">settled: ${esc((l.result || "").toUpperCase())}</span>`
     : `<span class="state">${esc(l.state || "")}</span>`;
@@ -1178,7 +1194,7 @@ function renderMyArbs() {
       <td><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
         <div class="muted">pays out ${esc(localTime(a.closes))}${a.source === "make_trade" ? " · via Make trade"
           : a.source === "account" ? ` · from your accounts${a.edited ? " (edited)" : ""}` : ""}</div>
-        ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}</td>
+        ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}${a.settled ? "" : verdictHtml(a)}</td>
       <td>${a.legs.map(legCell).join("")}
         ${a.unhedged.length ? `<div class="warn" style="white-space:normal">${WARN_ICON}${a.unhedged.map(u =>
           `${compact(u.shares)} ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"} not hedged`).join("; ")}</div>` : ""}</td>
@@ -1192,7 +1208,8 @@ function renderMyArbs() {
   el.innerHTML = `
     <div class="sumgrid" style="max-width:none">
       <div class="sumcard"><div class="label">Active arbs</div><div class="big">${open.length}</div>
-        <div class="sub">${done.length} settled</div></div>
+        <div class="sub">${done.length} settled${(() => { const bad = open.filter(x => arbVerdict(x).ok === false).length;
+          return bad ? ` · <span style="color:var(--critical)">${bad} not an arb at your cost</span>` : ""; })()}</div></div>
       <div class="sumcard"><div class="label">Money in active arbs</div><div class="big">${money(tot("paid"))}</div>
         <div class="sub">pays back ${money(tot("guaranteed"))} whatever happens</div></div>
       <div class="sumcard"><div class="label">Locked profit</div><div class="big profit">${money(tot("profit"))}

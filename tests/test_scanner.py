@@ -242,3 +242,11 @@ class PrefundTests(unittest.TestCase):
         s, moved = self.make({0: 60.0, 2: 0.0}, [{"kalshi_shard": 2}, {"kalshi_shard": 0}])
         s.prefund_shards(now=1000)
         self.assertEqual(moved, [(0, 2, 10.0)])                   # shard 0 keeps its own $50
+
+
+class PairingIgnoresFocusTests(FocusTests):
+    def test_positions_outside_focus_still_pair(self):
+        s = self.make()
+        s.set_focus(1)
+        self.assertIsNone(s.find_contract("kalshi", "kLATER"))           # not scanned
+        self.assertIsNotNone(s.find_any_contract("kalshi", "kLATER"))    # but still known for your positions

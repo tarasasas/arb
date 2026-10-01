@@ -215,3 +215,46 @@ class CostBasisTests(unittest.TestCase):
                                  {"p": {"side": "no", "shares": 20, "paid": 1.0, "paid_estimated": True}})
         self.m.update_cost_basis({"K": {"side": "yes", "shares": 20, "paid": 1.0}}, {}, read=("polymarket",))
         self.assertEqual([l["paid"] for l in self.m.items[0]["legs"]], [9.00, 10.00])
+
+
+class VerifyTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from arb import myarbs as m
+        from arb.model import Contract
+        self.dir = tempfile.TemporaryDirectory()
+        self.m = m.MyArbs(Path(self.dir.name) / "my_arbs.json")
+        var = ("total", "FG")
+        self.c = {("kalshi", "K"): Contract("kalshi", "K", "G", var, ">", 8.5, "Over 8.5", fee_coef=0.07),
+                  ("polymarket", "p"): Contract("polymarket", "p", "G", var, ">", 8.5, "Over 8.5?", fee_coef=0.07)}
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def track(self, kside, pside, kpaid=9.0, ppaid=10.0):
+        self.m.items = []
+        return self.m.save({"source": "manual", "game": "G", "payout": 1.0, "legs": [
+            {"exchange": "kalshi", "market_id": "K", "side": kside, "shares": 20, "paid": kpaid},
+            {"exchange": "polymarket", "market_id": "p", "side": pside, "shares": 20, "paid": ppaid}]})
+
+    def test_real_arb_is_confirmed(self):
+        from arb import myarbs as m
+        self.track("yes", "no")
+        self.m.verify(lambda ex, mid: self.c.get((ex, mid)))
+        a = self.m.items[0]
+        self.assertEqual(a["check"]["structure"], "ok")
+        s = m.summarize(a)
+        self.assertEqual((s["pair_cost"], s["pair_edge"]), (0.95, 0.05))
+
+    def test_both_sides_that_can_lose_are_flagged(self):
+        self.track("yes", "yes")                                    # Over on both sites: Under loses both
+        changed = self.m.verify(lambda ex, mid: self.c.get((ex, mid)))
+        self.assertEqual(changed[0]["check"]["structure"], "broken")
+
+    def test_losing_at_real_cost_and_unlisted_markets(self):
+        from arb import myarbs as m
+        self.track("yes", "no", kpaid=10.5, ppaid=10.5)            # $1.05 per $1 pair
+        self.assertLess(m.summarize(self.m.items[0])["pair_edge"], 0)
+        self.m.verify(lambda ex, mid: None)
+        self.assertEqual(self.m.items[0]["check"]["structure"], "unknown")

@@ -80,6 +80,12 @@ class Scanner:
         venues = {"kalshi": KalshiVenue(self.kalshi), "polymarket": PolymarketVenue(self.pm, pm_signer)}
         return Trader(self, venues), f"on (cap ${config.MAX_TRADE_DOLLARS:.0f} per trade)"
 
+    def find_any_contract(self, exchange, market_id):
+        """Like find_contract, but over every matched market, not just the ones Focus scans."""
+        with self.lock:
+            idx = getattr(self, "all_contract_index", None) or self.contract_index
+            return idx.get((exchange, market_id))
+
     def find_contract(self, exchange, market_id):
         with self.lock:
             return self.contract_index.get((exchange, market_id))
@@ -248,6 +254,7 @@ class Scanner:
         contracts = s_contracts + p_contracts + c_contracts
         source = {**s_source, **p_source, **c_source}
         groups = engine.group_pairs(contracts)
+        everything = {(c.exchange, c.market_id): c for c in contracts}   # Focus aside: for your positions
         focus = getattr(self, "focus_days", 0)
         if focus:
             cutoff = engine.now_utc() + timedelta(days=focus)
@@ -257,6 +264,7 @@ class Scanner:
         with self.lock:
             self.contracts, self.source, self.groups = contracts, source, groups
             self.contract_index = {(c.exchange, c.market_id): c for c in contracts}
+            self.all_contract_index = everything
             idx = {}
             for g, by_ex in groups.items():
                 for lst in by_ex.values():
@@ -306,7 +314,7 @@ class Scanner:
             self.my_arbs.sync_state = {"status": "error", "error": repr(e), "time": engine.now_utc().isoformat()}
             self.log(f"Position check failed: {e!r}")
             return
-        pairs, unpaired = accounts.pair_positions(kpos, ppos, self.find_contract)
+        pairs, unpaired = accounts.pair_positions(kpos, ppos, self.find_any_contract)
         self.my_arbs.sync_from_accounts(
             pairs, kpos, ppos, unpaired,
             lambda kc: {"game": kc.game_label or kc.game_key.split(":", 1)[-1], "tab": engine.row_tab(kc),
@@ -319,6 +327,8 @@ class Scanner:
             for a in self.my_arbs.update_cost_basis(kpos, ppos, read):
                 self.log(f"My arbs: {a['game']}: cost updated from your accounts to "
                          f"${sum(l['paid'] for l in a['legs']):.2f}")
+            for a in self.my_arbs.verify(self.find_any_contract):
+                self.log(f"My arbs: {a['game']}: {a['check']['why']}")
         except Exception as e:
             self.log(f"My arbs: couldn't compare with your positions ({e!r})")
         self.my_arbs.sync_state = {"status": "ok", "time": engine.now_utc().isoformat(), "missing": acc.missing,

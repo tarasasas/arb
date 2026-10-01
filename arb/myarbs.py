@@ -30,9 +30,12 @@ def summarize(arb):
     guaranteed = arb.get("payout", 1.0) * pairs
     unhedged = [{"exchange": leg["exchange"], "side": leg["side"], "shares": leg["shares"] - pairs}
                 for leg in legs if leg["shares"] - pairs > 1e-9]
+    # Per pair at your real cost: what one share on each side cost, against what the pair pays.
+    pair_cost = sum(leg["paid"] / leg["shares"] for leg in legs if leg["shares"] > 0) if pairs else 0.0
     return {"pairs": pairs, "paid": round(paid, 2), "guaranteed": round(guaranteed, 2),
             "profit": round(guaranteed - paid, 2), "roi": (guaranteed - paid) / paid if paid else 0,
-            "unhedged": unhedged}
+            "unhedged": unhedged, "pair_cost": round(pair_cost, 4),
+            "pair_edge": round(arb.get("payout", 1.0) - pair_cost, 4) if pairs else 0.0}
 
 
 def kalshi_status(m):
@@ -236,6 +239,40 @@ class MyArbs:
                 if moved:
                     changed.append(a)
             if changed or dirty:
+                self._save()
+        return changed
+
+    def verify(self, lookup):
+        """Re-check that each tracked arb really is one: from the two markets' rules, the positions must
+        pay out whatever happens (the payout per pair is refreshed from that). lookup(exchange,
+        market id) -> Contract or None. Stores a["check"] = {"structure": ok | broken | unknown, "why"}.
+        Returns the arbs whose check changed."""
+        from .model import guaranteed_payout
+        changed = []
+        with self.lock:
+            for a in self.items:
+                if a.get("closed"):
+                    continue
+                legs = {l["exchange"]: l for l in a["legs"]}
+                kl, pl = legs.get("kalshi"), legs.get("polymarket")
+                kc = lookup("kalshi", kl["market_id"]) if kl else None
+                pc = lookup("polymarket", pl["market_id"]) if pl else None
+                if not kc or not pc:
+                    check = {"structure": "unknown", "why": "can't re-check the match: a market is no longer listed"}
+                elif (kc.game_key, kc.var) != (pc.game_key, pc.var):
+                    check = {"structure": "broken", "why": "these two markets aren't a matched pair"}
+                else:
+                    pay = guaranteed_payout([(kc, kl["side"]), (pc, pl["side"])])
+                    if pay <= 0:
+                        check = {"structure": "broken",
+                                 "why": "these positions don't pay out in every outcome: one result loses both"}
+                    else:
+                        check = {"structure": "ok", "why": f"pays ${pay:g} per pair whatever happens"}
+                        a["payout"] = pay
+                if (a.get("check") or {}).get("structure") != check["structure"]:
+                    changed.append(a)
+                a["check"] = check
+            if changed:
                 self._save()
         return changed
 

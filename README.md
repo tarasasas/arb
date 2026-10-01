@@ -266,6 +266,14 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   ROI then use the real prices rather than the planned or typed ones. A leg updated this way shows
   "(real cost, was $X)". Legs whose account cost is uncertain (some Polymarket Buy No positions) keep
   the recorded cost.
+- **Is each one really an arb?** Every check also re-verifies each tracked arb.
+  - **Structure:** from the two markets' rules, your positions must pay out whatever happens. Two bets
+    that can both lose are flagged "Not an arb: …". The payout per pair is refreshed from the rules.
+  - **Economics:** at your real cost basis, the payout per pair must beat what you paid per pair.
+    Otherwise it's flagged "Not an arb at your cost: you paid $1.03 per pair for a $1.00 payout".
+  - Good ones show "Arb at your cost: $0.03 per pair locked". The Active arbs card counts the ones that
+    aren't.
+  - Pairing your positions uses every matched market, whatever Focus is set to.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
   cost cut pro rata. An arb with a leg sold out moves to **Settled or closed**, with a note saying what
