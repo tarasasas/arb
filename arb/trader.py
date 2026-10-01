@@ -120,23 +120,36 @@ class Trader:
         # Kalshi cash is held per exchange shard. If this market's shard is short, move what the trade
         # needs onto it from your other shards first (same account), then size against what arrived.
         shard = info["kalshi"].get("shard") or 0
-        transfers = []
-        if shard and config.KALSHI_AUTO_SHARD_FUNDING and hasattr(self.venues["kalshi"], "fund_shard"):
+        transfers, funding_error = [], ""
+        if config.KALSHI_AUTO_SHARD_FUNDING and hasattr(self.venues["kalshi"], "fund_shard"):   # any shard, 0 too
             want = largest(kalshi_cash=math.inf)
             c = cost_at(want)
             short = c["kalshi"]["amount"] + c["kalshi"]["fee"] - balance["kalshi"]
             if want > 0 and short > 0.005:
-                moves, balance["kalshi"] = self.venues["kalshi"].fund_shard(shard, math.ceil((short + 0.05) * 100) / 100)
-                transfers = [{"from": src, "to": shard, "amount": amt} for src, amt in moves]
+                try:
+                    moves, balance["kalshi"] = self.venues["kalshi"].fund_shard(shard, math.ceil((short + 0.05) * 100) / 100)
+                    transfers = [{"from": src, "to": shard, "amount": amt} for src, amt in moves]
+                except ApiError as e:          # trade with what's there; say why it's small
+                    funding_error = f"Kalshi refused moving cash to shard {shard}: {e.detail}"
         n = largest()
-        if n <= 0 and shard and balance["kalshi"] < 1:
+        if n <= 0 and balance["kalshi"] < 1:
             moved = f" (moved ${sum(t['amount'] for t in transfers):.2f} there, not arrived yet)" if transfers else ""
-            raise TradeError(f"This Kalshi market trades on exchange shard {shard} ({SHARD_NAMES.get(shard, 'a separate shard')}), "
-                             f"and you have ${balance['kalshi']:.2f} there{moved}. Kalshi only lets an order use cash on its own shard: "
-                             f"move some at kalshi.com/account/exchange-indexes, or run kalshi-shards.bat once to have "
-                             f"Kalshi keep every shard funded automatically. Nothing was traded.")
+            try:
+                others = {i: b for i, b in self.venues["kalshi"].shard_balances().items() if i != shard and b >= 0.01}
+            except Exception:
+                others = {}
+            elsewhere = (" You have " + ", ".join(f"${b:.2f} on shard {i}" for i, b in sorted(others.items())) + "."
+                         if others else "")
+            fix = (funding_error + "." if funding_error else
+                   "Automatic shard funding is off (KALSHI_AUTO_SHARD_FUNDING=0): move cash at kalshi.com/account/exchange-indexes, "
+                   "or run kalshi-shards.bat to keep every shard funded."
+                   if not config.KALSHI_AUTO_SHARD_FUNDING else
+                   "Move cash at kalshi.com/account/exchange-indexes, or run kalshi-shards.bat to keep every shard funded.")
+            raise TradeError(f"This Kalshi market trades on exchange shard {shard} ({SHARD_NAMES.get(shard, 'another shard')}) "
+                             f"and you have ${balance['kalshi']:.2f} there{moved}.{elsewhere} Kalshi only lets an order use "
+                             f"cash on its own shard. {fix} Nothing was traded.")
         if n <= 0:
-            where = f" on shard {shard}" if shard else ""
+            where = f" on shard {shard}"
             limits = f"cap ${cap:.2f}, Kalshi cash{where} ${balance['kalshi']:.2f}, Polymarket buying power ${balance['polymarket']:.2f}"
             raise TradeError(f"Can't fit even one profitable pair within your limits ({limits}).")
 

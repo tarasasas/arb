@@ -329,3 +329,53 @@ class TogetherTests(unittest.TestCase):
             t.execute(t.prepare(LEGS)["id"])
         self.assertIn("Check that account", str(cm.exception))
         self.assertEqual([o[0] for o in p.orders], ["buy"])    # no sell-back on a maybe-filled order
+
+
+class MainShardFundingTests(unittest.TestCase):
+    def test_main_shard_is_funded_from_the_others_too(self):
+        class ShardVenue(FakeVenue):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.cash, self.funded = {0: 0.0, 2: 300.0}, []
+
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 0}
+
+            def balance(self, shard=None):
+                return self.cash[shard] if shard is not None else sum(self.cash.values())
+
+            def shard_balances(self):
+                return dict(self.cash)
+
+            def fund_shard(self, shard, dollars):
+                self.funded.append((shard, dollars))
+                self.cash[2] -= dollars
+                self.cash[shard] += dollars
+                return [(2, dollars)], self.cash[shard]
+        k = ShardVenue("kalshi", yes=[(0.40, 500)])
+        t = make(k, FakeVenue("polymarket", no=[(0.50, 500)]))
+        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+            plan = t.prepare(LEGS)
+        self.assertEqual(k.funded[0][0], 0)
+        self.assertEqual(plan["size"], 107)
+
+    def test_refused_transfer_is_explained(self):
+        class ShardVenue(FakeVenue):
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 0}
+
+            def balance(self, shard=None):
+                return 0.0
+
+            def shard_balances(self):
+                return {0: 0.0, 3: 80.0}
+
+            def fund_shard(self, shard, dollars):
+                raise trader_mod.ApiError(403, "transfers not enabled")
+        t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
+        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+            with self.assertRaises(TradeError) as cm:
+                t.prepare(LEGS)
+        msg = str(cm.exception)
+        self.assertIn("$80.00 on shard 3", msg)
+        self.assertIn("transfers not enabled", msg)
