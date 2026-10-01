@@ -269,6 +269,14 @@ class MyArbs:
                     else:
                         check = {"structure": "ok", "why": f"pays ${pay:g} per pair whatever happens"}
                         a["payout"] = pay
+                    # Payout date from the markets' current settle times (the later of the two).
+                    from .engine import _parse_time
+                    times = [t for t in (_parse_time(kc.close_time), _parse_time(pc.close_time)) if t]
+                    if times:
+                        closes = max(times).isoformat()
+                        if closes != a.get("closes"):
+                            a["closes"] = closes
+                            changed.append(a) if a not in changed else None
                 if (a.get("check") or {}).get("structure") != check["structure"]:
                     changed.append(a)
                 a["check"] = check

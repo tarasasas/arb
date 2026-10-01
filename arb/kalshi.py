@@ -54,6 +54,22 @@ class KalshiMarket:
     shard: int = 0
 
 
+def settle_time(m):
+    """When a Kalshi market is expected to settle (pay out). expected_expiration_time can be a placeholder
+    for a whole event (e.g. Dec 2028 on a "before 2027" market), so it's capped at the market's own
+    latest_expiration_time; close_time is the fallback."""
+    from datetime import datetime
+    def t(s):
+        try:
+            return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    exp, latest = m.get("expected_expiration_time"), m.get("latest_expiration_time")
+    if exp and latest and t(exp) and t(latest) and t(latest) < t(exp):
+        return latest
+    return exp or latest or m.get("close_time") or ""
+
+
 def parse_series(series_ticker):
     """KXNFL1HSPREAD -> (NFL, nfl, football, 1H, SPREAD) or None."""
     if not series_ticker.startswith("KX"):
@@ -117,7 +133,7 @@ def parse_market(m, series_info, fee_coef):
         sport=sport, body=body, date_code=date_code, teams_str=teams_str, kind=kind, period=period,
         team=team, op=op, line=line, title=m.get("title") or m["ticker"], name=m.get("yes_sub_title") or "",
         rules=((m.get("rules_primary") or "") + "\n\n" + (m.get("rules_secondary") or "")).strip(),
-        close_time=m.get("expected_expiration_time") or m.get("close_time") or "", fee_coef=fee_coef,
+        close_time=settle_time(m), fee_coef=fee_coef,
         shard=int(m.get("exchange_index") or 0),
     )
     km.yes_ask, km.no_ask = _f(m.get("yes_ask_dollars")), _f(m.get("no_ask_dollars"))

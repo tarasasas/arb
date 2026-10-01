@@ -138,3 +138,13 @@ class ParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SettleTimeTests(unittest.TestCase):
+    def test_event_placeholder_is_capped_by_the_markets_latest_settle(self):
+        from arb.kalshi import settle_time
+        m = {"close_time": "2027-01-01T04:59:00Z", "expected_expiration_time": "2028-12-31T15:00:00Z",
+             "latest_expiration_time": "2027-01-01T15:00:00Z"}                 # KXFEDHIKE "Before 2027"
+        self.assertEqual(settle_time(m), "2027-01-01T15:00:00Z")
+        self.assertEqual(settle_time({**m, "expected_expiration_time": "2026-12-20T15:00:00Z"}), "2026-12-20T15:00:00Z")
+        self.assertEqual(settle_time({"close_time": "2026-11-01T00:00:00Z"}), "2026-11-01T00:00:00Z")

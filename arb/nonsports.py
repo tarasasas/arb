@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 from .crypto import KALSHI_UPDOWN_15M
 from .engine import source_mismatch
-from .kalshi import KalshiMarket
+from .kalshi import KalshiMarket, settle_time as kalshi_settle_time
 from .model import Contract
 from .polymarket import PMMarket
 
@@ -591,7 +591,7 @@ def kalshi_market_obj(m, fee_coef):
         body=ev, date_code="", teams_str="", kind="EVENT", period="", team=None, op=">", line=0.5,
         title=m.get("title") or m["ticker"], name=m.get("yes_sub_title") or "",
         rules=((m.get("rules_primary") or "") + "\n\n" + (m.get("rules_secondary") or "")).strip(),
-        close_time=m.get("expected_expiration_time") or m.get("close_time") or "", fee_coef=fee_coef,
+        close_time=kalshi_settle_time(m), fee_coef=fee_coef,
         shard=int(m.get("exchange_index") or 0))
     km.yes_ask, km.no_ask = _f(m.get("yes_ask_dollars")), _f(m.get("no_ask_dollars"))
     return km

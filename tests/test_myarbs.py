@@ -258,3 +258,13 @@ class VerifyTests(unittest.TestCase):
         self.assertLess(m.summarize(self.m.items[0])["pair_edge"], 0)
         self.m.verify(lambda ex, mid: None)
         self.assertEqual(self.m.items[0]["check"]["structure"], "unknown")
+
+
+class PayoutDateTests(VerifyTests):
+    def test_payout_date_follows_the_markets(self):
+        self.track("yes", "no")
+        self.m.items[0]["closes"] = "2028-12-31T15:00:00+00:00"              # recorded from the old placeholder
+        self.c[("kalshi", "K")].close_time = "2027-01-01T15:00:00Z"
+        self.c[("polymarket", "p")].close_time = "2026-12-31T23:59:00Z"
+        self.m.verify(lambda ex, mid: self.c.get((ex, mid)))
+        self.assertEqual(self.m.items[0]["closes"], "2027-01-01T15:00:00+00:00")
