@@ -4,12 +4,11 @@ import os
 import re
 import urllib.error
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import config
-from .http import RateLimitedClient
+from .http import LanePool, RateLimitedClient
 from .kalshi_auth import load_signer
 
 DEFAULT_TOKEN_COST = 10   # all market-data GETs; see GET /account/endpoint_costs
@@ -264,7 +263,7 @@ class KalshiClient:
                 return []
 
         result = []
-        with ThreadPoolExecutor(self.workers) as pool:
+        with LanePool(self.workers) as pool:
             for i, kms in enumerate(pool.map(fetch, series)):
                 result += kms
                 if (i + 1) % 50 == 0:
@@ -283,7 +282,7 @@ class KalshiClient:
             except Exception:
                 return chunk, None
 
-        with ThreadPoolExecutor(self.workers) as pool:
+        with LanePool(self.workers) as pool:
             results = list(pool.map(fetch, chunks))
         for chunk, d in results:
             if d is None:

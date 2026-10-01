@@ -7,6 +7,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 USER_AGENT = "kalshi-polymarket-arb-scanner/0.1"
 
@@ -15,6 +17,38 @@ class ApiError(Exception):
     def __init__(self, status, detail):
         super().__init__(f"HTTP {status}: {detail}")
         self.status, self.detail = status, detail
+
+
+# ---- priority lane ---------------------------------------------------------------------------
+# Price re-checks of near-arbs, stream re-checks and trades run in the priority lane: while any of
+# them is waiting for a request slot, background work (market lists, full sweeps) holds back, so a
+# restart or a catalog reload never delays the checks that find and take arbs.
+_lane = threading.local()
+
+
+def is_priority():
+    return getattr(_lane, "priority", False)
+
+
+@contextmanager
+def priority():
+    old = is_priority()
+    _lane.priority = True
+    try:
+        yield
+    finally:
+        _lane.priority = old
+
+
+class LanePool(ThreadPoolExecutor):
+    """A thread pool whose workers keep the lane of the thread that handed them the work."""
+    def submit(self, fn, *args, **kwargs):
+        lane = is_priority()
+
+        def run(*a, **kw):
+            _lane.priority = lane
+            return fn(*a, **kw)
+        return super().submit(run, *args, **kwargs)
 
 
 class RateLimitedClient:
@@ -29,19 +63,31 @@ class RateLimitedClient:
         self.signer = signer
         self._lock = threading.Lock()
         self._next_slot = 0.0
+        self._priority_waiting = 0
         self.request_count = 0
 
     def set_rate(self, rps):
         self.min_interval = 1.0 / rps
 
     def _wait_turn(self):
+        pri = is_priority()
+        if not pri:
+            while self._priority_waiting:          # let the priority lane go first
+                time.sleep(self.min_interval)
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot)
             self._next_slot = slot + self.min_interval
-        delay = slot - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
+            if pri:
+                self._priority_waiting += 1
+        try:
+            delay = slot - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+        finally:
+            if pri:
+                with self._lock:
+                    self._priority_waiting -= 1
 
     def post(self, path, body):
         """POST JSON. Orders are not idempotent, so the only retry is on 429 (the request

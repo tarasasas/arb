@@ -18,7 +18,7 @@ import uuid
 from types import SimpleNamespace
 
 from . import config, engine
-from .http import ApiError
+from .http import ApiError, priority
 from .model import YES, guaranteed_payout, total_fee
 from .venues import Fill, floor_to
 
@@ -54,6 +54,10 @@ class Trader:
     # ---- planning ----------------------------------------------------------------------
 
     def prepare(self, legs, max_invest=None):
+        with priority():                   # trades go ahead of background market loads
+            return self._prepare(legs, max_invest)
+
+    def _prepare(self, legs, max_invest=None):
         if not self.venues:
             raise TradeError("Trading needs both API keys. Add POLYMARKET_KEY_ID and POLYMARKET_SECRET_KEY to .env.")
         by_ex = {l["exchange"]: l for l in legs}
@@ -138,7 +142,8 @@ class Trader:
             plan, info = entry
             if time.time() - plan["created"] > config.TRADE_PLAN_TTL_SECS:
                 raise TradeError("That plan expired (prices move fast). Press Make trade again for fresh numbers.")
-            return self._run(plan, info)
+            with priority():
+                return self._run(plan, info)
 
     def _run(self, plan, info):
         A = plan["legs"][plan["first"]]

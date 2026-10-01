@@ -345,7 +345,7 @@ missed Kalshi update forces a fresh book.
 
 ## Fast restarts (warm start)
 
-Matching every market on both sites takes a few minutes. So once a minute the scanner saves its
+Matching every market on both sites takes a few minutes. So every 5 minutes the scanner saves its
 matches and its near-arb list to `cache/warm.pkl` (git-ignored). On the next start it begins checking
 prices on those saved matches within seconds, and the live streams pick up the saved near-arb markets
 straight away, while fresh market lists load in the background.

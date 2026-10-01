@@ -1,11 +1,10 @@
 """Polymarket US public market data: sports market parsing, batched quotes, order books."""
 
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import config
-from .http import RateLimitedClient
+from .http import LanePool, RateLimitedClient
 
 PAGE = 500
 WORKERS = 6
@@ -152,7 +151,7 @@ class PolymarketClient:
     def load_sports_markets(self, log=print):
         """Pages are fetched in parallel waves; the listing ends at the first short page."""
         out, offset = [], 0
-        with ThreadPoolExecutor(WORKERS) as pool:
+        with LanePool(WORKERS) as pool:
             while True:
                 pages = list(pool.map(self._page, [offset + i * PAGE for i in range(WORKERS)]))
                 for ms in pages:
@@ -182,7 +181,7 @@ class PolymarketClient:
                 offset += PAGE
 
         out = {}
-        with ThreadPoolExecutor(min(WORKERS, max(1, len(categories)))) as pool:
+        with LanePool(min(WORKERS, max(1, len(categories)))) as pool:
             for ms in pool.map(one, categories):
                 for m in ms:
                     out.setdefault(m.get("slug"), m)
@@ -208,7 +207,7 @@ class PolymarketClient:
             except Exception:
                 return chunk, {}        # unpriced this cycle (handled below as "not seen")
 
-        with ThreadPoolExecutor(WORKERS) as pool:
+        with LanePool(WORKERS) as pool:
             for chunk, d in pool.map(fetch, chunks):
                 seen = set()
                 for m in d.get("markets") or []:

@@ -4,9 +4,9 @@ import threading
 import time
 import traceback
 from collections import Counter, deque
-from concurrent.futures import ThreadPoolExecutor
 
 from . import config, crypto, engine, kalshi, matching, nonsports, warmcache
+from .http import LanePool, priority
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
 from .myarbs import MyArbs
@@ -98,7 +98,7 @@ class Scanner:
     def refresh_catalog(self):
         t0 = time.time()
         self.log("Loading sports markets from both exchanges...")
-        with ThreadPoolExecutor(3) as pool:
+        with LanePool(3) as pool:
             pm_job = pool.submit(self.pm.load_sports_markets, self.log)
             k_job = pool.submit(self.kalshi.load_sports_markets, self.log)
             fee_job = pool.submit(self.kalshi.event_fee_overrides)
@@ -296,7 +296,7 @@ class Scanner:
         with self.lock:
             self.suggest_state["status"] = "building"
         self.log("Building non-sports match suggestions...")
-        with ThreadPoolExecutor(3) as pool:
+        with LanePool(3) as pool:
             j_pm = pool.submit(self.pm.raw_markets, nonsports.PM_CATEGORIES, self.log)
             j_ev = pool.submit(self.kalshi.open_events)
             j_fee = pool.submit(self.kalshi.series_fee_coefs)
@@ -370,7 +370,14 @@ class Scanner:
         """Full sweep (hot=False): every watched contract. Hot sweep: only the quantities that
         were within NEAR_MISS_EDGE of an arb on the last full sweep, so it takes ~1-2s.
         stream_groups: re-check just these pair groups on books the live streams already hold."""
+        if hot or stream_groups is not None:
+            with priority():               # near-arb and stream re-checks go ahead of background loads
+                return self._refresh_prices(hot, stream_groups)
+        return self._refresh_prices(hot, stream_groups)
+
+    def _refresh_prices(self, hot=False, stream_groups=None):
         t0 = time.time()
+        complete = bool(getattr(self, "catalog_time", 0) and getattr(self, "suggest_time", 0))   # covers every matched market
         with self.lock:
             contracts, source, groups = self.contracts, self.source, self.groups
             hot_keys = self.hot_groups
@@ -394,7 +401,7 @@ class Scanner:
         pms = [source[("polymarket", c.market_id)] for c in contracts
                if c.exchange == "polymarket" and ("polymarket", c.market_id) not in streamed]
         if stream_groups is None and (kms or pms):
-            with ThreadPoolExecutor(2) as pool:
+            with LanePool(2) as pool:
                 jobs = [pool.submit(self.kalshi.refresh_books, kms), pool.submit(self.pm.refresh_quotes, pms)]
                 for j in jobs:
                     j.result()
@@ -475,6 +482,7 @@ class Scanner:
                                    "maker": maker})
             if not hot:
                 self.state["last_full"] = now.isoformat()
+                self._warm_ready = complete
         self.merge_lock.release()
         self.alerter.check(opportunities)
         self.autotrader.check(opportunities)
@@ -591,14 +599,14 @@ class Scanner:
 
     WARM_STATE_KEYS = ("leagues", "unmatched", "tabs")
 
-    def save_warm(self, min_interval=60):
-        """Save the matched markets and near-arb list (at most once a minute) for a fast restart."""
-        if time.time() - getattr(self, "_warm_saved", 0) < min_interval or not self.catalog_time:
-            return
+    def save_warm(self, min_interval=300):
+        """Save the matched markets and near-arb list (at most every 5 minutes) for a fast restart."""
+        if time.time() - getattr(self, "_warm_saved", 0) < min_interval or not getattr(self, "_warm_ready", False):
+            return                         # only after a full sweep over every freshly matched market
         self._warm_saved = time.time()
         try:
             with self.lock:
-                data = {"sports_cat": self.sports_cat, "auto_pairs": self.auto_pairs,
+                data = {"sports_cat": self.sports_cat, "pairs_cat": self.pairs_cat, "auto_pairs": self.auto_pairs,
                         "suggestions": self.suggestions, "hot_groups": self.hot_groups,
                         "series_fees": self.series_fees, "fee_overrides": self.fee_overrides,
                         "state": {k: self.state.get(k) for k in self.WARM_STATE_KEYS},
@@ -614,6 +622,7 @@ class Scanner:
             return False
         try:
             self.sports_cat = d["sports_cat"]
+            self.pairs_cat = d.get("pairs_cat") or ([], {})
             self.series_fees, self.fee_overrides = d.get("series_fees") or {}, d.get("fee_overrides") or {}
             with self.lock:
                 self.auto_pairs, self.suggestions = d.get("auto_pairs") or [], d.get("suggestions") or []
@@ -626,10 +635,12 @@ class Scanner:
             self.log(f"Warm start skipped ({e!r}); loading everything fresh")
             self.sports_cat, self.hot_groups = ([], {}), {}
             return False
-        try:
-            self.refresh_pairs()           # a few requests: current terms for the non-sports pairs
-        except Exception as e:
-            self.log(f"Warm start: non-sports pairs wait for the fresh load ({e!r})")
+        def pairs():                       # current terms for the non-sports pairs, without holding up the start
+            try:
+                self.refresh_pairs()
+            except Exception as e:
+                self.log(f"Warm start: non-sports pairs wait for the fresh load ({e!r})")
+        threading.Thread(target=pairs, daemon=True).start()
         age = (time.time() - d["time"]) / 60
         self.log(f"Warm start: scanning {len(self.contracts)} contracts matched {age:.0f} min ago and "
                  f"{sum(len(v) for v in self.hot_groups.values())} near-arb markets right away; "

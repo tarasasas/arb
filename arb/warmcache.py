@@ -14,7 +14,7 @@ import time
 from . import config
 
 PATH = config.PROJECT_ROOT / "cache" / "warm.pkl"
-VERSION = 1
+VERSION = 2
 MAX_AGE_SECS = 12 * 3600
 
 
