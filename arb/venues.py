@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from . import config
-from .http import ApiError, RateLimitedClient
+from .http import ApiError, RateLimitedClient, priority
 from .model import fee_per_contract
 
 
@@ -198,9 +198,12 @@ class PolymarketVenue:
         if any(o.get("state") in self.TERMINAL for o in orders):
             return best
         oid = r.get("id") or best.get("id")
-        for _ in range(20):
-            time.sleep(0.25)
-            d = self.http.get(f"/v1/order/{oid}")
+        delay, deadline = 0.05, time.monotonic() + 5.0     # check soon, then back off (was 0.25s fixed)
+        while time.monotonic() < deadline:
+            time.sleep(delay)
+            delay = min(delay * 1.6, 0.25)
+            with priority():
+                d = self.http.get(f"/v1/order/{oid}")
             o = d.get("order", d)
             if o.get("state") in self.TERMINAL:
                 return o

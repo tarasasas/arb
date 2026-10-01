@@ -692,6 +692,7 @@ function showResult(res) {
         · net <b>${money(res.net)}</b></div>
       ${unhedged ? `<div class="alert">⚠ ${compact(res.unhedged_shares)} ${esc(res.unhedged_exchange)} ${esc(res.unhedged_side.toUpperCase())}
         shares are still unhedged. Sell them or hedge them manually.</div>` : ""}
+      ${res.timeline?.stages ? `<div class="policy">Timing: ${Object.entries(res.timeline.stages).map(([k, v]) => `${esc(k)} ${v} ms`).join(" · ")}</div>` : ""}
       <div class="policy">Check both accounts to confirm. Details are in D:\\Projects\\arb\\trades.jsonl.</div>
       <div class="actions"><button class="primary" onclick="closeModal()">Done</button></div>`);
 }
@@ -715,7 +716,16 @@ async function fastTrade(key) {
 }
 
 // Auto-trade: places fast-eligible arbs by itself, within the caps in .env. Off every time the scanner starts.
-let autoOpen = false;
+const autoOpenSet = {};
+// Tick-to-trade: typical (p50) and slow-case (p95) milliseconds per stage over the last 50 trades.
+function speedHtml(lat) {
+  if (!lat) return "";
+  const rows = Object.entries(lat).map(([stage, v]) => `<tr><td>${esc(stage)}</td><td class="num">${v.p50} ms</td>
+    <td class="num">${v.p95} ms</td><td class="num muted">${v.n}</td></tr>`).join("");
+  return `<details class="speed"><summary class="muted">Speed: tick to trade (last ${Math.max(...Object.values(lat).map(v => v.n))} trades)</summary>
+    <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Stage</th><th class="num">Typical (p50)</th>
+    <th class="num">Slow (p95)</th><th class="num">Trades</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+}
 function renderAuto(s) {
   const a = s.autotrade, el = document.getElementById("autobar");
   if (!a) { el.style.display = "none"; return; }
@@ -724,6 +734,7 @@ function renderAuto(s) {
   const hist = (a.history || []).map(h => `<li>${esc(h.time.slice(11))} · ${esc(h.game || "")} · <b>${esc(h.status)}</b>${
     h.spent == null ? "" : h.status === "ok" ? ` · ${money(h.spent)} in, net ${money(h.net)}`
       : ` · ${h.pairs ? `${compact(h.pairs)} pairs kept, ` : ""}net ${money(h.net)}`}${h.unhedged ? ` · <span style="color:var(--critical)">${compact(h.unhedged)} unhedged</span>` : ""}${
+    h.ms && h.ms["total (tick to done)"] != null ? ` · <span class="muted">${h.ms["total (tick to done)"]} ms tick to done</span>` : ""}${
     h.note ? ` <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("");
   el.innerHTML = `<b>⚡ Auto-trade</b>
     <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
@@ -736,9 +747,13 @@ function renderAuto(s) {
       <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}
     ${a.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(a.halted)}</div>` : ""}
     ${!on && !a.on ? `<span class="muted">(trading ${esc(state?.stats?.trading || "is off")})</span>` : ""}
-    ${hist ? `<details><summary class="muted">Last auto-trades</summary><ol>${hist}</ol></details>` : ""}`;
-  const d = el.querySelector("details");
-  if (d) { d.open = autoOpen; d.addEventListener("toggle", () => { autoOpen = d.open; }); }
+    ${hist ? `<details><summary class="muted">Last auto-trades</summary><ol>${hist}</ol></details>` : ""}
+    ${speedHtml(s.latency)}`;
+  el.querySelectorAll("details").forEach((d, i) => {      // keep each section open across refreshes
+    const key = d.classList.contains("speed") ? "speed" : "history";
+    d.open = !!autoOpenSet[key];
+    d.addEventListener("toggle", () => { autoOpenSet[key] = d.open; });
+  });
   document.getElementById("auto-toggle").onclick = async () => {
     if (!a.on && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
         `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for arbs settling within ${a.fast_max_hours}h` +

@@ -42,7 +42,13 @@ def spent(result):
 
 
 def record_trade(scanner, result, row, label="Trade"):
-    """After any trade: refresh cash, add it to My arbs, and log it."""
+    """After any trade: refresh cash, add it to My arbs, note its timing, and log it."""
+    stages = (result.get("timeline") or {}).get("stages")
+    if stages and hasattr(scanner, "note_latency"):
+        scanner.note_latency(stages)
+    with scanner.lock:                      # cash changed: the next trade downloads it until the refresh lands
+        if scanner.state.get("balances"):
+            scanner.state["balances"] = {**scanner.state["balances"], "stale": True}
     threading.Thread(target=scanner.refresh_balances, daemon=True).start()
     try:
         if result.get("plan"):
@@ -61,8 +67,10 @@ def current_row(scanner, legs):
     return next((r for r in rows if pair_id(r["legs"]) == want), None)
 
 
-def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.0, min_roi=0.0, cap=None):
+def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.0, min_roi=0.0, cap=None,
+               decided=None):
     """Plan and place a trade in one step, for an arb the scanner currently lists as fast."""
+    decided = decided or time.time()
     row = current_row(scanner, legs)
     if row is None:
         raise TradeError("This arb isn't on the list any more (the prices moved). Nothing was traded.")
@@ -71,7 +79,8 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
         raise TradeError(f"{label} isn't allowed for this arb ({fast.get('why', 'not checked')}). Use Make trade.")
     cap = min(x for x in (cap or config.FAST_MAX_TRADE, max_invest) if x)
     trader = scanner.trader
-    plan = trader.prepare(legs, cap)
+    plan = trader.prepare(legs, cap, timeline={"tick": row.get("tick_ts"), "detected": row.get("detected_ts"),
+                                               "decided": decided})
     roi = plan["expected_profit"] / plan["capital"] if plan["capital"] else 0
     if plan["expected_profit"] < min_profit or roi < min_roi:
         trader.plans.pop(plan["id"], None)
@@ -145,25 +154,25 @@ class AutoTrader:
                 return None
             self.busy = True
             self.tried[pair_id(row["legs"])] = time.time()
-        args = (row, min(config.AUTO_TRADE_MAX_TRADE, room))
+        args = (row, min(config.AUTO_TRADE_MAX_TRADE, room), time.time())
         if self.run_async:
             threading.Thread(target=self._run, args=args, daemon=True).start()
         else:
             self._run(*args)
         return row
 
-    def _run(self, row, cap):
+    def _run(self, row, cap, decided=None):
         entry = {"time": datetime.now().isoformat(timespec="seconds"), "game": row.get("game"),
                  "tab": row.get("tab"), "legs": [f"{l['exchange']} Buy {l['side'].upper()}" for l in row["legs"]]}
         try:
-            res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap,
+            res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap, decided=decided,
                              min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI)
             used = spent(res)
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used
                 self.net[self._today()] = self.net.get(self._today(), 0.0) + res["net"]
             entry.update({"status": res["status"], "pairs": res["hedged_pairs"], "spent": used, "net": res["net"],
-                          "unhedged": res["unhedged_shares"]})
+                          "unhedged": res["unhedged_shares"], "ms": (res.get("timeline") or {}).get("stages")})
             if res["status"] in ("partial", "no_fill"):
                 # The second leg missed (or the first didn't fill): leave this game alone for a while.
                 self.game_pause[row.get("game")] = time.time() + config.AUTO_TRADE_GAME_COOLDOWN_SECS

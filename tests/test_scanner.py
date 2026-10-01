@@ -113,6 +113,7 @@ class HotPassTests(unittest.TestCase):
                 for c in lst:
                     self.s.market_groups.setdefault((c.exchange, c.market_id), set()).add(g)
         self.s.dirty, self.s.dirty_lock = set(), __import__("threading").Lock()
+        self.s._tick = __import__("threading").Event()
         self.s.on_stream_update("polymarket", "pA")           # a price moved on game A
         gs = set().union(*(self.s.market_groups[d] for d in self.s.dirty))
         self.s.refresh_prices(stream_groups=gs)
@@ -211,3 +212,33 @@ class FocusTests(unittest.TestCase):
         self.assertEqual(s2.focus_days, 7)                      # kept for the next start
         s.set_focus(0)
         self.assertEqual(len(s.contracts), 6)
+
+
+class PrefundTests(unittest.TestCase):
+    def make(self, shards, rows):
+        import threading
+        from types import SimpleNamespace
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock = threading.Lock()
+        s.logs, s.log_to_console = __import__("collections").deque(maxlen=10), False
+        moved = []
+        kv = SimpleNamespace(transfer=lambda src, dst, amt: moved.append((src, dst, amt)))
+        s.trader = SimpleNamespace(venues={"kalshi": kv})
+        s.state = {"balances": {"kalshi_shards": {str(k): v for k, v in shards.items()}, "time": "x"},
+                   "opportunities": rows}
+        return s, moved
+
+    def test_tops_up_shards_with_opportunities(self):
+        s, moved = self.make({0: 300.0, 2: 5.0, 3: 0.0}, [{"kalshi_shard": 2}, {"kalshi_shard": 0}])
+        s.prefund_shards(now=1000)
+        self.assertEqual(moved, [(0, 2, 45.0)])                  # up to one trade's worth ($50); 3 has no arbs
+        self.assertTrue(s.state["balances"]["stale"])
+        moved.clear()
+        s.state["balances"].pop("stale")
+        s.prefund_shards(now=1030)
+        self.assertEqual(moved, [])                               # at most once a minute per shard
+
+    def test_never_drains_a_shard_that_needs_its_cash(self):
+        s, moved = self.make({0: 60.0, 2: 0.0}, [{"kalshi_shard": 2}, {"kalshi_shard": 0}])
+        s.prefund_shards(now=1000)
+        self.assertEqual(moved, [(0, 2, 10.0)])                   # shard 0 keeps its own $50

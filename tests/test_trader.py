@@ -424,3 +424,87 @@ class ParallelChecksTests(unittest.TestCase):
                 return super().levels(mid)
         t = make(Waiting("kalshi", yes=[(0.40, 500)]), Waiting("polymarket", no=[(0.50, 500)]))
         self.assertEqual(t.prepare(LEGS)["size"], 107)
+
+
+class FastPathTests(unittest.TestCase):
+    def make_scanner(self, book_age=0.1, cash_age=5):
+        import threading
+        from datetime import timedelta
+        from types import SimpleNamespace
+        sc = FakeScanner()
+        now = __import__("time").time()
+        sc.lock = threading.Lock()
+        sc.source = {("kalshi", "K"): SimpleNamespace(levels={"yes": [(0.40, 500)], "no": []}),
+                     ("polymarket", "P"): SimpleNamespace(levels={"yes": [], "no": [(0.50, 500)]})}
+        sc.streams = {ex: SimpleNamespace(connected=True, updated_at={mid: now - book_age})
+                      for ex, mid in (("kalshi", "K"), ("polymarket", "P"))}
+        t = (trader_mod.engine.now_utc() - timedelta(seconds=cash_age)).isoformat()
+        sc.state = {"balances": {"kalshi": 500.0, "polymarket": 500.0, "kalshi_shards": {"0": 500.0}, "time": t}}
+        return sc
+
+    class Counting(FakeVenue):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.calls = []
+
+        def levels(self, mid):
+            self.calls.append("levels")
+            return super().levels(mid)
+
+        def balance(self, shard=None):
+            self.calls.append("balance")
+            return super().balance(shard)
+
+        def market_info(self, mid):
+            self.calls.append("info")
+            return super().market_info(mid)
+
+    def test_fresh_stream_and_cash_mean_no_downloads(self):
+        k, p = self.Counting("kalshi", yes=[(0.40, 500)]), self.Counting("polymarket", no=[(0.50, 500)])
+        t = Trader(self.make_scanner(), {"kalshi": k, "polymarket": p})
+        plan = t.prepare(LEGS)
+        self.assertEqual(plan["size"], 107)
+        self.assertEqual((k.calls, p.calls), (["info"], ["info"]))          # market details, first time only
+        self.assertEqual(plan["checks"]["kalshi_book"], "stream")
+        k.calls.clear(); p.calls.clear()
+        t.prepare(LEGS)
+        self.assertEqual((k.calls, p.calls), ([], []))                      # nothing downloaded at all
+
+    def test_stale_stream_or_cash_downloads(self):
+        k, p = self.Counting("kalshi", yes=[(0.40, 500)]), self.Counting("polymarket", no=[(0.50, 500)])
+        sc = self.make_scanner(book_age=5, cash_age=60)
+        t = Trader(sc, {"kalshi": k, "polymarket": p})
+        plan = t.prepare(LEGS)
+        self.assertIn("levels", k.calls)
+        self.assertIn("balance", p.calls)
+        self.assertEqual(plan["checks"]["polymarket_cash"], "download")
+        sc.state["balances"]["time"] = trader_mod.engine.now_utc().isoformat()
+        sc.state["balances"]["stale"] = True                                 # a trade just happened
+        p.calls.clear()
+        t.prepare(LEGS)
+        self.assertIn("balance", p.calls)
+
+
+@mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
+@mock.patch.object(trader_mod.config, "TRADE_ORDER", "polymarket_first")
+class TimelineTests(unittest.TestCase):
+    def test_trade_reports_each_stage(self, *_):
+        import time as _t
+        t = make(FakeVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
+        now = _t.time()
+        plan = t.prepare(LEGS, timeline={"tick": now - 0.30, "detected": now - 0.25, "decided": now - 0.20})
+        res = t.execute(plan["id"])
+        st = res["timeline"]["stages"]
+        self.assertEqual(st["tick to detected"], 50)
+        self.assertEqual(st["detected to decided"], 50)
+        for k in ("checks", "Polymarket order", "Kalshi order", "total (tick to done)"):
+            self.assertIn(k, st)
+        self.assertGreaterEqual(st["total (tick to done)"], 300)
+
+    def test_summary_p50_p95(self, *_):
+        from arb import scanner
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        for ms in range(1, 101):
+            s.note_latency({"Kalshi order": ms})
+        summ = s.latency_summary()["Kalshi order"]
+        self.assertEqual((summ["n"], summ["p50"], summ["p95"]), (50, 76, 98))   # last 50: 51..100

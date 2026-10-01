@@ -468,6 +468,33 @@ found also pays out within that window, so your cash comes back sooner. The sett
 it applies right away, and the scanner keeps it in `cache/focus.json` across restarts. The
 "Contracts watched" tile shows the focus.
 
+## Latency: tick to trade
+
+Every trade records a timeline in milliseconds, and the result screen and **Last auto-trades** show it:
+- **tick to detected:** the price change arriving, to the arb being found;
+- **detected to decided:** the arb being found, to Auto-trade deciding to take it (or you clicking);
+- **checks:** the pre-trade checks;
+- **each order:** from being sent to the exchange's final answer;
+- **total:** from the tick to done.
+
+**Auto-trade → Speed** shows typical (p50) and slow-case (p95) times over the last 50 trades.
+
+What keeps it short:
+- **Streamed ticks:** a price change is re-checked the moment it arrives (no polling interval).
+- **Checks without downloads:** in the common case the pre-trade checks download nothing. They use the
+  stream's book if it updated within the last second, the market's details cached for a minute, and the
+  scanner's cash reading (refreshed every 15 seconds, and downloaded fresh after any trade).
+- **Pacing:** trades' requests may burst without waiting for the steady pace, and orders never wait for
+  a slot.
+- **Kept-alive connections:** connections to both sites stay open, which saves a TLS handshake per request.
+- **Polymarket order confirmation:** checked after 50 ms, then backing off (it was every 250 ms).
+- **Kalshi shard cash:** kept topped up in the background, one trade's worth on every shard with a current
+  opportunity, so a trade doesn't wait for a transfer.
+- **Polymarket goes first** (see Make trade), so a slow Polymarket miss trades nothing.
+
+The floor is the two exchanges' own response times over your internet connection. Run
+`latency-test.bat` to see yours.
+
 ## Fast restarts (warm start)
 
 Matching every market on both sites takes a few minutes. So every 5 minutes the scanner saves its

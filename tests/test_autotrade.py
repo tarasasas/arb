@@ -66,7 +66,7 @@ class FakeTrader:
         self.result = result or {"status": "ok", "plan": {"payout": 1.0}, "hedged_pairs": 20, "net": 1.0, "unhedged_shares": 0,
                                  "legs_filled": {"kalshi": {"paid": 9.0}, "polymarket": {"paid": 10.5}}}
 
-    def prepare(self, legs, cap):
+    def prepare(self, legs, cap, timeline=None):
         self.calls.append(("prepare", cap))
         if self.fail:
             raise TradeError(self.fail)

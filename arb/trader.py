@@ -23,6 +23,21 @@ from .model import YES, guaranteed_payout, total_fee
 from .venues import Fill, floor_to
 
 EXCHANGES = ("kalshi", "polymarket")
+_TL_LOCK = threading.Lock()
+
+
+def timeline_stages(tl):
+    """Milliseconds per stage of one trade's timeline (stages it didn't have are left out)."""
+    def ms(a, b):
+        return round((tl[b] - tl[a]) * 1000) if tl.get(a) and tl.get(b) else None
+    out = {"tick to detected": ms("tick", "detected"), "detected to decided": ms("detected", "decided"),
+           "checks": ms("decided", "checks_done")}
+    for o in tl.get("orders") or []:
+        name = f"{NAMES[o['exchange']]} order"
+        if name not in out:
+            out[name] = round((o["acked"] - o["sent"]) * 1000)
+    out["total (tick to done)"] = ms("tick", "done") if tl.get("tick") else ms("decided", "done")
+    return {k: v for k, v in out.items() if v is not None}
 SHARD_NAMES = {0: "main", 1: "combos", 2: "crypto and commodities", 3: "tennis, baseball and basketball"}
 NAMES = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
 
@@ -51,12 +66,71 @@ class Trader:
         """venues: {"kalshi": KalshiVenue, "polymarket": PolymarketVenue} or None if not configured."""
         self.scanner, self.venues = scanner, venues
         self.plans, self.lock = {}, threading.Lock()
+        self._info_cache = {}            # (exchange, market id) -> (time, market info)
+
+    # ---- tick-to-trade timeline -------------------------------------------------------------
+
+    def _timed_buy(self, plan, kind, leg, qty, limit):
+        """venue.buy, recording when the order went out and when its final answer came back."""
+        sent = time.time()
+        try:
+            return self.venues[leg["exchange"]].buy(leg["market_id"], leg["side"], qty, limit, leg["fee_coef"])
+        finally:
+            with _TL_LOCK:
+                plan.setdefault("timeline", {}).setdefault("orders", []).append(
+                    {"exchange": leg["exchange"], "kind": kind, "sent": sent, "acked": time.time()})
+
+    # ---- fast paths for the pre-trade checks -------------------------------------------------
+
+    def _market_info(self, ex, venue, mid):
+        hit = self._info_cache.get((ex, mid))
+        if hit and time.time() - hit[0] < config.MARKET_INFO_TTL:
+            return hit[1], "cached"
+        info = venue.market_info(mid)
+        self._info_cache[(ex, mid)] = (time.time(), info)
+        return info, "download"
+
+    def _live_book(self, ex, mid):
+        """The stream's book for this market if it updated within LIVE_BOOK_MAX_AGE, else None."""
+        stream = (getattr(self.scanner, "streams", None) or {}).get(ex)
+        source = getattr(self.scanner, "source", None) or {}
+        m = source.get((ex, mid))
+        if not stream or m is None or not getattr(stream, "connected", False):
+            return None
+        t = getattr(stream, "updated_at", {}).get(mid)
+        if not t or time.time() - t > config.LIVE_BOOK_MAX_AGE or not getattr(m, "levels", None):
+            return None
+        return {"yes": list(m.levels.get("yes") or []), "no": list(m.levels.get("no") or [])}
+
+    def _cached_cash(self, ex, shard=None):
+        """Cash from the scanner's balance reading if it's fresh (and not marked stale by a trade)."""
+        state = getattr(self.scanner, "state", None) or {}
+        b = state.get("balances") or {}
+        if not b.get("time") or b.get("stale") or b.get("error"):
+            return None
+        try:
+            age = (engine.now_utc() - engine._parse_time(b["time"])).total_seconds()
+        except Exception:
+            return None
+        if age > config.CASH_MAX_AGE:
+            return None
+        if ex == "kalshi":
+            shards = b.get("kalshi_shards")
+            if shards is not None:
+                return shards.get(str(shard or 0))
+            return b.get("kalshi") if not shard else None
+        return b.get("polymarket")
 
     # ---- planning ----------------------------------------------------------------------
 
-    def prepare(self, legs, max_invest=None):
+    def prepare(self, legs, max_invest=None, timeline=None):
+        tl = dict(timeline or {})
+        tl.setdefault("decided", time.time())      # Make trade: the click is the decision
         with priority():                   # trades go ahead of background market loads
-            return self._prepare(legs, max_invest)
+            plan = self._prepare(legs, max_invest)
+        tl["checks_done"] = time.time()
+        plan["timeline"] = tl
+        return plan
 
     def _prepare(self, legs, max_invest=None):
         if not self.venues:
@@ -78,17 +152,23 @@ class Trader:
         # cash per site; Kalshi's cash depends on the market's shard, so it follows its market info.
         info, levels, balance = {}, {}, {}
 
+        # In the common case none of this downloads anything: the stream's book, cached market details
+        # and the scanner's recent cash reading are used, and only what's missing is fetched.
+        checks = {}
+
         def read(ex):
             v, mid = self.venues[ex], contracts[ex].market_id
+            info[ex], checks[f"{ex}_info"] = self._market_info(ex, v, mid)
+            shard = info[ex].get("shard") if ex == "kalshi" else None
             with LanePool(2) as pool:
-                book = pool.submit(v.levels, mid)
-                if ex == "kalshi":
-                    info[ex] = v.market_info(mid)
-                    cash = pool.submit(v.balance, info[ex].get("shard"))
-                else:
-                    cash = pool.submit(v.balance, None)
-                    info[ex] = v.market_info(mid)
-                levels[ex], balance[ex] = book.result()[sides[ex]], cash.result()
+                live = self._live_book(ex, mid)
+                book = None if live is not None else pool.submit(v.levels, mid)
+                cached = self._cached_cash(ex, shard)
+                cash = None if cached is not None else pool.submit(v.balance, shard)
+                levels[ex] = (live if live is not None else book.result())[sides[ex]]
+                balance[ex] = cached if cached is not None else cash.result()
+            checks[f"{ex}_book"] = "stream" if live is not None else "download"
+            checks[f"{ex}_cash"] = "cached" if cached is not None else "download"
         with LanePool(2) as pool:
             for job in [pool.submit(read, ex) for ex in EXCHANGES]:
                 job.result()
@@ -183,6 +263,7 @@ class Trader:
         }
         plan["capital"] = sum(c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES)
         plan["shard_transfers"] = transfers
+        plan["checks"] = checks
         plan["together"] = mode == "together"
         plan["order_mode"] = mode
         plan["expected_profit"] = payout * n - plan["capital"]
@@ -201,7 +282,11 @@ class Trader:
             if time.time() - plan["created"] > config.TRADE_PLAN_TTL_SECS:
                 raise TradeError("That plan expired (prices move fast). Press Make trade again for fresh numbers.")
             with priority():
-                return self._run(plan, info)
+                res = self._run(plan, info)
+        tl = plan.setdefault("timeline", {})
+        tl["done"] = time.time()
+        res["timeline"] = {"stages": timeline_stages(tl), "checks": plan.get("checks")}
+        return res
 
     def _run(self, plan, info):
         A = plan["legs"][plan["first"]]
@@ -231,7 +316,7 @@ class Trader:
 
         # 1. first leg
         try:
-            fa = va.buy(A["market_id"], A["side"], plan["size"], A["limit"], A["fee_coef"])
+            fa = self._timed_buy(plan, "first", A, plan["size"], A["limit"])
         except ApiError as e:
             record("first", A, error=str(e))
             self._write(log, status="failed_first_leg")
@@ -260,8 +345,7 @@ class Trader:
 
         def send(leg):
             try:
-                return self.venues[leg["exchange"]].buy(leg["market_id"], leg["side"], plan["size"], leg["limit"],
-                                                        leg["fee_coef"]), None
+                return self._timed_buy(plan, "together", leg, plan["size"], leg["limit"]), None
             except Exception as e:
                 return None, e
         with LanePool(2) as pool:
@@ -311,7 +395,7 @@ class Trader:
                 note = "No second-leg price can break even anymore."
                 break
             try:
-                fb = vb.buy(B["market_id"], B["side"], remaining, limit, B["fee_coef"])
+                fb = self._timed_buy(plan, "second" if attempt == 0 else f"retry {attempt}", B, remaining, limit)
             except ApiError as e:
                 record("second", B, error=str(e))
                 steps.append(f"{NAMES[B['exchange']]}: order rejected ({e.detail})")

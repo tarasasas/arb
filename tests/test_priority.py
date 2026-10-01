@@ -38,7 +38,7 @@ class PriorityLaneTests(unittest.TestCase):
 
 class FairShareTests(unittest.TestCase):
     def test_background_still_gets_slots_under_constant_priority_load(self):
-        c = RateLimitedClient("https://example.com", rps=100)
+        c = RateLimitedClient("https://example.com", rps=100, burst=2)   # steady-state sharing, not the burst
         stop = time.monotonic() + 0.5
         counts = {"pri": 0, "bg": 0}
 
@@ -60,3 +60,28 @@ class FairShareTests(unittest.TestCase):
         total = counts["pri"] + counts["bg"]
         self.assertGreater(counts["bg"], total * 0.3)        # ~1 in 2
         self.assertGreater(counts["pri"], total * 0.3)
+
+
+class BurstTests(unittest.TestCase):
+    def test_priority_requests_burst_then_keep_the_pace(self):
+        c = RateLimitedClient("https://example.com", rps=20, burst=5)     # 50 ms apart, 5 at once
+        t0 = time.monotonic()
+        with priority():
+            for _ in range(5):
+                c._wait_turn()
+        self.assertLess(time.monotonic() - t0, 0.03)                     # the burst went out at once
+        t1 = time.monotonic()
+        with priority():
+            for _ in range(4):
+                c._wait_turn()
+        self.assertGreater(time.monotonic() - t1, 0.12)                  # then back to ~50 ms apart
+
+    def test_background_never_bursts_and_orders_never_wait(self):
+        c = RateLimitedClient("https://example.com", rps=20, burst=5)
+        t0 = time.monotonic()
+        for _ in range(3):
+            c._wait_turn()
+        self.assertGreater(time.monotonic() - t0, 0.08)
+        t1 = time.monotonic()
+        c._wait_turn(order=True)
+        self.assertLess(time.monotonic() - t1, 0.01)

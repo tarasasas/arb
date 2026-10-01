@@ -1,6 +1,7 @@
 """Background scan loop: refresh catalogs, match games, refresh prices, find arbs."""
 
 import json
+import math
 import threading
 import time
 import traceback
@@ -43,6 +44,7 @@ class Scanner:
         self.streams = {}               # live order-book streams, by exchange (need API keys)
         self.market_groups = {}         # (exchange, market id) -> pair groups it's in
         self.dirty, self.dirty_lock = set(), threading.Lock()
+        self._tick = threading.Event()
         self.merge_lock = threading.Lock()   # one pass at a time merges into the opportunities list
         from .alerts import Alerter
         self.alerter = Alerter(self.log)
@@ -81,6 +83,21 @@ class Scanner:
     def find_contract(self, exchange, market_id):
         with self.lock:
             return self.contract_index.get((exchange, market_id))
+
+    def note_latency(self, stages):
+        self.__dict__.setdefault("_latency", deque(maxlen=50)).append(stages)
+
+    def latency_summary(self):
+        """p50 / p95 milliseconds per stage over the last 50 trades."""
+        samples = list(getattr(self, "_latency", []))
+        if not samples:
+            return None
+        out = {}
+        for stage in dict.fromkeys(k for s in samples for k in s):
+            vals = sorted(s[stage] for s in samples if stage in s)
+            out[stage] = {"p50": vals[len(vals) // 2], "p95": vals[min(len(vals) - 1, int(len(vals) * 0.95))],
+                          "n": len(vals)}
+        return out
 
     def take_over_shard_funding(self):
         """With KALSHI_AUTO_SHARD_FUNDING the app moves cash between Kalshi shards as each trade needs it.
@@ -325,7 +342,54 @@ class Scanner:
     def _balances_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
             self.refresh_balances()
+            try:
+                self.prefund_shards()
+            except Exception as e:
+                self.log(f"Kalshi shards: top-up failed ({e!r})")
             time.sleep(config.BALANCES_REFRESH_SECS)
+
+    def prefund_shards(self, now=None):
+        """Keep one trade's worth of cash on every Kalshi shard that has an opportunity right now, so
+        a trade there doesn't wait for a transfer. Moves from your richest other shard (never below
+        what that shard needs itself); at most once a minute per shard. Returns the moves made."""
+        kv = (self.trader.venues or {}).get("kalshi") if self.trader else None
+        if not (config.KALSHI_AUTO_SHARD_FUNDING and kv and hasattr(kv, "transfer")):
+            return []
+        with self.lock:
+            b = dict(self.state.get("balances") or {})
+            rows = list(self.state.get("opportunities") or [])
+        cash = {int(k): float(v) for k, v in (b.get("kalshi_shards") or {}).items()}
+        if not cash or b.get("stale") or b.get("error"):
+            return []
+        target = max(config.FAST_MAX_TRADE, config.AUTO_TRADE_MAX_TRADE)
+        needed = {int(r.get("kalshi_shard") or 0) for r in rows}
+        now = now or time.time()
+        last = self.__dict__.setdefault("_prefund_at", {})
+        moves = []
+        for shard in sorted(needed):
+            short = target - cash.get(shard, 0.0)
+            if short < 1 or now - last.get(shard, 0) < 60:
+                continue
+            for src in sorted((i for i in cash if i != shard), key=lambda i: -cash[i]):
+                spare = cash[src] - (target if src in needed else 0.0)
+                amount = math.floor(min(short, spare) * 100) / 100
+                if amount < 1:
+                    continue
+                kv.transfer(src, shard, amount)
+                cash[src] -= amount
+                cash[shard] = cash.get(shard, 0.0) + amount
+                short -= amount
+                moves.append((src, shard, amount))
+                if short < 1:
+                    break
+            last[shard] = now
+        for src, dst, amount in moves:
+            self.log(f"Kalshi shards: moved ${amount:.2f} from shard {src} to shard {dst} ahead of trades there")
+        if moves:
+            with self.lock:
+                if self.state.get("balances"):
+                    self.state["balances"] = {**self.state["balances"], "stale": True}
+        return moves
 
     def _positions_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
@@ -443,6 +507,7 @@ class Scanner:
 
     def _refresh_prices(self, hot=False, stream_groups=None):
         t0 = time.time()
+        t0_wall = t0                       # polled prices: the pass's start is the tick
         complete = bool(getattr(self, "catalog_time", 0) and getattr(self, "suggest_time", 0))   # covers every matched market
         with self.lock:
             contracts, source, groups = self.contracts, self.source, self.groups
@@ -540,6 +605,13 @@ class Scanner:
                 if sizing and sizing["profit"] >= config.MIN_PROFIT_DOLLARS:
                     row = engine.to_row(cand, sizing, now)
                     row["kalshi_shard"] = getattr(km, "shard", 0)   # Kalshi cash is held per shard
+                    # Tick-to-trade timing: when the price that made this row arrived, and when it was found.
+                    ticks = [getattr(s, "updated_at", {}).get(mid) for ex, mid in (("kalshi", cand["k"].market_id),
+                                                                   ("polymarket", pm_slug))
+                             for s in [self.streams.get(ex)] if s is not None]
+                    ticks = [t for t in ticks if t]
+                    row["tick_ts"] = max(ticks) if ticks else t0_wall
+                    row["detected_ts"] = time.time()
                     opportunities.append(row)
                     continue
             if len(near) < config.MAX_NEAR_MISSES and _cand_key(cand) not in unchecked:
@@ -641,10 +713,14 @@ class Scanner:
     def on_stream_update(self, exchange, market_id):
         with self.dirty_lock:
             self.dirty.add((exchange, market_id))
+        self._tick.set()                    # wake the re-check now, not on the next poll
 
     def _stream_loop(self, stop_event):
-        """Re-check the pairs a streamed price change touches, within ~0.1s of the change."""
+        """Re-check the pairs a streamed price change touches, as soon as it arrives. Ticks that
+        come in while a re-check runs are batched into the next one."""
         while not (stop_event and stop_event.is_set()):
+            self._tick.wait(1.0)
+            self._tick.clear()
             with self.dirty_lock:
                 dirty, self.dirty = self.dirty, set()
             if dirty:
@@ -657,7 +733,6 @@ class Scanner:
                 except Exception as e:
                     self.log(f"Stream re-check error: {e!r}")
                     time.sleep(1)
-            time.sleep(config.STREAM_EVAL_SECS)
 
     # ---- loop -------------------------------------------------------------------------
 
@@ -801,4 +876,5 @@ class Scanner:
         s["logs"] = list(self.logs)[-30:]
         s["autotrade"] = self.autotrader.status()
         s["focus"] = {"days": getattr(self, "focus_days", 0), "contracts": len(self.contracts)}
+        s["latency"] = self.latency_summary()
         return s

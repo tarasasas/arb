@@ -54,12 +54,15 @@ class LanePool(ThreadPoolExecutor):
 
 
 class RateLimitedClient:
-    def __init__(self, base_url, rps, max_retries=6, timeout=30, signer=None):
+    def __init__(self, base_url, rps, max_retries=6, timeout=30, signer=None, burst=None):
         """signer: optional callable(method, url_path) -> extra headers, applied per attempt
         (signatures carry a timestamp, so every retry is re-signed)."""
         self.base_url = base_url.rstrip("/")
         self.base_path = urllib.parse.urlparse(self.base_url).path
         self.min_interval = 1.0 / rps
+        # Token bucket (GCRA): priority requests may run up to `burst` requests ahead of the steady
+        # pace, so a trade's checks go out at once instead of one slot apart; the average rate holds.
+        self.burst = burst if burst is not None else max(1, int(rps * 0.4))
         self.max_retries = max_retries
         self.timeout = timeout
         self.signer = signer
@@ -150,14 +153,21 @@ class RateLimitedClient:
 
     def set_rate(self, rps):
         self.min_interval = 1.0 / rps
+        self.burst = max(1, int(rps * 0.4))
 
     PRIORITY_BURST = 1     # while background work waits, it gets every other slot (it must never starve)
 
-    def _wait_turn(self):
+    def _wait_turn(self, order=False):
         """Take the next request slot. Slots are claimed only when due (not reserved ahead), so a
         priority request waits about one slot however many background threads are queued; background
-        work still gets one slot in every PRIORITY_BURST + 1 while it's waiting."""
+        work still gets one slot in every PRIORITY_BURST + 1 while it's waiting. Priority requests
+        may also use the burst allowance; an order never waits (it still counts toward the pace)."""
+        if order:
+            with self._lock:
+                self._next_slot = max(time.monotonic(), self._next_slot) + self.min_interval
+            return
         pri = is_priority()
+        full_tau = (self.burst - 1) * self.min_interval
         with self._lock:
             if pri:
                 self._priority_waiting += 1
@@ -167,8 +177,11 @@ class RateLimitedClient:
             while True:
                 with self._lock:
                     now = time.monotonic()
-                    if now >= self._next_slot:
-                        bg_turn = self._bg_waiting and self._priority_streak >= self.PRIORITY_BURST
+                    bg_turn = self._bg_waiting and self._priority_streak >= self.PRIORITY_BURST
+                    # Priority may burst; background shares that allowance only on its turns while
+                    # priority is waiting (so the alternation holds), and otherwise keeps the plain pace.
+                    tau = full_tau if pri or (bg_turn and self._priority_waiting) else 0.0
+                    if now >= self._next_slot - tau:
                         if pri and not bg_turn:
                             self._priority_streak += 1 if self._bg_waiting else 0
                             self._next_slot = max(now, self._next_slot) + self.min_interval
@@ -177,7 +190,7 @@ class RateLimitedClient:
                             self._priority_streak = 0
                             self._next_slot = max(now, self._next_slot) + self.min_interval
                             return
-                    wait = self._next_slot - now
+                    wait = self._next_slot - tau - now
                 time.sleep(min(max(wait, 0.002), self.min_interval))
         finally:
             with self._lock:
@@ -192,7 +205,7 @@ class RateLimitedClient:
         url = self.base_url + path
         data = json.dumps(body).encode()
         for attempt in range(self.max_retries):
-            self._wait_turn()
+            self._wait_turn(order=True)
             self.request_count += 1
             headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Content-Type": "application/json"}
             if self.signer:
