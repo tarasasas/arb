@@ -66,8 +66,9 @@ class FakeTrader:
         self.result = result or {"status": "ok", "plan": {"payout": 1.0}, "hedged_pairs": 20, "net": 1.0, "unhedged_shares": 0,
                                  "legs_filled": {"kalshi": {"paid": 9.0}, "polymarket": {"paid": 10.5}}}
 
-    def prepare(self, legs, cap, timeline=None):
+    def prepare(self, legs, cap, timeline=None, hedge_depth=1.0):
         self.calls.append(("prepare", cap))
+        self.hedge_depth = hedge_depth
         if self.fail:
             raise TradeError(self.fail)
         self.plans["p1"] = 1
@@ -188,3 +189,54 @@ class SafetyTests(unittest.TestCase):
             a.check(s.state["opportunities"])
         self.assertFalse(a.on)
         self.assertIn("net loss today", a.halted)
+
+
+class CircuitBreakerTests(unittest.TestCase):
+    MISS = {"status": "partial", "plan": {"payout": 1.0}, "hedged_pairs": 0, "net": -0.2, "unhedged_shares": 0,
+            "legs_filled": {"kalshi": {"paid": 0}, "polymarket": {"paid": 0}}, "steps": [],
+            "missed": [{"exchange": "Kalshi", "why": "filled 0 of 20 at ≤ $0.450; best price there now $0.470"}]}
+
+    def make(self, n, **kw):
+        s = FakeScanner([row(game=f"G{i}", k=f"K{i}", p=f"p{i}") for i in range(n)], FakeTrader(**kw))
+        a = autotrade.AutoTrader(s, run_async=False)
+        a.set(True)
+        return s, a
+
+    def test_stops_after_misses_in_a_row_on_one_site(self):
+        s, a = self.make(4, result=self.MISS)
+        with mock.patch.object(config, "AUTO_TRADE_MAX_MISSES", 3), mock.patch.object(config, "AUTO_TRADE_MAX_DAILY_LOSS", 100):
+            for _ in range(3):
+                a.check(s.state["opportunities"])
+        self.assertFalse(a.on)
+        self.assertIn("Kalshi missed 3 trades in a row", a.halted)
+        self.assertIn("Kalshi filled 0 of 20", a.history[0]["missed"])
+
+    def test_a_clean_trade_resets_the_count(self):
+        s, a = self.make(4, result=self.MISS)
+        with mock.patch.object(config, "AUTO_TRADE_MAX_MISSES", 3), mock.patch.object(config, "AUTO_TRADE_MAX_DAILY_LOSS", 100):
+            a.check(s.state["opportunities"])
+            a.check(s.state["opportunities"])
+            s.trader.result = FakeTrader().result
+            a.check(s.state["opportunities"])
+            self.assertEqual(a.misses, {})
+            s.trader.result = self.MISS
+            a.check(s.state["opportunities"])
+        self.assertTrue(a.on)
+
+    def test_rejections_count_as_misses(self):
+        s, a = self.make(4)
+
+        def reject(*_a, **_k):
+            raise TradeError("Polymarket rejected the first order, nothing was traded: x", exchange="Polymarket")
+        s.trader.prepare = reject
+        with mock.patch.object(config, "AUTO_TRADE_MAX_MISSES", 2):
+            a.check(s.state["opportunities"])
+            self.assertEqual(a.history[0]["status"], "rejected")
+            a.check(s.state["opportunities"])
+        self.assertIn("Polymarket missed 2", a.halted)
+
+    def test_auto_trade_asks_for_hedge_depth(self):
+        s, a = self.make(1)
+        a.check(s.state["opportunities"])
+        self.assertEqual(s.trader.hedge_depth, config.AUTO_TRADE_HEDGE_DEPTH)
+

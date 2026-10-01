@@ -62,6 +62,8 @@ def describe_app_trade(t):
         what = (f"filled {_f(o.get('qty')):g} for ${_f(o.get('amount')):.2f} + ${_f(o.get('fee')):.2f} fee"
                 if not o.get("error") else f"ERROR {o.get('error')}")
         lines.append(f"    {o.get('kind', ''):8s} {o.get('exchange', ''):10s} {str(o.get('side')).upper():3s} {what}")
+    for m in t.get("missed") or []:
+        lines.append(f"    MISSED   {m.get('exchange', ''):10s} {m.get('why', '')}")
     return "\n".join(lines)
 
 

@@ -68,7 +68,7 @@ def current_row(scanner, legs):
 
 
 def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.0, min_roi=0.0, cap=None,
-               decided=None):
+               decided=None, hedge_depth=1.0):
     """Plan and place a trade in one step, for an arb the scanner currently lists as fast."""
     decided = decided or time.time()
     row = current_row(scanner, legs)
@@ -80,7 +80,7 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
     cap = min(x for x in (cap or config.FAST_MAX_TRADE, max_invest) if x)
     trader = scanner.trader
     plan = trader.prepare(legs, cap, timeline={"tick": row.get("tick_ts"), "detected": row.get("detected_ts"),
-                                               "decided": decided})
+                                               "decided": decided}, hedge_depth=hedge_depth)
     roi = plan["expected_profit"] / plan["capital"] if plan["capital"] else 0
     if plan["expected_profit"] < min_profit or roi < min_roi:
         trader.plans.pop(plan["id"], None)
@@ -102,6 +102,7 @@ class AutoTrader:
         self.tried = {}                 # pair id -> time of the last attempt
         self.game_pause = {}            # game -> time until which it's skipped (after a miss)
         self.history = deque(maxlen=20)
+        self.misses = {}                # site -> misses in a row (reset by a trade where both legs filled)
 
     @staticmethod
     def _today():
@@ -115,6 +116,8 @@ class AutoTrader:
             raise TradeError(f"Trading is {self.scanner.trading_status}.")
         with self.lock:
             self.on, self.halted = bool(on), None
+            if on:
+                self.misses = {}
         self.scanner.log(f"Auto-trade turned {'on' if on else 'off'}" + (
             f": up to ${config.AUTO_TRADE_MAX_TRADE:g} per trade, ${config.AUTO_TRADE_DAILY_LIMIT:g} per day, "
             f"profit at least ${config.AUTO_TRADE_MIN_PROFIT:g}" if on else ""))
@@ -128,6 +131,8 @@ class AutoTrader:
                 "live_games": config.AUTO_TRADE_LIVE_GAMES, "max_daily_loss": config.AUTO_TRADE_MAX_DAILY_LOSS,
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
                 "allow_auto_matched": config.FAST_ALLOW_AUTO_MATCHED, "allow_too_good": config.FAST_ALLOW_TOO_GOOD,
+                "misses": dict(self.misses), "max_misses": config.AUTO_TRADE_MAX_MISSES,
+                "hedge_depth": config.AUTO_TRADE_HEDGE_DEPTH,
                 "history": list(self.history)}
 
     def pick(self, rows, now=None):
@@ -166,7 +171,8 @@ class AutoTrader:
                  "tab": row.get("tab"), "legs": [f"{l['exchange']} Buy {l['side'].upper()}" for l in row["legs"]]}
         try:
             res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap, decided=decided,
-                             min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI)
+                             min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI,
+                             hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH)
             used = spent(res)
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used
@@ -177,6 +183,10 @@ class AutoTrader:
                 # The second leg missed (or the first didn't fill): leave this game alone for a while.
                 self.game_pause[row.get("game")] = time.time() + config.AUTO_TRADE_GAME_COOLDOWN_SECS
                 entry["note"] = "; ".join(res.get("steps") or []) + (f" {res['note']}" if res.get("note") else "")
+            missed = res.get("missed") or []
+            if missed:
+                entry["missed"] = "; ".join(f"{m['exchange']} {m['why']}" for m in missed)
+            self._count_misses([m["exchange"] for m in missed], entry.get("missed"))
             if self.net.get(self._today(), 0.0) <= -config.AUTO_TRADE_MAX_DAILY_LOSS:
                 self._halt(f"net loss today is ${-self.net[self._today()]:.2f} (limit ${config.AUTO_TRADE_MAX_DAILY_LOSS:g}): "
                            f"check what's happening before turning it back on", notify=False)
@@ -188,6 +198,9 @@ class AutoTrader:
                              f"${used:.2f} in, net ${res['net']:+.2f}" + (f"\n⚠ {self.halted}" if self.halted else ""))
         except TradeError as e:           # books moved, not enough cash, ...: nothing was traded
             entry.update({"status": "skipped", "note": str(e)})
+            if getattr(e, "exchange", None):       # an order was sent and that site refused it
+                entry.update({"status": "rejected", "missed": f"{e.exchange} {e}"})
+                self._count_misses([e.exchange], str(e))
             if "Check that account" in str(e):
                 self._halt(str(e))
         except Exception as e:
@@ -196,6 +209,19 @@ class AutoTrader:
         finally:
             self.history.appendleft(entry)
             self.busy = False
+
+    def _count_misses(self, sites, why):
+        """The circuit breaker: a run of misses on one site means something is wrong there (cash, a
+        rejection, prices always gone by the time the order lands), so stop instead of repeating it."""
+        if not sites:
+            self.misses = {}
+            return
+        for site in sites:
+            self.misses[site] = self.misses.get(site, 0) + 1
+        worst = max(sites, key=lambda x: self.misses[x])
+        if self.misses[worst] >= config.AUTO_TRADE_MAX_MISSES and not self.halted:
+            self._halt(f"{worst} missed {self.misses[worst]} trades in a row (last: {why}). Fix that, or raise "
+                       f"AUTO_TRADE_MAX_MISSES, then turn Auto-trade back on")
 
     def _halt(self, why, notify=True):
         with self.lock:

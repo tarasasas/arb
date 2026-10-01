@@ -218,6 +218,13 @@ require your check.
   - After a partial or no-fill it leaves that whole game alone for 10 minutes
     (`AUTO_TRADE_GAME_COOLDOWN_SECS`), and it turns itself off once it has lost
     `AUTO_TRADE_MAX_DAILY_LOSS` ($5) net in a day.
+  - Fail-safes against one site always missing: it only trades a size the second
+    leg's book can cover twice over within break-even (`AUTO_TRADE_HEDGE_DEPTH`=2),
+    the second leg's first order already allows up to break-even
+    (`SECOND_LEG_AT_BREAKEVEN`=1; IOC still fills at the best prices), every miss is
+    logged with the site and the reason (rejection text, or the price there now vs
+    the order's limit), and it turns itself off after 3 misses in a row on one site
+    (`AUTO_TRADE_MAX_MISSES`). `trade-report.bat` shows the same `MISSED` lines.
   - Every trade goes to My arbs and `trades.jsonl`.
 
 Limits, in `.env` (defaults shown):

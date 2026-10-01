@@ -531,3 +531,64 @@ class LimitMessageTests(unittest.TestCase):
                 make(k, p).prepare(LEGS)
         self.assertIn("Polymarket buying power is $0.00", str(cm.exception))
         self.assertNotIn("shard", str(cm.exception))
+
+
+@mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
+@mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
+@mock.patch.object(trader_mod.config, "TRADE_ORDER", "polymarket_first")
+class FailSafeTests(unittest.TestCase):
+    def test_second_leg_hedges_after_a_one_tick_move(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        k.book["yes"] = [(0.41, 1000)]                           # Kalshi ticked up while Polymarket filled
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(res["hedged_pairs"], 20)
+        self.assertEqual(len([o for o in k.orders if o[0] == "buy"]), 1)   # hedged on the first try
+        self.assertGreater(res["locked_profit"], 0)
+
+    def test_old_behaviour_misses_the_first_try(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        k.book["yes"] = [(0.41, 1000)]
+        with mock.patch.object(trader_mod.config, "SECOND_LEG_AT_BREAKEVEN", False):
+            res = t.execute(plan["id"])
+        self.assertEqual(len([o for o in k.orders if o[0] == "buy"]), 2)   # needed a retry
+
+    def test_hedge_depth_shrinks_the_size(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 30), (0.80, 1000)])  # only 30 shares below break-even
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        self.assertEqual(make(k, p).prepare(LEGS)["size"], 30)
+        self.assertEqual(make(k, p).prepare(LEGS, hedge_depth=2)["size"], 15)
+
+    def test_hedge_depth_refuses_a_hopeless_book(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1), (0.80, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        with self.assertRaisesRegex(TradeError, "too thin"):
+            make(k, p).prepare(LEGS, hedge_depth=2)
+
+    def test_partial_says_which_site_missed_and_why(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.55, 100)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        k.book["yes"] = [(0.60, 1000)]                           # gone above break-even
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "partial")
+        self.assertEqual(res["missed"][0]["exchange"], "Kalshi")
+        self.assertIn("price moved", res["missed"][0]["why"])
+
+    def test_no_fill_says_which_site_missed(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.book["no"] = [(0.70, 20)]
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "no_fill")
+        self.assertEqual(res["missed"][0]["exchange"], "Polymarket")
+        self.assertIn("$0.700", res["missed"][0]["why"])

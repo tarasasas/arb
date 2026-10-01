@@ -39,6 +39,10 @@ POLYMARKET_TRADE_BASE = "https://api.polymarket.us"
 MAX_TRADE_DOLLARS = 100.0          # hard cap per trade, both legs combined (fees included)
 TRADE_PLAN_TTL_SECS = 20           # a confirmed plan must be executed within this window
 SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg before selling back
+# The second leg's first try goes out with its limit at break-even (not at the price seen when planning).
+# IOC orders fill at the best prices in the book, so this costs nothing when the book held still, and
+# when it moved a tick it still hedges (at less profit) instead of missing and selling back at a loss.
+SECOND_LEG_AT_BREAKEVEN = os.environ.get("SECOND_LEG_AT_BREAKEVEN", "1").strip().lower() not in ("0", "false", "no", "off")
 # How a trade's two orders go out:
 #   polymarket_first (default): Polymarket (the slower site) first, then Kalshi for exactly what filled.
 #     A Polymarket miss trades nothing; Kalshi answers fast, so its price has little time to move.
@@ -90,6 +94,11 @@ AUTO_TRADE_COOLDOWN_SECS = _env_num("AUTO_TRADE_COOLDOWN_SECS", 60)  # per pair 
 AUTO_TRADE_LIVE_GAMES = os.environ.get("AUTO_TRADE_LIVE_GAMES", "0").strip().lower() in ("1", "true", "yes", "on")
 AUTO_TRADE_GAME_COOLDOWN_SECS = _env_num("AUTO_TRADE_GAME_COOLDOWN_SECS", 600)   # whole game, after a miss
 AUTO_TRADE_MAX_DAILY_LOSS = _env_num("AUTO_TRADE_MAX_DAILY_LOSS", 5)             # $ net loss that stops it
+# Fail-safes. Auto-trade only sizes a trade so the second leg's book holds at least this many times the
+# shares within break-even (a thin book is what makes the second leg miss), and it turns itself off
+# after this many misses in a row on one site (rejections, unfilled orders, unhedged second legs).
+AUTO_TRADE_HEDGE_DEPTH = _env_num("AUTO_TRADE_HEDGE_DEPTH", 2)
+AUTO_TRADE_MAX_MISSES = int(_env_num("AUTO_TRADE_MAX_MISSES", 3))
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 # external-api.kalshi.com is Kalshi's recommended host, but it rejects Python's urllib

@@ -43,7 +43,9 @@ NAMES = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
 
 
 class TradeError(Exception):
-    pass
+    def __init__(self, message="", exchange=None):
+        super().__init__(message)
+        self.exchange = exchange           # the site that rejected an order, when one did
 
 
 def _fee(exchange, qty, price, coef):
@@ -123,16 +125,18 @@ class Trader:
 
     # ---- planning ----------------------------------------------------------------------
 
-    def prepare(self, legs, max_invest=None, timeline=None):
+    def prepare(self, legs, max_invest=None, timeline=None, hedge_depth=1.0):
+        """hedge_depth > 1: shrink the size until the second leg's book holds that many times the shares
+        at or below break-even, so a small move between the two orders can't leave the first leg unhedged."""
         tl = dict(timeline or {})
         tl.setdefault("decided", time.time())      # Make trade: the click is the decision
         with priority():                   # trades go ahead of background market loads
-            plan = self._prepare(legs, max_invest)
+            plan = self._prepare(legs, max_invest, hedge_depth)
         tl["checks_done"] = time.time()
         plan["timeline"] = tl
         return plan
 
-    def _prepare(self, legs, max_invest=None):
+    def _prepare(self, legs, max_invest=None, hedge_depth=1.0):
         if not self.venues:
             raise TradeError("Trading needs both API keys. Add POLYMARKET_KEY_ID and POLYMARKET_SECRET_KEY to .env.")
         by_ex = {l["exchange"]: l for l in legs}
@@ -268,6 +272,26 @@ class Trader:
         # polymarket_first: the slower site goes first and Kalshi (fast) is bought for exactly what filled,
         # so a Polymarket miss trades nothing. thinner_first: the book with less spare depth goes first.
         first = "polymarket" if mode == "polymarket_first" else min(EXCHANGES, key=lambda ex: spare[ex])
+        second = "kalshi" if first == "polymarket" else "polymarket"
+
+        def hedge_room(n):
+            """Shares the second leg's book holds at or below the price where n pairs break even."""
+            cn = cost_at(n)
+            room = (payout - (cn[first]["amount"] + cn[first]["fee"]) / n) * n
+            pmax = break_even_price(second, n, room, contracts[second].fee_coef, info[second]["tick"])
+            return sum(q for pr, q in levels[second] if pr <= pmax + 1e-9)
+
+        if hedge_depth > 1 and n > 0 and hedge_room(n) < hedge_depth * n:
+            lo, hi = 0, int(n // step)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                lo, hi = (mid, hi) if hedge_room(mid * step) >= hedge_depth * mid * step else (lo, mid - 1)
+            if lo <= 0:
+                raise TradeError(f"The {NAMES[second]} book is too thin to hedge safely (it needs {hedge_depth:g}x the "
+                                 f"shares within break-even). Nothing was traded.")
+            n = lo * step
+            c = cost_at(n)
+            spare = {ex: sum(q for pr, q in levels[ex] if pr <= c[ex]["limit"] + 1e-9) - n for ex in EXCHANGES}
         plan = {
             "id": uuid.uuid4().hex, "created": time.time(), "size": n, "payout": payout, "first": first,
             "legs": {ex: {"exchange": ex, "market_id": contracts[ex].market_id, "side": sides[ex],
@@ -322,9 +346,12 @@ class Trader:
             A, B, fa, fb = self._send_both(plan, record, steps, log)
             va, vb = self.venues[A["exchange"]], self.venues[B["exchange"]]
             if fa.qty <= 0:
+                errs = {o["exchange"]: o["error"] for o in log["orders"] if o.get("error")}
+                missed = [self._miss(leg, plan["size"], leg["limit"], errs.get(leg["exchange"])) for leg in (A, B)]
+                log["missed"] = missed
                 self._write(log, status="no_fill")
                 return self._result(plan, "no_fill", steps, fa, [], None, 0,
-                                    "Neither order filled (the prices moved). Nothing was traded.")
+                                    "Neither order filled (the prices moved). Nothing was traded.", missed)
             fills_b, hedged, first_attempt = [fb], fb.qty, 1     # B's planned-limit try is done
             return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record)
 
@@ -337,7 +364,8 @@ class Trader:
             hint = (" Kalshi keeps cash separately per exchange shard and this market's shard has none: run "
                     "kalshi-shards.bat once, or move cash at kalshi.com/account/exchange-indexes."
                     if "shard" in str(e.detail).lower() else "")
-            raise TradeError(f"{NAMES[A['exchange']]} rejected the first order, nothing was traded: {e.detail}{hint}")
+            raise TradeError(f"{NAMES[A['exchange']]} rejected the first order, nothing was traded: {e.detail}{hint}",
+                             exchange=NAMES[A["exchange"]])
         except Exception as e:          # sent, but the outcome couldn't be confirmed
             record("first", A, error=repr(e))
             self._write(log, status="unknown_first_leg")
@@ -346,8 +374,10 @@ class Trader:
         record("first", A, fa)
         steps.append(f"{NAMES[A['exchange']]}: bought {fa.qty:g} {A['side'].upper()} for ${fa.amount:.2f} + ${fa.fee:.2f} fee")
         if fa.qty <= 0:
+            log["missed"] = [self._miss(A, plan["size"], A["limit"])]
             self._write(log, status="no_fill")
-            return self._result(plan, "no_fill", steps, fa, [], None, 0, "The first leg didn't fill (the price moved). Nothing was traded.")
+            return self._result(plan, "no_fill", steps, fa, [], None, 0, "The first leg didn't fill (the price moved). "
+                                "Nothing was traded.", log["missed"])
 
         return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record)
 
@@ -397,6 +427,7 @@ class Trader:
         a_cost_per = (fa.amount + fa.fee) / fa.qty
         tick_b = info[B["exchange"]]["tick"]
         status, note = "ok", ""
+        last = {"limit": B["limit"], "error": None}
         for attempt in range(first_attempt, 1 + config.SECOND_LEG_RETRIES):
             remaining = floor_to(target - hedged, B["min_qty"])
             if remaining <= 0:
@@ -404,7 +435,7 @@ class Trader:
             # Each share hedged now must break even on its own: payout - first-leg cost per share.
             room = (plan["payout"] - a_cost_per) * remaining
             pmax = break_even_price(B["exchange"], remaining, room, B["fee_coef"], tick_b)
-            limit = min(B["limit"], pmax) if attempt == 0 else pmax
+            limit = pmax if attempt or config.SECOND_LEG_AT_BREAKEVEN else min(B["limit"], pmax)
             if limit <= 0:
                 note = "No second-leg price can break even anymore."
                 break
@@ -413,6 +444,7 @@ class Trader:
             except ApiError as e:
                 record("second", B, error=str(e))
                 steps.append(f"{NAMES[B['exchange']]}: order rejected ({e.detail})")
+                last.update(limit=limit, error=e.detail)
                 fb = Fill()
             except Exception as e:      # network error: the order may or may not exist, so stop here
                 record("second", B, error=repr(e))
@@ -421,6 +453,7 @@ class Trader:
                                     f"Couldn't confirm the {NAMES[B['exchange']]} order ({e!r}). Check both accounts "
                                     f"before doing anything else. Nothing was sold back.")
             else:
+                last.update(limit=limit, error=None)
                 record("second", B, fb)
                 steps.append(f"{NAMES[B['exchange']]}: bought {fb.qty:g} {B['side'].upper()} at ≤ ${limit:.3f} "
                              f"for ${fb.amount:.2f} + ${fb.fee:.2f} fee" + (f" (retry {attempt})" if attempt else ""))
@@ -436,7 +469,7 @@ class Trader:
 
         # 3. sell back whatever the second leg couldn't cover
         excess = fa.qty - hedged
-        sold = None
+        sold, missed = None, None
         if excess > 1e-9:
             status = "partial"
             sell_qty = floor_to(excess, A["min_qty"])
@@ -457,10 +490,32 @@ class Trader:
                 except Exception as e:
                     record("sellback", A, error=repr(e))
                     steps.append(f"{NAMES[A['exchange']]}: sell-back failed ({e})")
+        if status == "partial":          # after the sell-back: looking at the book can wait, that can't
+            missed = [self._miss(B, target, last["limit"], last["error"], hedged)]
+        log["missed"] = missed
         self._write(log, status=status)
-        return self._result(plan, status, steps, fa, fills_b, sold, hedged, note)
+        return self._result(plan, status, steps, fa, fills_b, sold, hedged, note, missed)
 
-    def _result(self, plan, status, steps, fa, fills_b, sold, hedged, note):
+    def _miss(self, leg, qty, limit, error=None, filled=0.0):
+        """Why an order didn't (fully) fill, for the Auto-trade fail-safe and history: the site's
+        rejection, or the price on that book now next to the limit the order carried."""
+        why = f"rejected: {error}" if error else ""
+        if not error:
+            why = f"filled {filled:g} of {qty:g} at ≤ ${limit:.3f}"
+            try:
+                lv = self.venues[leg["exchange"]].levels(leg["market_id"])[leg["side"]]
+                if lv:
+                    gap = (lv[0][0] - limit) * 100
+                    why += (f"; best price there now ${lv[0][0]:.3f}" +
+                            (f" ({gap:+.1f}¢ vs the limit: the price moved)" if gap > 0.05 else
+                             f", {sum(q for p, q in lv if p <= limit + 1e-9):g} shares at the limit now (taken before ours arrived)"))
+                else:
+                    why += "; no sellers there now"
+            except Exception:
+                pass
+        return {"exchange": NAMES[leg["exchange"]], "why": why}
+
+    def _result(self, plan, status, steps, fa, fills_b, sold, hedged, note, missed=None):
         A = plan["legs"][plan["first"]]
         a_per = (fa.amount + fa.fee) / fa.qty if fa.qty else 0
         b_spent = sum(f.amount + f.fee for f in fills_b)
@@ -473,6 +528,7 @@ class Trader:
         legs_filled = {A["exchange"]: {"shares": kept_a, "paid": round(a_per * kept_a, 2)},
                        B["exchange"]: {"shares": sum(f.qty for f in fills_b), "paid": round(b_spent, 2)}}
         return {"status": status, "steps": steps, "note": note, "hedged_pairs": hedged, "legs_filled": legs_filled,
+                "first": NAMES[A["exchange"]], "missed": missed or [],
                 "plan": {"payout": plan["payout"], "legs": plan["legs"]},
                 "locked_profit": round(locked, 2), "sellback_pnl": round(sellback_pnl, 2),
                 "net": round(locked + sellback_pnl, 2), "unhedged_shares": round(unhedged, 4),
