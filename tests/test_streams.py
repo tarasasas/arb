@@ -102,6 +102,23 @@ class KalshiStreamTests(unittest.TestCase):
         s.stop()
 
 
+class KalshiSequenceTests(unittest.TestCase):
+    def test_numbered_ok_replies_are_not_gaps(self):
+        from arb import streams
+        markets = {"K1": type("M", (), {})()}
+        st = streams.KalshiStream(lambda m, p: {}, markets, lambda e, m: None, lambda m: None, connect=lambda u, h: None)
+        delta = lambda seq, d: {"type": "orderbook_delta", "sid": 7, "seq": seq,
+                                "msg": {"market_ticker": "K1", "price_dollars": "0.40", "delta_fp": d, "side": "yes"}}
+        st._handle({"type": "orderbook_snapshot", "sid": 7, "seq": 1,
+                    "msg": {"market_ticker": "K1", "yes_dollars_fp": [["0.40", "10.00"]], "no_dollars_fp": []}})
+        st._handle(delta(2, "1.00"))
+        st._handle({"id": 9, "sid": 7, "seq": 3, "type": "ok", "msg": {"market_tickers": ["K1", "K2"]}})
+        st._handle(delta(4, "2.00"))                          # was a false "missed messages" before
+        self.assertEqual(st.books["K1"]["yes"][0.40], 13.0)
+        with self.assertRaises(ConnectionError):
+            st._handle(delta(6, "1.00"))                      # a real gap still resyncs
+
+
 class PolymarketStreamTests(unittest.TestCase):
     def test_market_data_updates_the_market(self):
         m, updates = {"p1": Market("p1")}, []

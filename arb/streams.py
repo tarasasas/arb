@@ -222,6 +222,14 @@ class KalshiStream(_Stream):
 
     def _handle(self, d):
         kind, msg = d.get("type"), d.get("msg") or {}
+        # Every message in a subscription is numbered, including the "ok" reply to adding markets,
+        # so count them all: a gap then really means a missed update and the books must be resynced.
+        sid, seq = d.get("sid"), d.get("seq")
+        if sid is not None and seq is not None:
+            last = self.seq.get(sid)
+            if last is not None and seq != last + 1:
+                raise ConnectionError(f"missed Kalshi messages (seq {last} -> {seq}, after {kind}); resyncing")
+            self.seq[sid] = seq
         if kind == "subscribed":
             self.sid = msg.get("sid", self.sid)
             return
@@ -230,12 +238,6 @@ class KalshiStream(_Stream):
             return
         if kind not in ("orderbook_snapshot", "orderbook_delta"):
             return
-        sid, seq = d.get("sid"), d.get("seq")
-        if sid is not None and seq is not None:
-            last = self.seq.get(sid)
-            if last is not None and seq != last + 1 and kind == "orderbook_delta":
-                raise ConnectionError(f"missed Kalshi messages (seq {last} -> {seq}); resyncing")
-            self.seq[sid] = seq
         ticker = msg.get("market_ticker")
         if not ticker:
             return
