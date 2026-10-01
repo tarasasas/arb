@@ -332,11 +332,17 @@ Every order and response is appended to `trades.jsonl` in this folder.
 Trade requests need a token that only the dashboard page receives, so other websites can't
 trigger orders. The server listens on localhost only.
 
-**Both orders go out at the same moment** (`TRADE_LEGS_TOGETHER=1`, the default), so neither side
-waits for the other to fill. If one side fills less, the shortfall is bought on that side, never above
-break-even, with up to 2 retries on fresh prices. Whatever still can't be matched is sold back. If an
-order's result can't be confirmed (e.g. a network error), it stops and tells you to check both accounts.
-`TRADE_LEGS_TOGETHER=0` goes back to sending the thinner book first and sizing the second order to its fill.
+**Order of the two orders** (`TRADE_ORDER` in `.env`):
+- `polymarket_first` (default): Polymarket, the slower site, goes first, then Kalshi is bought for exactly
+  what filled. If Polymarket misses (its price moved before the order arrived), nothing is traded at all
+  and there's no sell-back loss. Kalshi answers quickly, so its price has little time to move, and
+  if it does the order retries up to break-even.
+- `together`: both at the same moment. This is fastest overall, but when one side misses, the other has
+  already filled and gets sold back at a small loss.
+- `thinner_first`: the book with less depth goes first.
+
+The checks before ordering (market info, order book and cash on both sites) run all at once, and
+connections to both sites are kept open between requests, which saves a TLS handshake on every call.
 
 **How fast is a trade?** Double-click `latency-test.bat` (or run `python -m arb.latency`). It times each
 step a trade goes through on both sites (market info, order book, cash) using the trading code itself.

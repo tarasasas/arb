@@ -626,7 +626,7 @@ function renderPlan(plan, r) {
       <span class="muted">(cap ${money(plan.cap)})</span></div>
     <div class="policy">${plan.together ? `Both orders are sent at the same moment. If one side fills less, the rest of it is bought,
       never above break-even, retried up to 2 more times at fresh prices; anything still unmatched is sold back immediately.`
-      : `${first} goes first (thinner book). ${second} is then bought for exactly the shares that filled, never above
+      : `${first} goes first (${plan.order_mode === "polymarket_first" ? "the slower site: if it misses, nothing is traded" : "thinner book"}). ${second} is then bought for exactly the shares that filled, never above
       break-even, retried up to 2 more times at fresh prices. Any ${first} shares still unhedged are sold back immediately.`}
       Every order is logged to D:\\Projects\\arb\\trades.jsonl.</div>
     <div class="actions"><span class="muted" id="ttl"></span>

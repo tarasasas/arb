@@ -66,7 +66,7 @@ def make(kalshi, poly):
 
 @mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
 @mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
-@mock.patch.object(trader_mod.config, "TRADE_LEGS_TOGETHER", False)
+@mock.patch.object(trader_mod.config, "TRADE_ORDER", "thinner_first")
 class TraderTests(unittest.TestCase):
     def test_cap_and_full_hedge(self, *_):
         k = FakeVenue("kalshi", yes=[(0.40, 500)])
@@ -273,7 +273,7 @@ class KalshiVenueFundTests(unittest.TestCase):
 
 @mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
 @mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
-@mock.patch.object(trader_mod.config, "TRADE_LEGS_TOGETHER", True)
+@mock.patch.object(trader_mod.config, "TRADE_ORDER", "together")
 class TogetherTests(unittest.TestCase):
     def test_both_orders_are_in_flight_at_once(self, *_):
         import threading
@@ -379,3 +379,48 @@ class MainShardFundingTests(unittest.TestCase):
         msg = str(cm.exception)
         self.assertIn("$80.00 on shard 3", msg)
         self.assertIn("transfers not enabled", msg)
+
+
+@mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
+@mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
+@mock.patch.object(trader_mod.config, "TRADE_ORDER", "polymarket_first")
+class PolymarketFirstTests(unittest.TestCase):
+    def test_polymarket_goes_first_then_kalshi_for_what_filled(self, *_):
+        sent = []
+
+        class Logging(FakeVenue):
+            def buy(self, *a):
+                sent.append(self.name)
+                return super().buy(*a)
+        k = Logging("kalshi", yes=[(0.40, 500)])
+        p = Logging("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.book["no"] = [(0.50, 30)]                          # Polymarket only fills 30 by the time it arrives
+        res = t.execute(plan["id"])
+        self.assertEqual(sent[0], "polymarket")
+        self.assertEqual(k.orders[0][2], 30)                  # Kalshi bought for exactly what filled
+        self.assertEqual((res["status"], res["hedged_pairs"]), ("ok", 30))
+
+    def test_polymarket_miss_trades_nothing(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        p.book["no"] = []                                     # gone before the order arrived
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "no_fill")
+        self.assertEqual(k.orders, [])
+
+
+class ParallelChecksTests(unittest.TestCase):
+    def test_checks_on_both_sites_run_at_once(self):
+        import threading
+        barrier = threading.Barrier(2, timeout=2)            # each site's book read waits for the other's
+
+        class Waiting(FakeVenue):
+            def levels(self, mid):
+                barrier.wait()
+                return super().levels(mid)
+        t = make(Waiting("kalshi", yes=[(0.40, 500)]), Waiting("polymarket", no=[(0.50, 500)]))
+        self.assertEqual(t.prepare(LEGS)["size"], 107)

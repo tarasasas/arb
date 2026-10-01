@@ -39,9 +39,17 @@ POLYMARKET_TRADE_BASE = "https://api.polymarket.us"
 MAX_TRADE_DOLLARS = 100.0          # hard cap per trade, both legs combined (fees included)
 TRADE_PLAN_TTL_SECS = 20           # a confirmed plan must be executed within this window
 SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg before selling back
-# Send both orders at the same moment (default), so neither waits for the other's fill. Uneven fills
-# are evened up (never above break-even) or sold back. TRADE_LEGS_TOGETHER=0: thinner book first.
-TRADE_LEGS_TOGETHER = os.environ.get("TRADE_LEGS_TOGETHER", "1").strip().lower() not in ("0", "false", "no", "off")
+# How a trade's two orders go out:
+#   polymarket_first (default): Polymarket (the slower site) first, then Kalshi for exactly what filled.
+#     A Polymarket miss trades nothing; Kalshi answers fast, so its price has little time to move.
+#   together: both at the same moment; uneven fills are evened up (never above break-even) or sold back.
+#   thinner_first: the book with less depth first, the other sized to its fill.
+TRADE_ORDER = os.environ.get("TRADE_ORDER", "").strip().lower() or (
+    "together" if os.environ.get("TRADE_LEGS_TOGETHER", "").strip().lower() in ("1", "true", "yes", "on")
+    else "polymarket_first")
+if TRADE_ORDER not in ("polymarket_first", "together", "thinner_first"):
+    TRADE_ORDER = "polymarket_first"
+TRADE_LEGS_TOGETHER = TRADE_ORDER == "together"
 SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks below the best bid
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
 # Kalshi keeps cash per exchange shard and an order can only use its market's shard. With this on, a

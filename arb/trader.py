@@ -74,14 +74,27 @@ class Trader:
         if payout <= 0:
             raise TradeError("This pair doesn't guarantee a payout.")
 
+        # Every check on both sites at once (prices move while we look): market info, order book and
+        # cash per site; Kalshi's cash depends on the market's shard, so it follows its market info.
         info, levels, balance = {}, {}, {}
-        for ex in EXCHANGES:
+
+        def read(ex):
             v, mid = self.venues[ex], contracts[ex].market_id
-            info[ex] = v.market_info(mid)
+            with LanePool(2) as pool:
+                book = pool.submit(v.levels, mid)
+                if ex == "kalshi":
+                    info[ex] = v.market_info(mid)
+                    cash = pool.submit(v.balance, info[ex].get("shard"))
+                else:
+                    cash = pool.submit(v.balance, None)
+                    info[ex] = v.market_info(mid)
+                levels[ex], balance[ex] = book.result()[sides[ex]], cash.result()
+        with LanePool(2) as pool:
+            for job in [pool.submit(read, ex) for ex in EXCHANGES]:
+                job.result()
+        for ex in EXCHANGES:
             if not info[ex]["open"]:
                 raise TradeError(f"The {NAMES[ex]} market isn't open for trading.")
-            levels[ex] = v.levels(mid)[sides[ex]]
-            balance[ex] = v.balance(info[ex].get("shard"))
 
         k, p = contracts["kalshi"], contracts["polymarket"]
         cand = {"k": SimpleNamespace(exchange="kalshi", fee_coef=k.fee_coef),
@@ -157,7 +170,10 @@ class Trader:
 
         c = cost_at(n)
         spare = {ex: sum(q for pr, q in levels[ex] if pr <= c[ex]["limit"] + 1e-9) - n for ex in EXCHANGES}
-        first = min(EXCHANGES, key=lambda ex: spare[ex])          # the thinner book goes first
+        mode = config.TRADE_ORDER
+        # polymarket_first: the slower site goes first and Kalshi (fast) is bought for exactly what filled,
+        # so a Polymarket miss trades nothing. thinner_first: the book with less spare depth goes first.
+        first = "polymarket" if mode == "polymarket_first" else min(EXCHANGES, key=lambda ex: spare[ex])
         plan = {
             "id": uuid.uuid4().hex, "created": time.time(), "size": n, "payout": payout, "first": first,
             "legs": {ex: {"exchange": ex, "market_id": contracts[ex].market_id, "side": sides[ex],
@@ -167,7 +183,8 @@ class Trader:
         }
         plan["capital"] = sum(c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES)
         plan["shard_transfers"] = transfers
-        plan["together"] = config.TRADE_LEGS_TOGETHER
+        plan["together"] = mode == "together"
+        plan["order_mode"] = mode
         plan["expected_profit"] = payout * n - plan["capital"]
         plan["cap"] = cap
         self.plans[plan["id"]] = (plan, info)
