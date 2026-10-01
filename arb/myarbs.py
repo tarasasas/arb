@@ -45,7 +45,8 @@ def kalshi_status(m):
     status = m.get("status") or ""
     result = (m.get("result") or "").lower()
     state = "settled" if result in ("yes", "no") else "open" if status in ("active", "open") else "closed"
-    return {"state": state, "result": result or None,
+    from .kalshi import settle_time
+    return {"state": state, "result": result or None, "settles": settle_time(m),
             "bid": {"yes": _num(m.get("yes_bid_dollars")), "no": _num(m.get("no_bid_dollars"))}}
 
 
@@ -55,7 +56,7 @@ def polymarket_status(m):
     bid, ask = _num(m.get("bestBidQuote")), _num(m.get("bestAskQuote"))
     state = "open" if m.get("active") and not m.get("closed") else "closed"
     # Selling YES gets the bid; closing a NO (buying YES back) is worth 1 - ask.
-    return {"state": state, "result": None,
+    return {"state": state, "result": None, "settles": m.get("endDate") or m.get("gameStartTime"),
             "bid": {"yes": bid, "no": round(1 - ask, 4) if ask is not None else None}}
 
 
@@ -305,24 +306,34 @@ class MyArbs:
         with self.lock:
             items = [dict(a) for a in self.items]
         if items and time.time() - self._live_time > LIVE_TTL_SECS:
-            tickers = {l["market_id"] for a in items for l in a["legs"] if l["exchange"] == "kalshi"}
-            slugs = {l["market_id"] for a in items for l in a["legs"] if l["exchange"] == "polymarket"}
-            live = {}
-            try:
-                for t, m in kalshi_client.markets_by_ticker(tickers).items():
-                    live[("kalshi", t)] = kalshi_status(m)
-                for s, m in pm_client.markets_by_slug(slugs).items():
-                    live[("polymarket", s)] = polymarket_status(m)
-                self._live, self._live_time = live, time.time()
-            except Exception as e:                  # keep showing the last known state
-                self._live_error = repr(e)
+            self._refresh_live(items, kalshi_client, pm_client)
+            with self.lock:                    # copy again: the refresh may have corrected payout dates
+                items = [dict(a) for a in self.items]
+        return self._rows(items)
+
+    def _refresh_live(self, items, kalshi_client, pm_client):
+        """Market status, best bids and settle times for every tracked market, from both sites."""
+        tickers = {l["market_id"] for a in items for l in a["legs"] if l["exchange"] == "kalshi"}
+        slugs = {l["market_id"] for a in items for l in a["legs"] if l["exchange"] == "polymarket"}
+        live = {}
+        try:
+            for t, m in kalshi_client.markets_by_ticker(tickers).items():
+                live[("kalshi", t)] = kalshi_status(m)
+            for s, m in pm_client.markets_by_slug(slugs).items():
+                live[("polymarket", s)] = polymarket_status(m)
+            self._live, self._live_time = live, time.time()
+            self._refresh_payout_dates()
+        except Exception as e:                  # keep showing the last known state
+            self._live_error = repr(e)
+
+    def _rows(self, items):
         out = []
         for a in items:
             legs = []
             for l in a["legs"]:
                 st = self._live.get((l["exchange"], l["market_id"]), {"state": "checking…"})
                 bid = (st.get("bid") or {}).get(l["side"])
-                legs.append({**l, "state": st["state"], "result": st.get("result"),
+                legs.append({**l, "state": st["state"], "result": st.get("result"), "settles": st.get("settles"),
                              "worth_now": round(bid * l["shares"], 2) if bid is not None else None})
             s = summarize(a)
             worth = [l["worth_now"] for l in legs]
@@ -330,6 +341,25 @@ class MyArbs:
                         "worth_now": round(sum(worth), 2) if None not in worth else None,
                         "settled": bool(a.get("closed")) or all(l["state"] in ("settled", "closed") for l in legs)})
         return out
+
+    def _refresh_payout_dates(self):
+        """Each tracked arb pays out when the later of its two markets settles: take that from the
+        markets' live data on both sites (works even if the pair is no longer in the scanner's list)."""
+        from .engine import _parse_time
+        changed = False
+        with self.lock:
+            for a in self.items:
+                if a.get("closed"):
+                    continue
+                times = [_parse_time((self._live.get((l["exchange"], l["market_id"])) or {}).get("settles") or "")
+                         for l in a["legs"]]
+                if not times or not all(times):
+                    continue
+                closes = max(times).isoformat()
+                if closes != a.get("closes"):
+                    a["closes"], changed = closes, True
+            if changed:
+                self._save()
 
     def state(self):
         return {"unpaired": self.unpaired, "sync": self.sync_state}

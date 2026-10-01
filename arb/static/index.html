@@ -1046,7 +1046,7 @@ function legCell(l) {
       ? ` <span class="muted" title="Your account's cost for these shares, fees included${l.paid_recorded != null
         ? `; recorded at the time as ${money(l.paid_recorded)}` : ""}">(real cost${l.paid_recorded != null && Math.abs(l.paid_recorded - l.paid) >= 0.01
         ? `, was ${money(l.paid_recorded)}` : ""})</span>` : ""} ${st}
-    <div class="muted" style="font-size:12px">${esc(l.title)}</div></div>`;
+    <div class="muted" style="font-size:12px">${esc(l.title)}${l.settles ? ` · settles ${esc(localTime(l.settles))}` : ""}</div></div>`;
 }
 // ---- payouts by day: what your active arbs pay out, per calendar day -----------------------------
 let payDays = 30;

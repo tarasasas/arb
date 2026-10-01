@@ -268,3 +268,29 @@ class PayoutDateTests(VerifyTests):
         self.c[("polymarket", "p")].close_time = "2026-12-31T23:59:00Z"
         self.m.verify(lambda ex, mid: self.c.get((ex, mid)))
         self.assertEqual(self.m.items[0]["closes"], "2027-01-01T15:00:00+00:00")
+
+
+class LivePayoutDateTests(unittest.TestCase):
+    def test_payout_date_from_both_sites_live_data(self):
+        import tempfile
+        from pathlib import Path
+        from arb import myarbs as m
+        with tempfile.TemporaryDirectory() as d:
+            store = m.MyArbs(Path(d) / "my_arbs.json")
+            store.save({"source": "manual", "game": "Another Fed Rate Hike in 2026?", "payout": 1.0,
+                        "closes": "2028-12-31T15:00:00+00:00", "legs": [
+                            {"exchange": "kalshi", "market_id": "KXFEDHIKE-2-26DEC31", "side": "no", "shares": 75, "paid": 30},
+                            {"exchange": "polymarket", "market_id": "fed-hike-2026", "side": "yes", "shares": 75, "paid": 39}]})
+
+            class K:
+                def markets_by_ticker(self, t):
+                    return {"KXFEDHIKE-2-26DEC31": {"status": "active", "close_time": "2027-01-01T04:59:00Z",
+                                                     "expected_expiration_time": "2028-12-31T15:00:00Z",
+                                                     "latest_expiration_time": "2027-01-01T15:00:00Z"}}
+
+            class P:
+                def markets_by_slug(self, s):
+                    return {"fed-hike-2026": {"active": True, "endDate": "2026-12-31T00:00:00Z"}}
+            snap = store.snapshot(K(), P())
+            self.assertEqual(snap[0]["closes"], "2027-01-01T15:00:00+00:00")
+            self.assertEqual(m.MyArbs(Path(d) / "my_arbs.json").items[0]["closes"], "2027-01-01T15:00:00+00:00")
