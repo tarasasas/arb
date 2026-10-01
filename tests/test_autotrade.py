@@ -7,6 +7,7 @@ from arb import autotrade, config, engine
 from arb.trader import TradeError
 
 NOW = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+SOON = (NOW + timedelta(hours=1)).isoformat()
 
 
 def row(game="BTC", profit=2.0, roi=0.02, tab="Crypto", fast=True, k="KX-1", p="btc-1", **kw):
@@ -21,8 +22,10 @@ class FastCheckTests(unittest.TestCase):
         r = {"warnings": [], "tab": "Politics", "closes": None, **kw}
         return engine.fast_check(r, NOW)
 
-    def test_crypto_ok(self):
-        self.assertTrue(self.check(tab="Crypto")["ok"])
+    def test_crypto_needs_to_settle_soon_too(self):
+        self.assertTrue(self.check(tab="Crypto", closes=(NOW + timedelta(minutes=15)).isoformat())["ok"])
+        self.assertFalse(self.check(tab="Crypto", closes=(NOW + timedelta(days=90)).isoformat())["ok"])
+        self.assertFalse(self.check(tab="Crypto")["ok"])                  # no close time: not known to be soon
 
     def test_soon_ok_far_not(self):
         self.assertTrue(self.check(closes=(NOW + timedelta(hours=3)).isoformat())["ok"])
@@ -31,25 +34,25 @@ class FastCheckTests(unittest.TestCase):
 
     def test_rule_warnings_always_block(self):
         for w in ("ONE-WAY RULES: x", "DIFFERENT SETTLEMENT SOURCES (a vs b). x", "PRICES CONTRADICT THIS MATCH: x"):
-            self.assertFalse(self.check(tab="Crypto", warnings=[w])["ok"], w)
-            self.assertFalse(self.check(tab="Crypto", pair={"auto": True}, warnings=[w])["ok"], w)
+            self.assertFalse(self.check(tab="Crypto", closes=SOON, warnings=[w])["ok"], w)
+            self.assertFalse(self.check(tab="Crypto", closes=SOON, pair={"auto": True}, warnings=[w])["ok"], w)
 
     def test_auto_matched_allowed_unless_turned_off(self):
-        auto = dict(tab="Crypto", pair={"auto": True}, warnings=["AUTO-MATCHED, NOT VERIFIED: the scanner paired these"])
+        auto = dict(tab="Crypto", closes=SOON, pair={"auto": True}, warnings=["AUTO-MATCHED, NOT VERIFIED: the scanner paired these"])
         with mock.patch.object(config, "FAST_ALLOW_AUTO_MATCHED", True):
             self.assertTrue(self.check(**auto)["ok"])
-            soon = self.check(**{**auto, "tab": "Politics"}, closes=(NOW + timedelta(hours=2)).isoformat())
+            soon = self.check(**{**auto, "tab": "Politics", "closes": (NOW + timedelta(hours=2)).isoformat()})
             self.assertTrue(soon["ok"])
             self.assertIn("auto-matched", soon["why"])
         with mock.patch.object(config, "FAST_ALLOW_AUTO_MATCHED", False):
             self.assertFalse(self.check(**auto)["ok"])
-            self.assertFalse(self.check(tab="Crypto", warnings=auto["warnings"])["ok"])
+            self.assertFalse(self.check(tab="Crypto", closes=SOON, warnings=auto["warnings"])["ok"])
 
     def test_too_good_allowed_unless_turned_off(self):
         with mock.patch.object(config, "FAST_ALLOW_TOO_GOOD", True):
-            self.assertTrue(self.check(tab="Crypto", suspicious=True)["ok"])
+            self.assertTrue(self.check(tab="Crypto", closes=SOON, suspicious=True)["ok"])
         with mock.patch.object(config, "FAST_ALLOW_TOO_GOOD", False):
-            self.assertFalse(self.check(tab="Crypto", suspicious=True)["ok"])
+            self.assertFalse(self.check(tab="Crypto", closes=SOON, suspicious=True)["ok"])
 
     def test_far_out_still_needs_make_trade(self):
         far = self.check(tab="Politics", pair={"auto": True}, closes=(NOW + timedelta(days=200)).isoformat())

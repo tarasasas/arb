@@ -511,7 +511,7 @@ FAST_BLOCKING = ("ONE-WAY RULES", "DIFFERENT SETTLEMENT SOURCES", "PRICES CONTRA
 def fast_check(row, now):
     """Can this row be traded without a confirm step (Fast trade / Auto-trade)? Pairs matched by
     contract terms, by the sports matcher, approved by you, or (FAST_ALLOW_AUTO_MATCHED) auto-matched by
-    wording, that are time-sensitive (crypto, or settling within FAST_MAX_HOURS). Never rows that look
+    wording, that settle within FAST_MAX_HOURS (crypto included). Never rows that look
     too good to be true or carry rule warnings. {"ok": bool, "why": str}."""
     if row.get("suspicious") and not config.FAST_ALLOW_TOO_GOOD:
         return {"ok": False, "why": "too good to be true: check it first"}
@@ -522,8 +522,6 @@ def fast_check(row, now):
     w = next((w for w in row.get("warnings") or [] if w.startswith(blocking)), None)
     if w:
         return {"ok": False, "why": w.split(":")[0].split(" (")[0].lower()}
-    if row.get("tab") == "Crypto":
-        return {"ok": True, "why": "crypto: paired by contract terms"}
     close = _parse_time(row["closes"]) if row.get("closes") else None
     hours = (close - now).total_seconds() / 3600 if close else None
     if hours is not None and hours <= config.FAST_MAX_HOURS:

@@ -194,8 +194,8 @@ Some arbs last only seconds, so these skip the confirm screen. They run the same
 3. Buy the other side for exactly what filled, never above break-even.
 4. Sell back right away any shares that couldn't be hedged.
 
-**Which rows qualify:** crypto pairs (matched by contract terms), and anything settling within
-`FAST_MAX_HOURS`. That includes pairs auto-matched by wording that you haven't checked
+**Which rows qualify:** anything settling within `FAST_MAX_HOURS` (24 hours by default), crypto
+included. That includes pairs auto-matched by wording that you haven't checked
 (`FAST_ALLOW_AUTO_MATCHED`), and rows flagged too good to be true, so any return of at least
 `AUTO_TRADE_MIN_ROI` qualifies, with no upper limit (`FAST_ALLOW_TOO_GOOD`). Live prices are always
 re-checked before ordering. Rows with a one-way-rules, different-settlement-source or prices-contradict
