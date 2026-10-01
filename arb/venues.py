@@ -224,6 +224,47 @@ class PolymarketVenue:
         body, r, order = self._order(slug, intent, qty, yes_price)
         return self._fill(body, r, order, limit, True, fee_coef)
 
+    # ---- resting (maker) orders ------------------------------------------------------------
+
+    def post_maker(self, slug, side, qty, cost, ttl_secs):
+        """Rest a post-only buy of `side` at `cost` per share. It expires on Polymarket's side after
+        ttl_secs even if this app stops, and is rejected (never fills as a taker) if it would cross.
+        Returns (order id, request, response)."""
+        intent, yes_price = ("ORDER_INTENT_BUY_LONG", cost) if side == "yes" else ("ORDER_INTENT_BUY_SHORT", 1 - cost)
+        until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + ttl_secs))
+        body = {"marketSlug": slug, "type": "ORDER_TYPE_LIMIT",
+                "price": {"value": f"{yes_price:.4f}".rstrip("0").rstrip("."), "currency": "USD"},
+                "quantity": round(qty, 2), "tif": "TIME_IN_FORCE_GOOD_TILL_DATE", "goodTillTime": until,
+                "participateDontInitiate": True, "intent": intent,
+                "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_MANUAL"}
+        r = self.http.post("/v1/orders", body)
+        for e in r.get("executions") or []:
+            if e.get("type") == "EXECUTION_TYPE_REJECTED":
+                raise ApiError(400, f"rejected: {e.get('orderRejectReason')} {e.get('text') or ''}".strip())
+        oid = r.get("id") or ((r.get("executions") or [{}])[0].get("order") or {}).get("id")
+        if not oid:
+            raise RuntimeError(f"Polymarket didn't return an order id: {r}")
+        return oid, body, r
+
+    def order(self, oid):
+        """The order's current state: {state, cumQuantity, leavesQuantity, avgPx, ...}."""
+        d = self.http.get(f"/v1/order/{oid}")
+        return d.get("order", d)
+
+    def cancel(self, oid, slug):
+        return self.http.post(f"/v1/order/{oid}/cancel", {"marketSlug": slug})
+
+    def maker_fills(self, order, cost, fee_coef):
+        """(shares filled, dollars paid for them, fee) from an order's state; a maker rebate is a negative fee."""
+        n = float(order.get("cumQuantity") or 0)
+        if n <= 0:
+            return 0.0, 0.0, 0.0
+        avg = float(((order.get("avgPx") or {}).get("value")) or cost)
+        fee = (order.get("commissionNotionalTotalCollected") or {}).get("value")
+        per = _per_share(avg, cost, True)
+        fee = float(fee) if fee is not None else -config.POLYMARKET_MAKER_REBATE * per * (1 - per) * n
+        return n, n * per, fee
+
     def sell(self, slug, side, qty, min_price, fee_coef):
         intent, yes_price = ("ORDER_INTENT_SELL_LONG", min_price) if side == "yes" else ("ORDER_INTENT_SELL_SHORT", 1 - min_price)
         body, r, order = self._order(slug, intent, qty, yes_price)

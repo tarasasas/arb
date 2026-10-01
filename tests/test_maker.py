@@ -1,59 +1,229 @@
+import threading
 import unittest
+from datetime import timedelta
+from unittest import mock
 
-from arb import engine
-from arb.model import NO, YES, Contract, polymarket_fee
+from arb import config, engine, maker
+from arb.http import ApiError
+from arb.venues import Fill
 
-
-class PM:
-    def __init__(self, yes_ask, no_ask, tick=0.01):
-        self.yes_ask, self.no_ask, self.tick = yes_ask, no_ask, tick
-
-
-def cand(ak=0.45, ap=0.56, sp=YES):
-    k = Contract("kalshi", "k", "G", ("total", "FG"), ">", 8.5, "k", fee_coef=0.07)
-    p = Contract("polymarket", "p", "G", ("total", "FG"), "<" if sp == YES else ">", 8.5, "p", fee_coef=0.0695)
-    return {"k": k, "sk": YES, "p": p, "sp": sp, "ak": ak, "ap": ap, "payout": 1.0,
-            "edge": 1.0 - ak - ap - 0.07 * ak * (1 - ak) - 0.0695 * ap * (1 - ap)}
+TL = "/tmp/arb_test_maker_trades.jsonl"
 
 
-class MakerTests(unittest.TestCase):
-    def test_quote_steps_inside_the_spread_or_joins(self):
-        # YES bid 0.50 (NO ask 0.50), YES ask 0.53: rest a YES bid one tick up at 0.51.
-        self.assertEqual(engine.maker_quote(PM(0.53, 0.50), YES), (0.51, 0.51))
-        # Buy NO = rest an offer to sell YES one tick under the ask: 0.52, costing 0.48.
-        self.assertEqual(engine.maker_quote(PM(0.53, 0.50), NO), (0.52, 0.48))
-        # One-tick spread: join the best price instead of crossing it.
-        self.assertEqual(engine.maker_quote(PM(0.51, 0.50), YES), (0.50, 0.50))
-        self.assertEqual(engine.maker_quote(PM(0.51, 0.50), NO), (0.51, 0.49))
-        self.assertIsNone(engine.maker_quote(PM(None, 0.5), YES))
-        self.assertIsNone(engine.maker_quote(PM(0.37, 0.95), NO, max_spread=0.03))   # 5c bid / 37c ask: too wide
+def row(game="G", hl=0.45, cost=0.50, closes_h=5, **kw):
+    return {"game": game, "tab": "Sports", "payout": 1.0, "profit": 0.5, "size": 100, "edge_per_contract": 0.01,
+            "closes": (engine.now_utc() + timedelta(hours=closes_h)).isoformat(), "warnings": [],
+            "fee_coef": {"kalshi": 0.07, "polymarket": -0.0125},
+            "maker": {"post_yes_price": cost, "cost": cost, "hedge_limit": hl, "tick": 0.01},
+            "legs": [{"exchange": "Kalshi", "market_id": "K", "side": "no", "title": "k"},
+                     {"exchange": "Polymarket", "market_id": "p", "side": "yes", "title": "p", "maker": True}], **kw}
 
-    def test_rebate_turns_a_near_miss_into_an_arb(self):
-        c = cand(ak=0.40, ap=0.60)                       # 40 + 60 = 100c plus fees: a loss as a taker
-        self.assertLess(c["edge"], 0)
-        mc = engine.maker_candidate(c, PM(0.60, 0.47), 0.0125)   # YES bid 0.53 -> rest at 0.54
-        self.assertEqual(mc["maker"]["cost"], 0.54)
-        expected = 1 - 0.40 - 0.54 - 0.07 * 0.40 * 0.60 + 0.0125 * 0.54 * 0.46
-        self.assertAlmostEqual(mc["edge"], expected, 9)
-        self.assertGreater(mc["edge"], 0)
-        self.assertEqual(mc["p"].fee_coef, -0.0125)
-        self.assertEqual(c["p"].fee_coef, 0.0695)       # the original contract is untouched
 
-    def test_sizing_uses_the_rebate(self):
-        mc = engine.maker_candidate(cand(ak=0.40, ap=0.60), PM(0.60, 0.47), 0.0125)
-        sizing = engine.size_opportunity(mc, [(0.40, 100), (0.47, 100)], [(mc["ap"], 1e9)])
-        self.assertEqual(sizing["size"], 100)            # the 47c Kalshi level isn't profitable
-        self.assertEqual(sizing["fee_p"], polymarket_fee([(0.54, 100)], -0.0125))
-        self.assertLess(sizing["fee_p"], 0)             # a rebate: money back
-        self.assertAlmostEqual(sizing["profit"], 100 - 40 - 54 - sizing["fee_k"] - sizing["fee_p"], 9)
+class FakeKalshi:
+    def __init__(self, ask=0.44, depth=1000, fill=True):
+        self.ask, self.depth, self.fill, self.buys = ask, depth, fill, []
 
-    def test_hedge_limit_is_the_highest_profitable_kalshi_price(self):
-        lim = engine.hedge_limit(1.0, 0.54, 0.0125, 0.07)
-        self.assertEqual(lim, 0.44)                     # 44c + fee fits under 46c + rebate; 45c + fee doesn't
-        room = 1 - 0.54 + 0.0125 * 0.54 * 0.46
-        self.assertLess(lim + 0.07 * lim * (1 - lim), room)
-        self.assertGreaterEqual(0.45 + 0.07 * 0.45 * 0.55, room)
+    def market_info(self, t):
+        return {"open": True, "min_qty": 1.0, "shard": 0, "tick": lambda p: 0.01}
+
+    def levels(self, t):
+        return {"yes": [(1 - self.ask + 0.02, 100)], "no": [(self.ask, self.depth)]}
+
+    def balance(self, shard=None):
+        return 1000.0
+
+    def buy(self, t, side, qty, limit, coef):
+        self.buys.append((qty, limit))
+        if not self.fill or self.ask > limit + 1e-9:
+            return Fill()
+        return Fill(qty=qty, amount=qty * self.ask, fee=0.02 * qty)
+
+
+class FakePoly:
+    """A resting order whose fills arrive over successive reads (script: cumulative fills per read)."""
+
+    def __init__(self, script=(0, 0, 10, 10, 30), reject=None):
+        self.script, self.reads, self.reject = list(script), 0, reject
+        self.cancelled, self.sold, self.state = [], [], "ORDER_STATE_NEW"
+
+    def post_maker(self, slug, side, qty, cost, ttl):
+        if self.reject:
+            raise ApiError(400, self.reject)
+        self.qty = qty
+        return "o1", {}, {}
+
+    def order(self, oid):
+        i = min(self.reads, len(self.script) - 1)
+        self.reads += 1
+        cum = min(self.script[i], self.qty)
+        st = "ORDER_STATE_FILLED" if cum >= self.qty else self.state
+        return {"state": st, "cumQuantity": cum, "avgPx": {"value": "0.5"}}
+
+    def maker_fills(self, o, cost, coef):
+        n = float(o["cumQuantity"])
+        return n, n * 0.5, -0.003 * n
+
+    def cancel(self, oid, slug):
+        self.cancelled.append(oid)
+        self.state = "ORDER_STATE_CANCELED"
+
+    def balance(self, shard=None):
+        return 1000.0
+
+    def levels(self, slug):
+        return {"yes": [(0.52, 100)], "no": [(0.51, 100)]}
+
+    def sell(self, slug, side, qty, min_price, coef):
+        self.sold.append(qty)
+        return Fill(qty=qty, amount=qty * min_price, fee=0.0)
+
+
+class FakeTrader:
+    def __init__(self, k, p):
+        self.venues = {"kalshi": k, "polymarket": p}
+
+    def _cached_cash(self, ex, shard=None):
+        return None
+
+    def _live_book(self, ex, mid):
+        return None
+
+
+class FakeScanner:
+    def __init__(self, k, p, rows):
+        self.trader, self.lock, self.state = FakeTrader(k, p), threading.Lock(), {"maker": rows, "balances": {}}
+        self.logs, self.my_arbs, self.alerter, self.trading_status = [], mock.Mock(), None, "on"
+
+    def log(self, m):
+        self.logs.append(m)
+
+    def refresh_balances(self):
+        pass
+
+
+@mock.patch.object(config, "TRADES_LOG", TL)
+@mock.patch.object(config, "MAKER_AUTO_POLL_SECS", 0)
+class MakerBotTests(unittest.TestCase):
+    def make(self, k=None, p=None, rows=None):
+        rows = rows if rows is not None else [row()]
+        s = FakeScanner(k or FakeKalshi(), p or FakePoly(), rows)
+        b = maker.MakerBot(s, run_async=False, sleep=lambda _s: None)
+        b.set(True)
+        return s, b
+
+    def test_every_fill_is_hedged_on_kalshi(self):
+        s, b = self.make()
+        b.check(s.state["maker"])
+        h = b.history[0]
+        self.assertEqual(h["status"], "ok")
+        k = s.trader.venues["kalshi"]
+        self.assertEqual(sum(q for q, _ in k.buys), h["filled"])
+        self.assertEqual(h["pairs"], h["filled"])
+        self.assertGreater(h["net"], 0)
+        s.my_arbs.add_from_trade.assert_called_once()
+        self.assertEqual(b.active, {})
+
+    def test_size_fits_the_budget_and_kalshi_depth(self):
+        s, b = self.make(k=FakeKalshi(depth=20))
+        b.check(s.state["maker"])
+        self.assertEqual(s.trader.venues["polymarket"].qty, 10)          # 20 shares / 2x hedge depth
+
+    def test_kalshi_moving_past_the_limit_cancels(self):
+        k = FakeKalshi()
+        p = FakePoly(script=(0, 0, 0, 0))
+        s, b = self.make(k=k, p=p)
+        orig = p.order
+
+        def order(oid):
+            if p.reads == 2:
+                k.ask = 0.47                                             # Kalshi now above the 0.45 hedge limit
+            return orig(oid)
+        p.order = order
+        b.check(s.state["maker"])
+        self.assertEqual(p.cancelled, ["o1"])
+        self.assertIn("past the hedge limit", b.history[0]["note"])
+        self.assertEqual(b.history[0]["status"], "no_fill")
+
+    def test_unhedgeable_fill_is_sold_back_and_counted(self):
+        k = FakeKalshi(fill=False)
+        p = FakePoly(script=(0, 10))
+        s, b = self.make(k=k, p=p)
+        with mock.patch.object(config, "AUTO_TRADE_MAX_MISSES", 1):
+            b.check(s.state["maker"])
+        self.assertEqual(p.cancelled, ["o1"])
+        self.assertEqual(p.sold, [10])
+        self.assertEqual(b.history[0]["status"], "partial")
+        self.assertFalse(b.on)
+        self.assertIn("in a row", b.halted)
+
+    def test_arb_leaving_the_list_cancels(self):
+        p = FakePoly(script=(0, 0, 0))
+        s, b = self.make(p=p)
+        orig = p.order
+
+        def order(oid):
+            s.state["maker"] = []
+            return orig(oid)
+        p.order = order
+        b.check([row()])
+        self.assertIn("left the Maker mode list", b.history[0]["note"])
+
+    def test_turning_off_cancels(self):
+        p = FakePoly(script=(0, 0, 0))
+        s, b = self.make(p=p)
+        orig = p.order
+
+        def order(oid):
+            b.on = False
+            return orig(oid)
+        p.order = order
+        b.check(s.state["maker"])
+        self.assertEqual(p.cancelled, ["o1"])
+
+    def test_rejected_post_trades_nothing(self):
+        s, b = self.make(p=FakePoly(reject="would cross"))
+        b.check(s.state["maker"])
+        self.assertEqual(b.history[0]["status"], "skipped")
+        self.assertTrue(b.on)
+
+    def test_pick_rules(self):
+        s, b = self.make(rows=[])
+        self.assertIsNone(b.pick([row(closes_h=48)]))                     # settles too late
+        self.assertIsNone(b.pick([row(warnings=["Game already started: x"])]))
+        self.assertIsNone(b.pick([row(hl=None)]))
+        self.assertIsNotNone(b.pick([row()]))
+        b.tried[maker.pair_id(row()["legs"])] = b.clock()
+        self.assertIsNone(b.pick([row()]))                                # cooldown
+
+    def test_off_does_nothing(self):
+        s, b = self.make()
+        b.set(False)
+        self.assertIsNone(b.check(s.state["maker"]))
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PolymarketMakerOrderTests(unittest.TestCase):
+    def test_post_only_good_till_date_buy_no(self):
+        from arb.venues import PolymarketVenue
+        pv = PolymarketVenue.__new__(PolymarketVenue)
+        pv.http = mock.Mock()
+        pv.http.post.return_value = {"id": "abc"}
+        oid, body, _ = pv.post_maker("slug", "no", 10, 0.47, 120)
+        self.assertEqual(oid, "abc")
+        self.assertEqual(body["tif"], "TIME_IN_FORCE_GOOD_TILL_DATE")
+        self.assertTrue(body["participateDontInitiate"])
+        self.assertEqual((body["intent"], body["price"]["value"]), ("ORDER_INTENT_BUY_SHORT", "0.53"))
+        self.assertTrue(body["goodTillTime"].endswith("Z"))
+        pv.cancel("abc", "slug")
+        pv.http.post.assert_called_with("/v1/order/abc/cancel", {"marketSlug": "slug"})
+
+    def test_rejected_post(self):
+        from arb.venues import PolymarketVenue
+        pv = PolymarketVenue.__new__(PolymarketVenue)
+        pv.http = mock.Mock()
+        pv.http.post.return_value = {"id": "x", "executions": [{"type": "EXECUTION_TYPE_REJECTED", "orderRejectReason": "PDI"}]}
+        with self.assertRaises(ApiError):
+            pv.post_maker("slug", "yes", 10, 0.5, 120)

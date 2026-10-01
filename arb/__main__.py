@@ -64,7 +64,10 @@ def main(argv=None):
     if not phone and not args.local:
         scanner.log("Phone access off: add DASHBOARD_PASSWORD=<at least 8 characters> to .env to open the "
                     "dashboard on your phone (see 'On your iPhone' in the README)")
-    serve(scanner, args.port, open_browser=not args.no_browser, phone=phone, password=config.DASHBOARD_PASSWORD)
+    try:
+        serve(scanner, args.port, open_browser=not args.no_browser, phone=phone, password=config.DASHBOARD_PASSWORD)
+    finally:
+        scanner.makerbot.stop_all()     # don't leave Auto maker orders resting (they'd expire anyway)
     return 0
 
 

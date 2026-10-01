@@ -373,6 +373,7 @@
   </div>
 
   <div class="tabs" id="tabs-bar" role="tablist"></div>
+  <div class="autobar" id="makerbar" style="display:none"></div>
   <div id="opps-wrap">
   <div class="caveat" id="cash-note" style="margin:0 0 6px"></div>
   <div class="table-wrap opps-wrap">
@@ -792,6 +793,52 @@ async function fastTrade(key) {
 
 // Auto-trade: places fast-eligible arbs by itself, within the caps in .env. Off every time the scanner starts.
 const autoOpenSet = {};
+// Auto maker: rests Polymarket maker orders for Maker mode rows and hedges every fill on Kalshi.
+function renderMaker(s) {
+  const el = document.getElementById("makerbar"), m = s.makerbot;
+  if (!m || currentTab !== MAKER) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.className = "autobar" + (m.on ? " on" : m.halted ? " halted" : "");
+  const on = tradingOn();
+  const rows = (m.active || []).map(o => `<tr><td>${esc(o.game)}</td><td>${esc((o.state || "").replace(/_/g, " "))}</td>
+      <td class="num">${o.size ? compact(o.size) : "–"} @ ${cents(o.cost)}</td><td class="num">${compact(o.filled)} / ${compact(o.hedged)}</td>
+      <td class="num">≤ ${cents(o.hedge_limit)}</td>
+      <td class="num">${o.posted ? Math.max(0, Math.round(m.ttl - (Date.now() / 1000 - o.posted))) + "s" : "–"}</td>
+      <td>${o.id ? `<button data-mcancel="${esc(o.id)}">Cancel</button>` : ""}</td></tr>`).join("");
+  const hist = (m.history || []).map(h => `<li>${esc(h.time.slice(11))} · ${esc(h.game || "")} · <b>${esc(h.status)}</b>${
+    h.filled ? ` · ${compact(h.filled)} filled, ${compact(h.pairs)} hedged, net ${money(h.net)}` : ""}${
+    h.unhedged ? ` · <span style="color:var(--critical)">${compact(h.unhedged)} unhedged</span>` : ""}${
+    h.note ? ` <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("");
+  el.innerHTML = `<b>Auto maker</b>
+    <button id="maker-toggle" ${on || m.on ? "" : "disabled"} class="${m.on ? "" : "trade"}" style="margin:0">${m.on ? "Turn off" : "Turn on"}</button>
+    <span>${m.on ? `<span style="color:var(--good)">●</span> ON` : "OFF"}${m.active?.length ? ` · ${m.active.length} resting` : ""}</span>
+    ${m.filled_today > 0 ? `<span>Today: <b class="profit">${money(m.net_today)}</b> on ${money(m.filled_today)} filled</span>` : ""}
+    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Rests a post-only Polymarket order for the
+      best Maker mode row settling within ${m.fast_max_hours}h · up to ${money(m.max_order)} per order, ${m.max_orders} at once,
+      ${money(m.max_resting)} resting in total, ${money(m.daily_limit)} filled per day · each order lasts ${m.ttl}s (Polymarket expires it
+      even if this app stops) · every fill is bought on Kalshi right away at no more than the hedge limit · cancels when Kalshi
+      moves past the hedge limit or the row disappears · turns off after ${m.max_misses} orders in a row leave shares to sell back.</div></details>
+    ${m.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(m.halted)}</div>` : ""}
+    ${rows ? `<div class="table-wrap" style="flex-basis:100%"><table><thead><tr><th>Resting order</th><th>State</th>
+      <th class="num">Size</th><th class="num">Filled / hedged</th><th class="num">Hedge limit</th><th class="num">Left</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : ""}
+    ${hist ? `<details class="mhist"><summary class="muted">Last maker orders</summary><ol>${hist}</ol></details>` : ""}`;
+  el.querySelectorAll("details").forEach(d => {
+    const key = "maker-" + (d.classList.contains("limits") ? "limits" : "history");
+    d.open = !!autoOpenSet[key];
+    d.addEventListener("toggle", () => { autoOpenSet[key] = d.open; });
+  });
+  document.getElementById("maker-toggle").onclick = async () => {
+    if (!m.on && !confirm(`Turn on Auto maker?\n\nIt will rest real orders on Polymarket and buy the Kalshi side by itself ` +
+        `whenever they fill: up to ${money(m.max_order)} per order, ${m.max_orders} at once, ${money(m.daily_limit)} per day. ` +
+        `A fill often comes just as prices move, so some fills can't be hedged and are sold back at a small loss.`)) return;
+    try { state.makerbot = await post("/api/maker", { on: !m.on }); renderMaker(state); } catch (e) { alert(e.message); }
+  };
+  el.querySelectorAll("[data-mcancel]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await post("/api/maker/cancel", { id: b.dataset.mcancel }); } catch (e) { alert(e.message); }
+  });
+}
 // Tick-to-trade: typical (p50) and slow-case (p95) milliseconds per stage over the last 50 trades.
 function speedHtml(lat) {
   if (!lat) return "";
@@ -1483,6 +1530,7 @@ function render(force) {
         bal.polymarket != null ? `Polymarket <b>${money(bal.polymarket)}</b>` : ""}${bal.error ? ` <span title="${esc(bal.error)}">(stale)</span>` : ""}`
     : "";
   renderAuto(s);
+  renderMaker(s);
   const fsel = document.getElementById("f-focus");
   if (s.focus && document.activeElement !== fsel) fsel.value = String(s.focus.days || 0);
   const feeds = Object.entries(s.streams || {});

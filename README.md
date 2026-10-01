@@ -541,7 +541,25 @@ The risk: a resting order tends to fill just as the price moves against you, and
 moved too by then. So maker mode only looks at Polymarket markets whose bid–ask gap is 3¢ or less,
 needs at least 0.5¢ profit per pair, and sizes each row to at most $1,000 (`MAKER_MAX_CAPITAL`,
 `MAKER_MAX_SPREAD` and `MAKER_MIN_EDGE` in `arb/config.py`). **Make trade** doesn't place maker
-orders: place them yourself.
+orders; **Auto maker** does.
+
+**Auto maker** (switch at the top of the Maker mode tab, off every time the scanner starts) does the
+three steps above by itself for the best Maker mode row settling within `FAST_MAX_HOURS`:
+- rests a post-only Polymarket order (it can never fill as a taker) that Polymarket expires after
+  `MAKER_AUTO_TTL_SECS` (120) even if this app stops; sized so Kalshi holds twice the shares at or
+  below the hedge limit, and to the cash on both sites;
+- reads the order every `MAKER_AUTO_POLL_SECS` (0.5s) and buys every newly filled share on Kalshi at
+  once, never above the hedge limit for what those shares really cost;
+- cancels when Kalshi moves past the hedge limit, the row leaves the Maker mode list, a hedge misses,
+  time runs out, you press Cancel, or you turn it off; then hedges any last fills and sells back what
+  it couldn't hedge;
+- adds hedged pairs to My arbs and logs every order to `trades.jsonl`;
+- turns itself off after `AUTO_TRADE_MAX_MISSES` orders in a row leave shares to sell back, after
+  `AUTO_TRADE_MAX_DAILY_LOSS` lost in a day, or if an order can't be read.
+
+Limits in `.env`: `MAKER_AUTO_MAX_ORDER` ($25 per order), `MAKER_AUTO_MAX_ORDERS` (2 at once),
+`MAKER_AUTO_MAX_RESTING` ($100 resting in total), `MAKER_AUTO_DAILY_LIMIT` ($200 filled per day),
+`MAKER_AUTO_COOLDOWN_SECS` (300, per pair).
 
 ## Alerts
 

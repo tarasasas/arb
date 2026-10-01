@@ -216,6 +216,10 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     return self._json(200, scanner.set_focus(body.get("days") or 0))
                 if path == "/api/autotrade":
                     return self._json(200, scanner.autotrader.set(bool(body.get("on"))))
+                if path == "/api/maker":
+                    return self._json(200, scanner.makerbot.set(bool(body.get("on"))))
+                if path == "/api/maker/cancel":
+                    return self._json(200, {"ok": scanner.makerbot.cancel(str(body.get("id") or ""))})
                 return self._json(404, {"error": "Not found"})
             except (TradeError, ValueError, KeyError) as e:
                 return self._json(400, {"error": str(e)})

@@ -60,6 +60,8 @@ class Scanner:
         self.load_focus()               # scan only markets settling soon, if you set Focus
         from .autotrade import AutoTrader
         self.autotrader = AutoTrader(self)  # off until you turn it on in the dashboard
+        from .maker import MakerBot
+        self.makerbot = MakerBot(self)      # Auto maker: off until you turn it on in Maker mode
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
                       "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
                       "scan_seconds": None, "logs": []}
@@ -679,6 +681,8 @@ class Scanner:
         self.merge_lock.release()
         self.alerter.check(opportunities)
         self.autotrader.check(opportunities)
+        if maker is not None:
+            self.makerbot.check(maker)
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
                      f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")
@@ -902,6 +906,7 @@ class Scanner:
             s = dict(self.state)
         s["logs"] = list(self.logs)[-30:]
         s["autotrade"] = self.autotrader.status()
+        s["makerbot"] = self.makerbot.status()
         s["focus"] = {"days": getattr(self, "focus_days", 0), "contracts": len(self.contracts)}
         s["latency"] = self.latency_summary()
         return s

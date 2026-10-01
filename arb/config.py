@@ -157,6 +157,16 @@ MAKER_MAX_CAPITAL = 1000.0         # size maker-mode rows to at most this much m
 MAKER_MIN_EDGE = 0.005             # per pair: below half a cent a maker fill isn't worth the waiting
 MAKER_MAX_SPREAD = 0.03            # only where Polymarket's bid-ask gap is this tight: in a wide gap a
                                    # resting order fills only when the price jumps, and Kalshi jumps too
+# Maker automation ("Auto maker" switch in Maker mode; off every time the scanner starts). It rests one
+# post-only Polymarket order per arb, buys the Kalshi side for every share that fills (never above the
+# hedge limit), and cancels when Kalshi moves past the hedge limit, the arb disappears, or time runs out.
+MAKER_AUTO_MAX_ORDER = _env_num("MAKER_AUTO_MAX_ORDER", 25)         # $ per resting order, both legs
+MAKER_AUTO_MAX_RESTING = _env_num("MAKER_AUTO_MAX_RESTING", 100)    # $ resting at once, all orders
+MAKER_AUTO_MAX_ORDERS = int(_env_num("MAKER_AUTO_MAX_ORDERS", 2))   # resting orders at once
+MAKER_AUTO_TTL_SECS = _env_num("MAKER_AUTO_TTL_SECS", 120)          # cancel (and Polymarket expires it) after this
+MAKER_AUTO_POLL_SECS = _env_num("MAKER_AUTO_POLL_SECS", 0.5)        # how often each order is checked for fills
+MAKER_AUTO_COOLDOWN_SECS = _env_num("MAKER_AUTO_COOLDOWN_SECS", 300) # per pair, after an order ends
+MAKER_AUTO_DAILY_LIMIT = _env_num("MAKER_AUTO_DAILY_LIMIT", 200)    # $ filled per day
 
 # Scanner settings.
 CATALOG_REFRESH_SECS = 300     # full market lists + game matching
