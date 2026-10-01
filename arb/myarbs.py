@@ -173,18 +173,24 @@ class MyArbs:
         self.unpaired = unpaired
 
     def reconcile(self, kpos, ppos, read=("kalshi", "polymarket")):
-        """Follow sales you made yourself: a tracked leg whose live position is now smaller (or gone)
-        is cut to what you still hold, its cost pro rata; an arb with a leg sold out is closed.
-        Only legs whose market is known to be still open are touched, because a market that settles
-        also makes the position disappear. read: the exchanges whose positions were read.
-        Returns the arbs that changed."""
+        """Make every tracked leg hold what your account really holds, read through the sites' APIs.
+        Fewer shares live (you sold some) cuts the leg, its cost pro rata; a leg sold out closes the arb.
+        More shares live (you bought more, e.g. to hedge the short side by hand) raises the leg to the
+        live count, the added shares at the account's average cost. A market held by two tracked arbs
+        is only ever cut, since the extra shares can't be told apart. Only legs whose market is known
+        to be still open are touched, because a market that settles also makes the position disappear.
+        read: the exchanges whose positions were read. Returns the arbs that changed."""
         names = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
         changed = []
         with self.lock:
-            for a in self.items:
-                if a.get("closed"):
-                    continue
-                sold = []
+            open_arbs = [a for a in self.items if not a.get("closed")]
+            uses = {}
+            for a in open_arbs:
+                for leg in a["legs"]:
+                    k = (leg["exchange"], leg["market_id"], leg["side"])
+                    uses[k] = uses.get(k, 0) + 1
+            for a in open_arbs:
+                sold, bought = [], []
                 for leg in a["legs"]:
                     if leg["exchange"] not in read:
                         continue
@@ -198,14 +204,25 @@ class MyArbs:
                             leg["paid"] = round(leg["paid"] * live / leg["shares"], 2)
                         sold.append(f"{leg['shares'] - live:g} {names[leg['exchange']]} {leg['side'].upper()}")
                         leg["shares"] = live
-                if not sold:
+                    elif live > leg["shares"] + 1e-6 and uses[(leg["exchange"], leg["market_id"], leg["side"])] == 1:
+                        extra = live - leg["shares"]
+                        if pos.get("paid") is not None and not pos.get("paid_estimated"):
+                            leg["paid"] = round(pos["paid"], 2)            # the account's cost for all of them
+                        elif leg["shares"] > 0:
+                            leg["paid"] = round(leg["paid"] * live / leg["shares"], 2)
+                        bought.append(f"{extra:g} {names[leg['exchange']]} {leg['side'].upper()}")
+                        leg["shares"] = live
+                    leg["shares_from"] = "account"
+                if not sold and not bought:
                     continue
                 when = datetime.now(timezone.utc).isoformat()
                 if any(leg["shares"] <= 1e-9 for leg in a["legs"]):
                     a["closed"] = {"time": when, "why": f"you sold {' and '.join(sold)}"}
                     a["note"] = f"Closed: you sold {' and '.join(sold)}. " + (a.get("note") or "")
                 else:
-                    a["note"] = f"You sold {' and '.join(sold)}; shares updated. " + (a.get("note") or "")
+                    did = "; ".join(x for x in (f"you sold {' and '.join(sold)}" if sold else "",
+                                                f"you bought {' and '.join(bought)} more" if bought else "") if x)
+                    a["note"] = f"{did[0].upper()}{did[1:]}: shares updated from your account. " + (a.get("note") or "")
                 changed.append(a)
             if changed:
                 self._save()

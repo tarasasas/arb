@@ -181,6 +181,25 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(self.m.reconcile({}, {"npb-han-ygo": {"side": "no", "shares": 20}}, read=("polymarket",)), [])
         self.assertEqual(self.m.items[0]["legs"][0]["shares"], 20)
 
+    def test_hedging_by_hand_raises_the_short_leg(self):
+        # Kalshi 20 / Polymarket 12 tracked (8 unhedged); you buy 7 more on Polymarket yourself.
+        self.m.items[0]["legs"][1].update(shares=12, paid=5.76)
+        changed = self.m.reconcile({"KXNPB-HAN": {"side": "yes", "shares": 20, "paid": 10.0}},
+                                   {"npb-han-ygo": {"side": "no", "shares": 19, "paid": 9.31}})
+        self.assertEqual(len(changed), 1)
+        a = self.m.items[0]
+        self.assertEqual((a["legs"][1]["shares"], a["legs"][1]["paid"]), (19, 9.31))
+        self.assertIn("You bought 7 Polymarket NO more", a["note"])
+        from arb.myarbs import summarize
+        self.assertEqual(summarize(a)["unhedged"][0]["shares"], 1)
+
+    def test_a_market_shared_by_two_arbs_is_not_raised(self):
+        self.m.save({"source": "manual", "game": "Other line", "payout": 1.0, "legs": [
+            {"exchange": "kalshi", "market_id": "KXNPB-HAN2", "side": "no", "shares": 5, "paid": 2.0},
+            {"exchange": "polymarket", "market_id": "npb-han-ygo", "side": "no", "shares": 5, "paid": 2.0}]})
+        self.m.reconcile({}, {"npb-han-ygo": {"side": "no", "shares": 40}}, read=("polymarket",))
+        self.assertEqual([a["legs"][1]["shares"] for a in self.m.items], [20, 5])
+
 
 class CostBasisTests(unittest.TestCase):
     def setUp(self):
