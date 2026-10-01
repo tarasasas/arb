@@ -222,6 +222,30 @@ class ShardFundingTests(unittest.TestCase):
         self.assertLess(k.funded[0][1], kalshi_spend + 0.10)      # and not much more
         self.assertEqual(plan["shard_transfers"], [{"from": 0, "to": 2, "amount": k.funded[0][1]}])
 
+    def test_books_are_reread_after_waiting_for_a_transfer(self):
+        class ShardVenue(FakeVenue):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.cash = {0: 500.0, 2: 0.0}
+
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return self.cash[shard] if shard is not None else sum(self.cash.values())
+
+            def fund_shard(self, shard, dollars):
+                self.cash[0] -= dollars
+                self.cash[shard] += dollars
+                self.book["yes"] = [(0.40, 20), (0.70, 500)]     # the book thinned while the cash moved
+                return [(0, dollars)], self.cash[shard]
+        k = ShardVenue("kalshi", yes=[(0.40, 500)])
+        t = make(k, FakeVenue("polymarket", no=[(0.50, 500)]))
+        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+            plan = t.prepare(LEGS)
+        self.assertEqual(plan["size"], 20)                        # sized on the book after the transfer
+        self.assertEqual(plan["legs"]["kalshi"]["limit"], 0.40)
+
     def test_off_means_no_transfer(self):
         class ShardVenue(FakeVenue):
             def market_info(self, _mid):

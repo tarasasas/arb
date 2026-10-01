@@ -2,6 +2,7 @@
 
 import os
 import re
+import threading
 import time
 import urllib.error
 from collections import defaultdict
@@ -211,10 +212,23 @@ class KalshiClient:
         self.workers = workers_for(rps)
         self.auth_info = f"API key, {limits.get('usage_tier', '?')} tier, {rps:.0f} req/s"
 
+    SERIES_TTL = 1800      # the full series list is 18 MB (a ~200ms pause to read): fetch it once per half hour
+
+    def _all_series(self):
+        """Every Kalshi series, shared by sports_series() and series_fee_coefs()."""
+        lock = self.__dict__.setdefault("_series_lock", threading.Lock())
+        with lock:
+            hit = getattr(self, "_series_cache", None)
+            if hit and time.time() - hit[0] < self.SERIES_TTL:
+                return hit[1]
+            series = self.http.get("/series").get("series", [])
+            self._series_cache = (time.time(), series)
+            return series
+
     def sports_series(self):
         """Return {series_ticker: (series_info, fee_coef)} for configured leagues."""
         out = {}
-        for s in self.http.get("/series").get("series", []):
+        for s in self._all_series():
             info = parse_series(s["ticker"])
             if not info:
                 continue
@@ -226,7 +240,7 @@ class KalshiClient:
     def series_fee_coefs(self):
         """{series_ticker: taker coefficient} for every series (non-sports included)."""
         out = {}
-        for s in self.http.get("/series").get("series", []):
+        for s in self._all_series():
             mult = s.get("fee_multiplier")
             out[s["ticker"]] = config.KALSHI_TAKER_COEF * (1.0 if mult is None else float(mult))
         return out

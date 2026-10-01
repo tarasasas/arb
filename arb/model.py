@@ -46,6 +46,15 @@ class Contract:
     # guaranteed_payout() against other contracts: it depends only on terms, never on price.
     pay_cache: dict = field(default_factory=dict, repr=False, compare=False)
 
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        d.pop("pay_cache", None)          # rebuilt on demand; saving it made the warm-start file slow
+        return d
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+        self.__dict__.setdefault("pay_cache", {})
+
     @property
     def integer_line(self):
         """Spread/total on a whole number, where landing exactly on the line may be a push."""

@@ -290,6 +290,20 @@ class Trader:
                     transfers = [{"from": src, "to": shard, "amount": amt} for src, amt in moves]
                 except ApiError as e:          # trade with what's there; say why it's small
                     funding_error = f"Kalshi refused moving cash to shard {shard}: {e.detail}"
+        if transfers:
+            # Waiting for the transfer took seconds: size on books read now, not on the ones from before it.
+            def book(ex):
+                live = self._live_book(ex, contracts[ex].market_id)
+                return (live if live is not None else self.venues[ex].levels(contracts[ex].market_id))[sides[ex]]
+            with LanePool(2) as pool:
+                fresh = {ex: pool.submit(book, ex) for ex in EXCHANGES}
+                levels.update({ex: job.result() for ex, job in fresh.items()})
+            checks["kalshi_book"] = checks["polymarket_book"] = "re-read after shard transfer"
+            full = engine.size_opportunity(cand, levels["kalshi"], levels["polymarket"])
+            if not full:
+                raise TradeError(f"The arb was gone by the time the cash reached Kalshi shard {shard} (moved "
+                                 f"${sum(t['amount'] for t in transfers):.2f}; it stays there for next time). "
+                                 f"Nothing was traded.")
         n = largest()
         if n <= 0 and balance["kalshi"] < 1:
             moved = f" (moved ${sum(t['amount'] for t in transfers):.2f} there, not arrived yet)" if transfers else ""

@@ -8,7 +8,7 @@ import traceback
 from collections import Counter, deque
 from datetime import timedelta
 
-from . import config, crypto, engine, kalshi, matching, nonsports, warmcache
+from . import config, crypto, engine, gctune, kalshi, matching, nonsports, warmcache
 from .http import LanePool, priority
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
@@ -196,6 +196,18 @@ class Scanner:
         self.catalog_time = time.time()
         self.log(f"Matched {len(matches)} games, {len(groups)} shared quantities, "
                  f"{len(contracts)} sports contracts to watch ({time.time() - t0:.0f}s)")
+        self._gc_settle()
+
+    def _gc_settle(self):
+        """After a big reload: freeze the long-lived objects so garbage collection stops pausing
+        everything (gctune). A full collection waits while a trade is in flight."""
+        def busy():
+            trader, auto = getattr(self, "trader", None), getattr(self, "autotrader", None)
+            return bool((trader and trader.lock.locked()) or (auto and auto.busy))
+        pause = gctune.settle(busy)
+        if pause > 50:
+            self.log(f"Memory cleanup paused the scanner for {pause:.0f}ms (runs at most every "
+                     f"{config.GC_FULL_EVERY_SECS / 60:.0f} min)")
 
     # ---- non-sports: your approved pairs + suggestions -----------------------------------------
 
@@ -480,6 +492,7 @@ class Scanner:
         self.log(f"Non-sports: {len(auto)} pairs auto-matched and scanned; {sum(len(g['pairs']) for g in groups)} "
                  f"held back for review (prices mirror or far apart, or different data providers) ({time.time() - t0:.0f}s)")
         self.refresh_pairs()
+        self._gc_settle()
 
     def matching_snapshot(self, q="", category="", offset=0, limit=20):
         q = q.lower().strip()
@@ -854,6 +867,7 @@ class Scanner:
                 self.state["stats"].update({k: v for k, v in (d.get("stats") or {}).items()
                                             if k in ("pm_markets", "kalshi_markets", "matched_games")})
             self._publish()
+            self._gc_settle()
         except Exception as e:
             self.log(f"Warm start skipped ({e!r}); loading everything fresh")
             self.sports_cat, self.hot_groups = ([], {}), {}

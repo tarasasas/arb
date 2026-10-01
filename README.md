@@ -378,6 +378,15 @@ trigger orders. The server listens on localhost only.
 The checks before ordering (market info, order book and cash on both sites) run all at once, and
 connections to both sites are kept open between requests, which saves a TLS handshake on every call.
 
+**Pauses inside the app.** Only one thread runs Python at a time, so anything long blocks the stream
+re-check and a trade in flight too. Measured with a probe thread on the full app: Python's garbage
+collector used to pause everything for 100-560ms several times a minute, and saving the warm-start
+file froze it for 1.4s every 5 minutes. Now (`arb/gctune.py`) the long-lived market data is frozen out
+of collection after each reload, automatic full collections are rare (`GC_GEN2_THRESHOLD`), a full
+one runs at most every 30 minutes and never during a trade, threads swap every 1ms instead of 5ms, and
+the warm-start file is written in small pieces. 99.9% of the time the hot path now waits under 5ms
+for its turn (was 57-70ms).
+
 **How fast is a trade?** Double-click `latency-test.bat` (or run `python -m arb.latency`). It times each
 step a trade goes through on both sites (market info, order book, cash) using the trading code itself.
 Then, if you answer `y`, it sends real test orders on each site alone and on both at once: 1 share at a

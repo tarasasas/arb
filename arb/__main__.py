@@ -50,6 +50,8 @@ def main(argv=None):
     ap.add_argument("--local", action="store_true", help="this computer only, even if DASHBOARD_PASSWORD is set")
     args = ap.parse_args(argv)
 
+    from . import gctune
+    gctune.setup()
     scanner = Scanner()
     if args.once:
         scanner.start_message()
