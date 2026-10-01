@@ -54,6 +54,8 @@ if TRADE_ORDER not in ("polymarket_first", "together", "thinner_first"):
     TRADE_ORDER = "together"
 TRADE_LEGS_TOGETHER = TRADE_ORDER == "together"
 SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks below the best bid
+SECOND_LEG_RETRY_PAUSE = 0.25      # longest wait before a second-leg retry (a live stream ends it early)
+PLAN_RECHECK_AFTER_SECS = 1.5      # a plan older than this (it sat in the confirm dialog) is re-checked first
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
 # Kalshi keeps cash per exchange shard and an order can only use its market's shard. With this on, a
 # trade first moves the cash it needs onto that shard from your other shards (your own money, same
@@ -98,6 +100,14 @@ AUTO_TRADE_MAX_DAILY_LOSS = _env_num("AUTO_TRADE_MAX_DAILY_LOSS", 5)            
 # after this many misses in a row on one site (rejections, unfilled orders, unhedged second legs).
 AUTO_TRADE_HEDGE_DEPTH = _env_num("AUTO_TRADE_HEDGE_DEPTH", 2)
 AUTO_TRADE_MAX_MISSES = int(_env_num("AUTO_TRADE_MAX_MISSES", 3))
+# How Auto-trade's two orders go out (same choices as TRADE_ORDER). thinner_first: the book with less
+# depth first (a miss there trades nothing), then the other site for exactly what filled.
+AUTO_TRADE_ORDER = os.environ.get("AUTO_TRADE_ORDER", "").strip().lower() or "thinner_first"
+if AUTO_TRADE_ORDER not in ("polymarket_first", "together", "thinner_first"):
+    AUTO_TRADE_ORDER = "thinner_first"
+# Unhedged first-leg shares may be hedged up to this far ($/share) above break-even when that loses less
+# than selling them back. 0 = always sell back.
+CLOSE_OUT_MAX_LOSS = _env_num("CLOSE_OUT_MAX_LOSS", 0.05)
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 # external-api.kalshi.com is Kalshi's recommended host, but it rejects Python's urllib

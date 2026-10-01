@@ -1,7 +1,9 @@
 """Fast trade (one click, no confirm screen) and Auto-trade (no click at all) for time-sensitive arbs.
 
-Both run the same safe sequence as Make trade (fresh books and balances, thinner leg first, the other
-leg never above break-even, unhedged shares sold back), just without stopping to show you the plan.
+Both run the same safe sequence as Make trade (fresh books and balances, the other leg never above
+break-even, unhedged shares closed the cheaper way), just without stopping to show you the plan.
+Auto-trade sends its orders per AUTO_TRADE_ORDER (default thinner_first: the thinner book first, then
+the other site for exactly what filled).
 Only rows the scanner marks "fast" qualify (engine.fast_check): crypto pairs matched by contract terms
 or anything settling within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
 
@@ -68,7 +70,7 @@ def current_row(scanner, legs):
 
 
 def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.0, min_roi=0.0, cap=None,
-               decided=None, hedge_depth=1.0):
+               decided=None, hedge_depth=1.0, order=None):
     """Plan and place a trade in one step, for an arb the scanner currently lists as fast."""
     decided = decided or time.time()
     row = current_row(scanner, legs)
@@ -80,7 +82,7 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
     cap = min(x for x in (cap or config.FAST_MAX_TRADE, max_invest) if x)
     trader = scanner.trader
     plan = trader.prepare(legs, cap, timeline={"tick": row.get("tick_ts"), "detected": row.get("detected_ts"),
-                                               "decided": decided}, hedge_depth=hedge_depth)
+                                               "decided": decided}, hedge_depth=hedge_depth, order=order)
     roi = plan["expected_profit"] / plan["capital"] if plan["capital"] else 0
     if plan["expected_profit"] < min_profit or roi < min_roi:
         trader.plans.pop(plan["id"], None)
@@ -132,7 +134,7 @@ class AutoTrader:
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
                 "allow_auto_matched": config.FAST_ALLOW_AUTO_MATCHED, "allow_too_good": config.FAST_ALLOW_TOO_GOOD,
                 "misses": dict(self.misses), "max_misses": config.AUTO_TRADE_MAX_MISSES,
-                "hedge_depth": config.AUTO_TRADE_HEDGE_DEPTH,
+                "hedge_depth": config.AUTO_TRADE_HEDGE_DEPTH, "order": config.AUTO_TRADE_ORDER,
                 "history": list(self.history)}
 
     def pick(self, rows, now=None):
@@ -172,7 +174,7 @@ class AutoTrader:
         try:
             res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap, decided=decided,
                              min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI,
-                             hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH)
+                             hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH, order=config.AUTO_TRADE_ORDER)
             used = spent(res)
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used

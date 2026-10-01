@@ -1,5 +1,6 @@
 """Tiny rate-limited JSON GET client built on urllib (no third-party dependencies)."""
 
+import gzip
 import http.client
 import io
 import json
@@ -9,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
@@ -82,7 +84,8 @@ class RateLimitedClient:
     # ---- connections -----------------------------------------------------------------------
 
     GET_IDLE_MAX = 30.0     # reuse a connection idle up to this long for reads (retried if it went stale)
-    POST_IDLE_MAX = 5.0     # orders only reuse a connection used moments ago: a retry could double an order
+    POST_IDLE_MAX = 15.0    # orders only reuse a recently used connection: a retry could double an order
+                            # (both exchanges were measured keeping idle connections open 50s+)
     POOL_MAX = 32
 
     def _new_conn(self):
@@ -147,6 +150,17 @@ class RateLimitedClient:
                 self._give(conn)
             return resp.status, resp.reason, resp.headers, data
         raise ConnectionError("unreachable")
+
+    def warm(self):
+        """Have a connection ready for the next order, so it skips the TCP + TLS handshake."""
+        conn, reused = self._take(self.POST_IDLE_MAX)
+        if not reused:
+            try:
+                conn.connect()
+            except (OSError, http.client.HTTPException):
+                conn.close()
+                return
+        self._give(conn)
 
     def _http_error(self, url, status, reason, headers, data):
         return urllib.error.HTTPError(url, status, reason, headers, io.BytesIO(data))
@@ -229,11 +243,13 @@ class RateLimitedClient:
         for attempt in range(self.max_retries):
             self._wait_turn()
             self.request_count += 1
-            headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+            headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Accept-Encoding": "gzip"}
             if self.signer:
                 headers.update(self.signer("GET", self.base_path + path))
             try:
                 status, reason, hdrs, raw = self._send("GET", url, None, headers, idempotent=True)
+                if (hdrs.get("Content-Encoding") or "").lower() == "gzip":     # market lists shrink 10-20x
+                    raw = gzip.decompress(raw)
                 if status >= 400:
                     raise self._http_error(url, status, reason, hdrs, raw)
                 return json.loads(raw.decode("utf-8"))
@@ -242,8 +258,9 @@ class RateLimitedClient:
                     time.sleep(min(2 ** attempt, 20))
                     continue
                 raise
-            except (urllib.error.URLError, http.client.HTTPException, OSError, json.JSONDecodeError):
-                # Timeouts, dropped connections, truncated bodies (IncompleteRead).
+            except (urllib.error.URLError, http.client.HTTPException, OSError, json.JSONDecodeError, EOFError,
+                    zlib.error):
+                # Timeouts, dropped connections, truncated or corrupt bodies (IncompleteRead, bad gzip).
                 if attempt < self.max_retries - 1:
                     time.sleep(min(2 ** attempt, 20))
                     continue

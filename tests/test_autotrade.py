@@ -66,9 +66,9 @@ class FakeTrader:
         self.result = result or {"status": "ok", "plan": {"payout": 1.0}, "hedged_pairs": 20, "net": 1.0, "unhedged_shares": 0,
                                  "legs_filled": {"kalshi": {"paid": 9.0}, "polymarket": {"paid": 10.5}}}
 
-    def prepare(self, legs, cap, timeline=None, hedge_depth=1.0):
+    def prepare(self, legs, cap, timeline=None, hedge_depth=1.0, order=None):
         self.calls.append(("prepare", cap))
-        self.hedge_depth = hedge_depth
+        self.hedge_depth, self.order = hedge_depth, order
         if self.fail:
             raise TradeError(self.fail)
         self.plans["p1"] = 1
@@ -239,4 +239,10 @@ class CircuitBreakerTests(unittest.TestCase):
         s, a = self.make(1)
         a.check(s.state["opportunities"])
         self.assertEqual(s.trader.hedge_depth, config.AUTO_TRADE_HEDGE_DEPTH)
+
+    def test_auto_trade_sends_thinner_leg_first_by_default(self):
+        s, a = self.make(1)
+        a.check(s.state["opportunities"])
+        self.assertEqual(config.AUTO_TRADE_ORDER, "thinner_first")
+        self.assertEqual(s.trader.order, "thinner_first")
 

@@ -683,9 +683,12 @@ function renderPlan(plan, r) {
       expected profit <b class="profit">${money(plan.expected_profit)}</b>
       <span class="muted">(cap ${money(plan.cap)})</span></div>
     <div class="policy">${plan.together ? `Both orders are sent at the same moment. If one side fills less, the rest of it is bought,
-      never above break-even, retried up to 2 more times at fresh prices; anything still unmatched is sold back immediately.`
+      never above break-even, retried up to 2 more times; anything still unmatched is closed the cheaper way (sold back,
+      or hedged slightly above break-even).`
       : `${first} goes first (${plan.order_mode === "polymarket_first" ? "the slower site: if it misses, nothing is traded" : "thinner book"}). ${second} is then bought for exactly the shares that filled, never above
-      break-even, retried up to 2 more times at fresh prices. Any ${first} shares still unhedged are sold back immediately.`}
+      break-even, retried up to 2 more times. Any ${first} shares still unhedged are closed the cheaper way (sold back,
+      or hedged slightly above break-even).`} If you confirm after a moment, both books are re-checked first: the trade can
+      shrink, never grow, and nothing is sent if the arb is gone.
       Every order is logged to D:\\Projects\\arb\\trades.jsonl.</div>
     <div class="actions"><span class="muted" id="ttl"></span>
       <button onclick="closeModal()">Cancel</button>
@@ -760,7 +763,7 @@ function showActiveFilters() {      // "Filters (3)" when some are set, so folde
 function showResult(res) {
   loadMyArbs();
     const unhedged = res.unhedged_shares > 0;
-    showModal(`<h3>${res.status === "ok" ? "Trade complete" : res.status === "no_fill" ? "Nothing traded" :
+    showModal(`<h3>${res.status === "ok" ? "Trade complete" : res.status === "no_fill" || res.status === "moved" ? "Nothing traded" :
                   res.status === "partial" ? "Trade partly completed" : "Check your accounts"}</h3>
       <ol>${res.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>
       ${res.note ? `<div class="${res.status === "unknown" ? "alert" : "muted"}">${esc(res.note)}</div>` : ""}

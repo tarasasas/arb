@@ -187,12 +187,18 @@ them.
 
 ## ⚡ Fast trade and Auto-trade (crypto and other time-sensitive arbs)
 
-Some arbs last only seconds, so these skip the confirm screen. They run the same safe sequence as
-**Make trade**:
+Some arbs last only seconds, so these skip the confirm screen. Auto-trade runs this sequence
+(`AUTO_TRADE_ORDER=thinner_first`, the default):
 1. Check live order books and balances.
-2. Buy the side with the thinner order book first.
-3. Buy the other side for exactly what filled, never above break-even.
-4. Sell back right away any shares that couldn't be hedged.
+2. Buy the side with the thinner order book first. If it misses, nothing is traded.
+3. Buy the other side for exactly what filled, with its limit at break-even. Immediate-or-cancel orders
+   fill at the resting prices, so this costs nothing when the book held still, and still hedges when it
+   moved a tick. Up to 2 retries, each sent as soon as the live stream shows shares back at break-even
+   (at most 0.25s later).
+4. Close any shares that still couldn't be hedged, whichever way loses less: sell them back, or hedge
+   them up to 5¢ a share above break-even (`CLOSE_OUT_MAX_LOSS`; `0` = always sell back).
+
+⚡ Fast trade sends its orders per `TRADE_ORDER` (below), with the same steps 3 and 4.
 
 **Which rows qualify:** anything settling within `FAST_MAX_HOURS` (24 hours by default), crypto
 included. That includes pairs auto-matched by wording that you haven't checked
@@ -211,10 +217,11 @@ require your check.
   - It never spends more than `AUTO_TRADE_MAX_TRADE` per trade or `AUTO_TRADE_DAILY_LIMIT` per day.
   - It waits `AUTO_TRADE_COOLDOWN_SECS` before trying the same pair again.
   - It **turns itself off** (and alerts your phone, if alerts are set up) if a trade leaves shares
-    unhedged or an order can't be confirmed.
+    unhedged or an order can't be confirmed. A Kalshi order whose answer was lost (a timeout or dropped
+    connection) is first looked up by its client order ID, so that alone no longer stops it.
   - It skips games already in play (`AUTO_TRADE_LIVE_GAMES=1` to allow them). In play, prices move
     between the two orders and Polymarket can delay in-play orders, so the second leg often misses. The
-    first leg is then sold back at a small loss: those are the **partial** lines in *Last auto-trades*.
+    first leg is then closed at a small loss: those are the **partial** lines in *Last auto-trades*.
   - After a partial or no-fill it leaves that whole game alone for 10 minutes
     (`AUTO_TRADE_GAME_COOLDOWN_SECS`), and it turns itself off once it has lost
     `AUTO_TRADE_MAX_DAILY_LOSS` ($5) net in a day.
@@ -239,6 +246,8 @@ AUTO_TRADE_DAILY_LIMIT=100
 AUTO_TRADE_MIN_PROFIT=0         # optional dollar floor; ROI minimum below is what counts
 AUTO_TRADE_MIN_ROI=0.5          # percent
 AUTO_TRADE_COOLDOWN_SECS=60
+AUTO_TRADE_ORDER=thinner_first  # or together / polymarket_first
+CLOSE_OUT_MAX_LOSS=0.05         # $/share above break-even a leftover may be hedged at; 0 = sell back
 ```
 
 Crypto twins settle on the same CF Benchmarks index, but Kalshi averages the 60 seconds *before* the
@@ -337,10 +346,13 @@ dashboard header shows `Trading: on`. Clicking **Make trade** on an opportunity:
      "Max to invest", and at each account's cash.
 2. **Shows a confirm dialog** with both orders, limit prices, costs, and expected profit.
    The prices are valid for 20 seconds.
-3. **Places the first leg** on the thinner book, as an immediate-or-cancel limit order.
-4. **Places the second leg** for exactly the shares that filled, capped at the break-even
-   price. It retries twice on fresh prices.
-5. **Sells back** any first-leg shares that still aren't hedged, straight away.
+3. **Re-checks if you took a moment to confirm.** Both books and balances are read again: the
+   trade can shrink, never grow, and nothing is sent if the arb is gone.
+4. **Places the orders** per `TRADE_ORDER` (below). In `thinner_first`, the first leg goes on the
+   thinner book as an immediate-or-cancel limit order, and the second leg is bought for exactly the
+   shares that filled, limited at the break-even price. It retries twice.
+5. **Closes** any first-leg shares that still aren't hedged, whichever way loses less: sold back, or
+   hedged up to `CLOSE_OUT_MAX_LOSS` (5¢) a share above break-even.
 6. **Shows the result:**
    - hedged pairs;
    - locked profit;

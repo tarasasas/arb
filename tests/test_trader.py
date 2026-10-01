@@ -598,3 +598,112 @@ class FailSafeTests(unittest.TestCase):
         p = FakeVenue("polymarket", no=[(0.50, 30), (0.80, 1000)])   # Polymarket is the thin one here
         with mock.patch.object(trader_mod.config, "TRADE_ORDER", "together"):
             self.assertEqual(make(k, p).prepare(LEGS, hedge_depth=2)["size"], 15)
+
+
+@mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
+@mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
+@mock.patch.object(trader_mod.config, "TRADE_ORDER", "together")
+class AutoTradeMethodTests(unittest.TestCase):
+    """Auto-trade's sequence: thinner leg first, break-even second leg, cheaper close-out."""
+
+    def test_order_argument_overrides_trade_order(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)])
+        plan = make(k, p).prepare(LEGS, order="thinner_first")
+        self.assertEqual((plan["order_mode"], plan["together"], plan["first"]), ("thinner_first", False, "polymarket"))
+        self.assertEqual(make(k, p).prepare(LEGS)["order_mode"], "together")
+
+    def test_close_out_hedges_above_break_even_when_cheaper_than_selling_back(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.60, 100)])   # selling NO back gets only 0.40
+        t = make(k, p)
+        plan = t.prepare(LEGS, order="thinner_first")
+        k.book["yes"] = [(0.40, 5), (0.52, 1000)]               # 0.52 is ~2c above break-even
+        res = t.execute(plan["id"])
+        self.assertEqual([o for o in p.orders if o[0] == "sell"], [])
+        self.assertEqual((res["status"], res["hedged_pairs"], res["unhedged_shares"]), ("partial", 20, 0))
+        self.assertEqual(res["missed"][0]["exchange"], "Kalshi")  # still counts as a miss for the fail-safe
+        self.assertGreater(res["net"], -0.60)                    # selling 15 back would have lost ~$1.69
+        self.assertEqual(res["legs_filled"]["kalshi"]["shares"], 20)
+
+    def test_close_out_never_hedges_beyond_the_loss_limit(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.55, 100)])
+        t = make(k, p)
+        plan = t.prepare(LEGS, order="thinner_first")
+        k.book["yes"] = [(0.40, 5), (0.80, 1000)]
+        res = t.execute(plan["id"])
+        self.assertTrue(all(o[3] < 0.6 for o in k.orders if o[0] == "buy"))
+        self.assertEqual([o[2] for o in p.orders if o[0] == "sell"], [15])   # sold back instead
+
+    def test_close_out_off_always_sells_back(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.60, 100)])
+        t = make(k, p)
+        plan = t.prepare(LEGS, order="thinner_first")
+        k.book["yes"] = [(0.40, 5), (0.52, 1000)]
+        with mock.patch.object(trader_mod.config, "CLOSE_OUT_MAX_LOSS", 0.0):
+            res = t.execute(plan["id"])
+        self.assertEqual([o[2] for o in p.orders if o[0] == "sell"], [15])
+        self.assertEqual(res["hedged_pairs"], 5)
+
+    def test_plan_from_the_confirm_dialog_is_rechecked(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 30)])
+        t = make(k, p)
+        plan = t.prepare(LEGS, order="thinner_first")
+        t.plans[plan["id"]][0]["created"] -= 5                   # sat in the dialog for 5s
+        p.book["no"] = [(0.50, 12), (0.70, 100)]                 # only 12 still profitable
+        res = t.execute(plan["id"])
+        self.assertEqual(p.orders[0][2], 12)                     # re-sized, not sent for 30
+        self.assertEqual((res["status"], res["hedged_pairs"]), ("ok", 12))
+        self.assertIn("Live re-check", res["steps"][0])
+
+    def test_recheck_sends_nothing_when_the_arb_is_gone(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 30)])
+        t = make(k, p)
+        plan = t.prepare(LEGS, order="thinner_first")
+        t.plans[plan["id"]][0]["created"] -= 5
+        p.book["no"] = [(0.70, 30)]
+        res = t.execute(plan["id"])
+        self.assertEqual(res["status"], "moved")
+        self.assertEqual((k.orders, p.orders), ([], []))
+
+    def test_recheck_never_grows_the_trade(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 30)])
+        t = make(k, p)
+        plan = t.prepare(LEGS, order="thinner_first")
+        t.plans[plan["id"]][0]["created"] -= 5
+        p.book["no"] = [(0.45, 1000)]
+        t.execute(plan["id"])
+        self.assertEqual(p.orders[0][2], 30)
+
+
+class RetryWaitTests(unittest.TestCase):
+    def test_retry_goes_as_soon_as_the_stream_shows_liquidity(self):
+        import threading
+        import time
+        stream = mock.Mock(connected=True, updated_at={})
+        market = mock.Mock(levels={"yes": [(0.60, 100)], "no": []})
+        scanner = FakeScanner()
+        scanner.streams, scanner.source = {"kalshi": stream}, {("kalshi", "K"): market}
+        t = Trader(scanner, {})
+        since = time.time()
+
+        def refill():
+            time.sleep(0.05)
+            market.levels = {"yes": [(0.41, 100)], "no": []}
+            stream.updated_at["K"] = time.time()
+        threading.Thread(target=refill).start()
+        t0 = time.monotonic()
+        with mock.patch.object(trader_mod.config, "SECOND_LEG_RETRY_PAUSE", 2.0):
+            t._await_liquidity({"exchange": "kalshi", "market_id": "K", "side": "yes"}, 0.42, since)
+        self.assertLess(time.monotonic() - t0, 0.5)
+
+    def test_without_a_stream_it_just_pauses(self):
+        slept = []
+        with mock.patch.object(trader_mod.time, "sleep", slept.append):
+            Trader(FakeScanner(), {})._await_liquidity({"exchange": "kalshi", "market_id": "K", "side": "yes"}, 0.4, 0)
+        self.assertEqual(slept, [trader_mod.config.SECOND_LEG_RETRY_PAUSE])
