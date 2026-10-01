@@ -7,7 +7,7 @@ from . import config
 from .http import LanePool, RateLimitedClient
 
 PAGE = 500
-WORKERS = 6
+WORKERS = 16          # requests in flight; the rate limiter keeps the pace at POLYMARKET_RPS
 
 SLUG_RE = re.compile(r"^(?P<prefix>aec|asc|tsc|atc)-(?P<league>[a-z0-9]+)-(?P<t1>[a-z0-9]+)-(?P<t2>[a-z0-9]+)-"
                      r"(?P<date>\d{4}-\d{2}-\d{2})(?:-(?P<rest>.+))?$")

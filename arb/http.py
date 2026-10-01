@@ -70,20 +70,21 @@ class RateLimitedClient:
         self.min_interval = 1.0 / rps
 
     def _wait_turn(self):
+        """Take the next request slot. Slots are claimed only when due (not reserved ahead), so a
+        priority request waits at most about one slot, however many background threads are queued."""
         pri = is_priority()
-        if not pri:
-            while self._priority_waiting:          # let the priority lane go first
-                time.sleep(self.min_interval)
-        with self._lock:
-            now = time.monotonic()
-            slot = max(now, self._next_slot)
-            self._next_slot = slot + self.min_interval
-            if pri:
+        if pri:
+            with self._lock:
                 self._priority_waiting += 1
         try:
-            delay = slot - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
+            while True:
+                with self._lock:
+                    now = time.monotonic()
+                    if now >= self._next_slot and (pri or not self._priority_waiting):
+                        self._next_slot = max(now, self._next_slot) + self.min_interval
+                        return
+                    wait = self._next_slot - now
+                time.sleep(min(max(wait, 0.002), self.min_interval))
         finally:
             if pri:
                 with self._lock:

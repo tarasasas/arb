@@ -151,6 +151,11 @@ def apply_fee_overrides(markets, overrides, now, horizon_secs):
             m.fee_coef = config.KALSHI_TAKER_COEF * effective_multiplier(series_mult, changes, now, horizon_secs)
 
 
+def workers_for(rps, reply_secs=1.5, cap=32):
+    """Enough parallel requests to keep `rps` going when each reply takes ~reply_secs."""
+    return max(2, min(cap, round(rps * reply_secs)))
+
+
 class KalshiClient:
     def __init__(self):
         signer = None
@@ -162,7 +167,9 @@ class KalshiClient:
                 raise SystemExit(f"KALSHI_PRIVATE_KEY_PATH not found: {config.KALSHI_PRIVATE_KEY_PATH}")
             signer = load_signer(config.KALSHI_API_KEY_ID, config.KALSHI_PRIVATE_KEY_PATH)
         self.http = RateLimitedClient(config.KALSHI_BASE, config.KALSHI_RPS, signer=signer)
-        self.workers = 1
+        # Requests in flight. The rate limiter sets the pace; this only has to cover the reply time
+        # (~1s for a 100-market order-book batch), or the queue runs below the allowed rate.
+        self.workers = workers_for(config.KALSHI_RPS)
         if signer:
             self._apply_account_limits()
 
@@ -179,7 +186,7 @@ class KalshiClient:
             return
         rps = refill / DEFAULT_TOKEN_COST * config.KALSHI_BUDGET_FRACTION
         self.http.set_rate(rps)
-        self.workers = max(1, min(8, int(rps // 3)))
+        self.workers = workers_for(rps)
         self.auth_info = f"API key, {limits.get('usage_tier', '?')} tier, {rps:.0f} req/s"
 
     def sports_series(self):

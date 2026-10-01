@@ -420,6 +420,20 @@ class Scanner:
         opportunities, near = [], []
         book_budget = 15 if hot else 60        # Polymarket book fetches per cycle
         fetched, unchecked = set(), set()
+        # Fetch the books this pass will need all at once, in parallel, best edges first.
+        want = list(dict.fromkeys(c["p"].market_id for c in cands if c["edge"] > 0
+                                  and ("polymarket", c["p"].market_id) not in streamed))[:book_budget]
+        failed = {}
+
+        def get_book(slug):
+            try:
+                self.pm.refresh_book(source[("polymarket", slug)])
+            except Exception as e:
+                failed[slug] = e
+        if want:
+            with LanePool(min(8, len(want))) as pool:
+                list(pool.map(get_book, want))
+        prefetched = set(want)
         for cand in cands:
             pm_slug = cand["p"].market_id
             if cand["edge"] > 0 and book_budget <= 0 and pm_slug not in fetched:
@@ -433,7 +447,10 @@ class Scanner:
                     fetched.add(pm.slug)
                     book_budget -= 1
                     try:
-                        self.pm.refresh_book(pm)
+                        if pm.slug in failed:
+                            raise failed[pm.slug]
+                        if pm.slug not in prefetched:
+                            self.pm.refresh_book(pm)
                     except Exception as e:
                         self.log(f"Book fetch failed for {pm.slug}: {e!r}")
                         pm.levels, pm.yes_ask, pm.no_ask = {}, None, None
