@@ -116,7 +116,7 @@
   .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tabs .n { opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
   .tabs button.mine { margin-left: auto; }
-  .filters-toggle, .more-toggle, .m-only, .m-short { display: none; }
+  .m-only, .m-short { display: none; }
   .paychart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; }
   .paychart .head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; justify-content: space-between; }
   .paychart h3 { margin: 0; font-size: 14px; font-weight: 650; }
@@ -142,22 +142,39 @@
     header h1 { font-size: 18px; }
     header h1 .muted { display: none; }
     #access, #updated, #trading, #live { display: none; }
-    .tiles { display: none !important; }
     .opps-wrap + .caveat, #opps-wrap > .caveat:not(#cash-note), #opps-wrap > p.caveat { display: none; }
     .autobar details { display: none; }
     .autobar { gap: 6px 10px; }
-    .desk-extra { display: none; }
-    body.show-extra .desk-extra { display: block; }
-    .more-toggle { display: block; width: 100%; margin-top: 18px; min-height: 42px; color: var(--text-secondary); }
+    header { flex-wrap: wrap; } .views { order: 3; width: 100%; } .views button { flex: 1; min-height: 34px; padding: 4px 6px; }
+    .statusline { margin-bottom: 8px; }
+    .views button { white-space: nowrap; font-size: 13px; }
+    .sumgrid { grid-template-columns: 1fr 1fr !important; gap: 8px; }
+    .sumcard .big { font-size: 18px; } .sumcard .sub { font-size: 11.5px; }
+    /* My arbs as cards: market / when / orders / [paid pays profit roi] / buttons */
+    #myarbs .table-wrap { background: none; border: 0; overflow: visible; }
+    #myarbs table, #myarbs tbody { display: block; }
+    #myarbs thead { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin-bottom: 2px; }
+    #myarbs thead tr { display: contents; }
+    #myarbs thead th { display: none; }
+    #myarbs thead th[data-msort] { display: inline-block; flex: none; padding: 4px 10px; border: 1px solid var(--border);
+      border-radius: 999px; background: var(--surface-1); font-size: 12px; }
+    #myarbs tbody tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px 8px; background: var(--surface-1);
+      border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-top: 10px; }
+    #myarbs tbody td { display: block; padding: 0; border: 0; }
+    #myarbs td.c-mkt, #myarbs td.c-when, #myarbs td.c-legs, #myarbs td.c-acts, #myarbs td.empty { grid-column: 1 / -1; }
+    #myarbs td.c-when { font-size: 12.5px; color: var(--text-muted); } #myarbs td.c-when::before { content: "pays out "; }
+    #myarbs td.c-legs { margin: 8px 0; padding-top: 8px; border-top: 1px solid var(--border); }
+    #myarbs td.num { text-align: left; } #myarbs td.num::before { content: attr(data-l); display: block; font-size: 11px;
+      color: var(--text-muted); font-weight: 400; }
+    #myarbs td.c-worth { display: none; }
+    #myarbs td.c-acts { display: flex; gap: 8px; margin-top: 8px; } #myarbs td.c-acts button { flex: 1; }
     h2 { margin: 18px 0 8px; }
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
     .tile { padding: 10px 12px !important; }
     .tile .value { font-size: 22px !important; }
-    .tiles .tile:nth-child(n+3) { display: none; }
     .autobar > .muted { display: none; }
     .paychart .d-only { display: none; }
     .paychart .range button { min-height: 32px; }
-    .filters-toggle { display: block; width: 100%; margin: 10px 0 0; min-height: 42px; }
     .filters { display: none; margin-top: 8px; }
     .filters.open { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
     .filters label { display: flex; justify-content: flex-start; align-items: center; gap: 10px; }
@@ -193,7 +210,6 @@
     #opps-table tr.row td.c-ann, #opps-table tr.row td.c-n { display: none; }
     #opps-table td.c-game { grid-column: 1 / -1; margin-top: 4px; line-height: 1.3; }
     #opps-table td.c-game .g-quantity, #opps-table td.c-game > .muted:not(.g-when) { display: none; }
-    #opps-wrap > h2, main > h2:first-of-type { display: none; }
     #opps-table td.c-game .g-when { font-size: 12.5px; margin-top: 2px; }
     #opps-table td.c-legs { grid-column: 1 / -1; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
     #opps-table td.c-legs .leg { grid-template-columns: 82px minmax(0, 1fr); margin-bottom: 2px; }
@@ -206,7 +222,6 @@
     header { flex-wrap: wrap; } header .status { font-size: 13px; }
     .autobar { padding: 6px 10px; border-radius: 10px; font-size: 14px; margin-bottom: 8px; }
     .autobar button { min-height: 32px !important; padding: 0 12px; }
-    .filters-toggle { min-height: 38px !important; margin-bottom: 8px !important; }
     #opps-table td.c-checks { grid-column: 1 / -1; display: flex !important; align-items: center; justify-content: space-between;
       gap: 8px; margin-top: 10px; }
     #opps-table td.c-checks .ck-more { display: none; }
@@ -275,30 +290,65 @@
          background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .caveat { font-size: 12.5px; color: var(--text-muted); margin-top: 8px; }
   #cash-note:empty { display: none; }
+
+  /* ---- layout: three views, compact header, filters folded away ---- */
+  header { align-items: center; margin-bottom: 4px; }
+  .views { display: flex; gap: 2px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
+  .views button { border: 0; background: none; border-radius: 999px; padding: 5px 14px; font-size: 13.5px; color: var(--text-secondary); }
+  .views button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .views .n { opacity: .75; font-variant-numeric: tabular-nums; }
+  .views .n:empty { display: none; }
+  header #cash { margin-left: auto; }
+  .statusline { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 14px; }
+  .statusline .status { font-size: 12.5px; color: var(--text-muted); }
+  .statusline .status:empty { display: none; }
+  .view { display: none; } .view.on { display: block; }
+  .toolbar { display: flex; align-items: baseline; gap: 18px; margin: 0 0 10px; flex-wrap: wrap; }
+  .toolbar .kpi { font-size: 13.5px; } .toolbar .kpi b { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .toolbar .filters-toggle { display: inline-block; margin-left: auto; }
+  .filters-toggle.active { border-color: var(--accent); color: var(--accent); }
+  .filters { display: none; margin-top: 0; } .filters.open { display: flex; }
+  .view[data-view="scanner"] .filters { display: flex; }
+  .about summary { font-weight: 400; font-size: 12.5px; color: var(--text-muted); margin: 10px 0 0; }
+  .autobar details summary { margin: 0; font-weight: 400; font-size: 12.5px; }
+  .autobar .rules-text { font-size: 12.5px; color: var(--text-secondary); margin: 4px 0; }
+  .toolrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 10px; }
+  .unp { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .unp { grid-template-columns: 1fr; } }
+  .unp .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .unp .card > .hd { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .unp .card table td, .unp .card table th { font-size: 13px; }
+  .unp .from { font-size: 12px; color: var(--text-muted); }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Arb Scanner <span class="muted" style="font-weight:400">· Kalshi × Polymarket US</span></h1>
-    <span class="status"><span id="dot" class="dot start"></span><span id="status">Starting…</span></span>
-    <span class="status" id="updated"></span>
-    <span class="status" id="access"></span>
-    <span class="status" id="trading"></span>
-    <span class="status" id="live"></span>
+    <h1>Arb Scanner</h1>
+    <nav class="views" id="views" role="tablist">
+      <button role="tab" data-view="opps">Opportunities <span class="n" id="v-opps"></span></button>
+      <button role="tab" data-view="positions">My positions <span class="n" id="v-pos"></span></button>
+      <button role="tab" data-view="scanner">Scanner</button>
+    </nav>
     <span class="status" id="cash"></span>
   </header>
+  <div class="statusline">
+    <span class="status"><span id="dot" class="dot start"></span><span id="status">Starting…</span></span>
+    <span class="status" id="updated"></span>
+    <span class="status" id="live"></span>
+    <span class="status" id="trading"></span>
+    <span class="status" id="access"></span>
+  </div>
 
-  <section class="tiles">
-    <div class="tile hero"><div class="label">Open opportunities</div><div class="value" id="t-count">–</div>
-      <div class="note">guaranteed profit after fees</div></div>
-    <div class="tile"><div class="label">Best single opportunity</div><div class="value" id="t-best">–</div><div class="note" id="t-best-note"></div></div>
-    <div class="tile"><div class="label">Matched games</div><div class="value" id="t-games">–</div><div class="note" id="t-games-note"></div></div>
-    <div class="tile"><div class="label">Contracts watched</div><div class="value" id="t-contracts">–</div><div class="note" id="t-contracts-note"></div></div>
-    <div class="tile"><div class="label">Near-arb re-check</div><div class="value" id="t-scan">–</div><div class="note" id="t-scan-note">seconds</div></div>
-  </section>
+  <section class="view" data-view="opps">
 
-  <button type="button" id="filters-toggle" class="filters-toggle" aria-expanded="false">Filters &amp; settings</button>
+  <div class="autobar" id="autobar"></div>
+
+  <div class="toolbar">
+    <div class="kpi"><b id="t-count">–</b> <span class="muted">open arbs</span></div>
+    <div class="kpi"><span class="muted">best</span> <b id="t-best">–</b> <span class="muted" id="t-best-note"></span></div>
+    <button type="button" id="filters-toggle" class="filters-toggle" aria-expanded="false">Filters</button>
+  </div>
   <div class="filters" id="filters">
     <label>Max to invest per arb $ <input id="f-budget" type="number" min="0" step="50" placeholder="no limit" style="width:100px"></label>
     <label>League <select id="f-league"><option value="">All</option></select></label>
@@ -322,11 +372,7 @@
     <button id="alert-test" type="button" title="Send a test to your phone (Discord/Telegram set in .env)">Test phone alert</button>
   </div>
 
-  <div class="autobar" id="autobar"></div>
-
-  <h2>Opportunities</h2>
   <div class="tabs" id="tabs-bar" role="tablist"></div>
-  <div id="myarbs" style="display:none"></div>
   <div id="opps-wrap">
   <div class="caveat" id="cash-note" style="margin:0 0 6px"></div>
   <div class="table-wrap opps-wrap">
@@ -340,14 +386,24 @@
       <tbody id="opps"></tbody>
     </table>
   </div>
-  <p class="caveat">Click a row for the math. Bet amounts use the actual order-book depth and each exchange's fee
+  <details class="about"><summary>About these numbers</summary><p class="caveat">Click a row for the math. Bet amounts use the actual order-book depth and each exchange's fee
     rounding; set "Max to invest" to size every arb to your stake. Profit is locked in only if both legs fill at these prices. Quotes from the two exchanges are
     fetched seconds apart and move constantly — re-check both books before trading. On Polymarket, Buy NO costs 1 − the YES bid per
-    share, the price shown here. Opportunities can share a leg, so don't add their profits together.</p>
+    share, the price shown here. Opportunities can share a leg, so don't add their profits together.</p></details>
   </div>
+  </section>
 
-  <button type="button" class="more-toggle" id="more-toggle">Scanner details</button>
-  <div class="desk-extra">
+  <section class="view" data-view="positions">
+    <div id="myarbs"></div>
+    <div id="unpaired"></div>
+  </section>
+
+  <section class="view" data-view="scanner">
+  <section class="tiles">
+    <div class="tile"><div class="label">Matched games</div><div class="value" id="t-games">–</div><div class="note" id="t-games-note"></div></div>
+    <div class="tile"><div class="label">Contracts watched</div><div class="value" id="t-contracts">–</div><div class="note" id="t-contracts-note"></div></div>
+    <div class="tile"><div class="label">Near-arb re-check</div><div class="value" id="t-scan">–</div><div class="note" id="t-scan-note">seconds</div></div>
+  </section>
   <h2>Closest to breaking even</h2>
   <div class="table-wrap">
     <table>
@@ -397,7 +453,7 @@
 
   <details><summary>Unmatched Polymarket games</summary><div class="log" id="unmatched"></div></details>
   <details><summary>Scanner log</summary><div class="log" id="log"></div></details>
-  </div>
+  </section>
 
   <div class="modal-bg" id="modal-bg"><div class="modal" id="modal"></div></div>
 </main>
@@ -666,10 +722,20 @@ document.querySelectorAll("#opps-table th.sortable").forEach(th => th.addEventLi
   showSortArrows(); render(true);
 }));
 showSortArrows();
-document.getElementById("more-toggle").addEventListener("click", e => {
-  const on = document.body.classList.toggle("show-extra");
-  e.target.textContent = on ? "Hide scanner details" : "Scanner details";
+// ---- the three views: Opportunities, My positions, Scanner (remembered on this device) ----
+let view = "opps";
+try { view = localStorage.getItem("arb-view") || "opps"; } catch (e) {}
+function setView(v) {
+  view = v;
+  try { localStorage.setItem("arb-view", v); } catch (e) {}
+  document.querySelectorAll("#views button").forEach(b => b.classList.toggle("on", b.dataset.view === v));
+  document.querySelectorAll("section.view").forEach(el => el.classList.toggle("on", el.dataset.view === v));
+  if (v === "positions") loadMyArbs();
+}
+document.getElementById("views").addEventListener("click", e => {
+  const b = e.target.closest("button[data-view]"); if (b) { setView(b.dataset.view); render(true); }
 });
+setView(view);
 // Focus is a scanner setting (kept by the scanner across restarts), not a display filter.
 document.getElementById("f-focus").addEventListener("change", async e => {
   try { const f = await post("/api/focus", { days: +e.target.value }); state.focus = f; render(true); }
@@ -679,6 +745,15 @@ document.getElementById("filters-toggle").addEventListener("click", e => {
   const f = document.getElementById("filters"), open = f.classList.toggle("open");
   e.target.setAttribute("aria-expanded", open);
 });
+function showActiveFilters() {      // "Filters (3)" when some are set, so folded filters aren't forgotten
+  const n = ["f-budget", "f-min", "f-roi", "f-days", "f-search", "f-league"].filter(id => +document.getElementById(id).value ||
+      (id === "f-search" || id === "f-league") && document.getElementById(id).value).length +
+    ["f-clean", "f-noshort", "f-nosus", "f-simple"].filter(id => document.getElementById(id).checked).length +
+    (+document.getElementById("f-focus").value ? 1 : 0);
+  const b = document.getElementById("filters-toggle");
+  b.textContent = n ? `Filters (${n})` : "Filters";
+  b.classList.toggle("active", n > 0);
+}
 
 function showResult(res) {
   loadMyArbs();
@@ -741,11 +816,11 @@ function renderAuto(s) {
   el.innerHTML = `<b>⚡ Auto-trade</b>
     <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
-    <span class="muted">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with rule warnings ·
+    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with rule warnings ·
       ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit" : ""} ·
       ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade${a.min_profit > 0 ? ` · profit ≥ ${money(a.min_profit)}` : ""} ·
       stops after ${money(a.max_daily_loss)} lost in a day or ${a.max_misses} misses in a row on one site${missRun ? ` (now: ${missRun})` : ""} ·
-      second leg needs ${a.hedge_depth}× the shares in its book · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</span>
+      second leg needs ${a.hedge_depth}× the shares in its book · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</div></details>
     ${a.spent_today > 0 && a.net_today != null ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
       <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}
     ${a.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(a.halted)}</div>` : ""}
@@ -753,7 +828,7 @@ function renderAuto(s) {
     ${hist ? `<details><summary class="muted">Last auto-trades</summary><ol>${hist}</ol></details>` : ""}
     ${speedHtml(s.latency)}`;
   el.querySelectorAll("details").forEach((d, i) => {      // keep each section open across refreshes
-    const key = d.classList.contains("speed") ? "speed" : "history";
+    const key = d.classList.contains("speed") ? "speed" : d.classList.contains("limits") ? "limits" : "history";
     d.open = !!autoOpenSet[key];
     d.addEventListener("toggle", () => { autoOpenSet[key] = d.open; });
   });
@@ -972,9 +1047,10 @@ function checksHtml(r) {
 }
 // ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
 const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
-const MINE = "My arbs", MAKER = "Maker mode";
+const MAKER = "Maker mode";
 let currentTab = "All";
 try { currentTab = localStorage.getItem("arb-tab") || "All"; } catch (e) {}
+if (currentTab === "My arbs") { currentTab = "All"; view = "positions"; setView(view); }
 const inTab = r => currentTab === "All" || currentTab === MAKER || (r.tab || "Other") === currentTab;
 function renderTabs(rows) {
   const counts = { All: rows.length };
@@ -983,17 +1059,12 @@ function renderTabs(rows) {
     .filter(t => t === "All" || counts[t] || t === currentTab || t === "Sports")
     .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}${counts[t] ? "" : " zero"}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
     .join("") + `<button role="tab" aria-selected="${currentTab === MAKER}" class="mine ${currentTab === MAKER ? "on" : ""}"
-      data-tab="${MAKER}" title="Near-misses that turn profitable when the Polymarket leg rests as a maker order">${MAKER}<span class="n">${(state?.maker || []).length}</span></button>`
-    + `<button role="tab" aria-selected="${currentTab === MINE}" class="${currentTab === MINE ? "on" : ""}"
-      data-tab="${MINE}">${MINE}<span class="n">${myArbs.filter(a => !a.settled).length}</span></button>`;
-  document.getElementById("opps-wrap").style.display = currentTab === MINE ? "none" : "";
-  document.getElementById("myarbs").style.display = currentTab === MINE ? "" : "none";
+      data-tab="${MAKER}" title="Near-misses that turn profitable when the Polymarket leg rests as a maker order">${MAKER}<span class="n">${(state?.maker || []).length}</span></button>`;
 }
 document.getElementById("tabs-bar").addEventListener("click", e => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
   currentTab = b.dataset.tab;
   try { localStorage.setItem("arb-tab", currentTab); } catch (e) {}
-  if (currentTab === MINE) loadMyArbs();
   render(true);
 });
 
@@ -1014,7 +1085,8 @@ function passes(r) {
 let myArbs = [], myUnpaired = [], mySync = {};
 async function loadMyArbs() {
   try { const d = await (await fetch("/api/myarbs")).json();
-    myArbs = d.arbs || []; myUnpaired = d.unpaired || []; mySync = d.sync || {}; renderMyArbs(); } catch (e) {}
+    myArbs = d.arbs || []; myUnpaired = d.unpaired || []; mySync = d.sync || {}; renderMyArbs();
+    document.getElementById("v-pos").textContent = myArbs.filter(a => !a.settled).length || ""; } catch (e) {}
 }
 function syncLine() {
   const s = mySync;
@@ -1103,11 +1175,12 @@ function payoutChartHtml(open) {
   const W = Math.max(300, Math.min(1100, box ? box - 30 : 900)), H = W < 500 ? 170 : 200;
   const L = 44, R = 8, T = 18, B = 26, plotH = H - T - B, plotW = W - L - R;
   const max = Math.max(...buckets.map(b => b.pay), 0);
-  const step = niceStep(max || 1), top = Math.max(step * Math.ceil((max || 1) / step), step);
+  const step = niceStep(max || 10), top = Math.max(step * Math.ceil((max || 10) / step), step);   // empty range: $0-$10
   const y = v => T + plotH - (v / top) * plotH, slot = plotW / buckets.length;
   const bw = Math.min(24, Math.max(2, slot - 2));                 // <= 24px, 2px surface gap between neighbors
   const every = Math.max(1, Math.ceil(buckets.length / Math.floor(plotW / (unit === "month" ? 44 : 64))));
-  const shortMoney = v => v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "K" : "$" + Math.round(v);
+  const shortMoney = v => v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "K"
+    : "$" + (Number.isInteger(step) ? Math.round(v) : (+v.toFixed(2)).toString());
   let g = "";
   for (let v = 0; v <= top + 1e-9; v += step) {
     g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>
@@ -1149,7 +1222,7 @@ function payoutChartHtml(open) {
 
 let payResize;
 window.addEventListener("resize", () => { clearTimeout(payResize);
-  payResize = setTimeout(() => { if (currentTab === MINE) renderMyArbs(); }, 200); });
+  payResize = setTimeout(() => { if (view === "positions") renderMyArbs(); }, 200); });
 
 function wirePayoutChart(el, open) {
   const { buckets, unit } = payoutData(open, payDays);
@@ -1210,24 +1283,54 @@ function myTh(key, label, cls = "", title = "") {
   return `<th class="sortable${cls ? " " + cls : ""}${on}" data-msort="${key}"${title ? ` title="${title}"` : ""}>${label}</th>`;
 }
 
+// Positions with no partner on the other site, per platform: whole positions the scanner couldn't pair,
+// plus the extra shares on one side of a tracked arb. Both are unhedged.
+function renderUnpaired(open) {
+  const el = document.getElementById("unpaired"); if (!el) return;
+  const items = [
+    ...myUnpaired.map(u => ({ exchange: u.exchange, title: u.title || u.market_id, id: u.market_id, side: u.side,
+                              shares: u.shares, paid: u.paid, from: "" })),
+    ...open.flatMap(a => a.unhedged.map(u => {
+      const leg = a.legs.find(l => l.exchange === u.exchange) || {};
+      return { exchange: u.exchange, title: leg.title || a.game, id: leg.market_id, side: u.side, shares: u.shares,
+               paid: leg.shares ? leg.paid / leg.shares * u.shares : null, from: a.game };
+    })),
+  ];
+  const card = (ex, name) => {
+    const list = items.filter(i => i.exchange === ex).sort((x, y) => (y.paid || 0) - (x.paid || 0));
+    const total = list.reduce((t, i) => t + (i.paid || 0), 0);
+    return `<div class="card"><div class="hd"><span><span class="ex ${ex === "kalshi" ? "kalshi" : "poly"}">${name.toUpperCase()}</span>
+        <b style="margin-left:6px">${list.length}</b> <span class="muted">unpaired</span></span>
+        <span class="muted">${money(total)} in</span></div>
+      ${list.length ? `<table><thead><tr><th>Market</th><th>Side</th><th class="num">Shares</th><th class="num">Paid</th></tr></thead><tbody>${
+        list.map(i => `<tr><td>${esc(i.title)}${i.from ? `<div class="from">extra shares in your arb “${esc(i.from)}”</div>`
+            : `<div class="from">${esc(i.id)}</div>`}</td>
+          <td><b>${esc(String(i.side || "").toUpperCase())}</b></td><td class="num">${compact(i.shares)}</td>
+          <td class="num">${i.paid == null ? "–" : money(i.paid)}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="empty">Nothing unpaired.</div>`}</div>`;
+  };
+  el.innerHTML = `<h2>Unpaired positions <span class="muted" style="font-weight:400;font-size:13px">not hedged on the other site</span></h2>
+    <div class="unp">${card("kalshi", "Kalshi")}${card("polymarket", "Polymarket")}</div>`;
+}
+
 function renderMyArbs() {
   const el = document.getElementById("myarbs"); if (!el) return;
   const open = mySorted(myArbs.filter(a => !a.settled)), done = mySorted(myArbs.filter(a => a.settled));
   const tot = (k, list = open) => list.reduce((s, a) => s + (a[k] || 0), 0);
   const ratio = (p, c) => c > 0 ? pct(p / c) : "–";
   const rows = list => list.map(a => `<tr>
-      <td><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
+      <td class="c-mkt"><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
         <div class="muted">${a.source === "make_trade" ? "via Make trade"
           : a.source === "account" ? `from your accounts${a.edited ? " (edited)" : ""}` : "added by hand"}</div>
         ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}${a.settled ? "" : verdictHtml(a)}</td>
-      <td style="white-space:nowrap">${esc(localTime(a.closes))}</td>
-      <td>${a.legs.map(legCell).join("")}
+      <td class="c-when" style="white-space:nowrap">${esc(localTime(a.closes))}</td>
+      <td class="c-legs">${a.legs.map(legCell).join("")}
         ${a.unhedged.length ? `<div class="warn" style="white-space:normal">${WARN_ICON}${a.unhedged.map(u =>
           `${compact(u.shares)} ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"} not hedged`).join("; ")}</div>` : ""}</td>
-      <td class="num">${money(a.paid)}</td><td class="num">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
-      <td class="num profit">${money(a.profit)}</td><td class="num">${pct(a.roi)}</td>
-      <td class="num">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
-      <td><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
+      <td class="num" data-l="Paid">${money(a.paid)}</td><td class="num" data-l="Pays">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
+      <td class="num profit" data-l="Profit">${money(a.profit)}</td><td class="num" data-l="ROI">${pct(a.roi)}</td>
+      <td class="num c-worth" data-l="Worth now">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
+      <td class="c-acts"><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
           <button data-mine="del" data-id="${esc(a.id)}">${a.settled ? "Remove" : "Delete"}</button></td></tr>`).join("");
   const head = `<thead><tr>${myTh("game", "Market")}${myTh("closes", "Pays out", "", "Sort by when it pays out")}${
     myTh("unhedged", "Your orders", "", "Sort by shares not hedged")}${myTh("paid", "Paid", "num")}${
@@ -1247,24 +1350,15 @@ function renderMyArbs() {
         <div class="sub">${money(tot("profit", myArbs))} profit on ${money(tot("paid", myArbs))} spent</div></div>
     </div>
     ${payoutChartHtml(open)}
-    <div style="margin:4px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button data-mine="sync">Sync now</button> <span class="muted">${syncLine()}</span></div>
-    <div style="margin:0 0 10px"><button data-mine="add">Add an arb by hand</button>
-      <span class="muted">Positions on both sites are paired automatically. Anything else: "Track this arb" on an opportunity.</span></div>
+    <div class="toolrow"><button data-mine="sync">Sync now</button>
+      <button data-mine="add" title="Positions on both sites are paired automatically. Anything else: Track this arb on an opportunity, or add it here.">Add by hand</button>
+      <span class="muted">${syncLine()}</span></div>
     <div class="table-wrap"><table>${head}<tbody>${rows(open) ||
       `<tr><td colspan="9" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
-    ${myUnpaired.length ? `<h2 style="font-size:15px">Only on one site <span class="muted" style="font-weight:400">
-      open positions with no matching position on the other exchange: not hedged</span></h2>
-      <div class="table-wrap"><table><thead><tr><th>Site</th><th>Market</th><th>Position</th><th class="num">Shares</th>
-        <th class="num">Paid</th></tr></thead><tbody>${myUnpaired.map(u => `<tr>
-        <td><span class="ex ${u.exchange === "kalshi" ? "kalshi" : "poly"}">${u.exchange === "kalshi" ? "KALSHI" : "POLYMARKET"}</span></td>
-        <td>${esc(u.title)}<div class="muted" style="font-size:12px">${esc(u.market_id)}</div></td>
-        <td><b>${sideName(u)}</b></td><td class="num">${compact(u.shares)}</td>
-        <td class="num">${u.paid == null ? "–" : money(u.paid)}</td></tr>`).join("")}</tbody></table></div>` : ""}
     ${done.length ? `<h2 style="font-size:15px">Settled or closed</h2><div class="table-wrap"><table>${head}<tbody>${rows(done)}</tbody></table></div>` : ""}
-    <p class="caveat">Locked profit counts only shares held on both sites; any extra shares on one side are treated as worth $0.
-      Status is re-checked every 30 seconds. Saved on this computer in my_arbs.json.</p>`;
+    <p class="caveat">Locked profit counts only shares held on both sites; extra shares on one side count as $0 (they're listed below).</p>`;
   wirePayoutChart(el, open);
+  renderUnpaired(open);
 }
 document.getElementById("myarbs").addEventListener("click", async e => {
   const th = e.target.closest("th[data-msort]");
@@ -1324,8 +1418,7 @@ function openTrack(r, existing) {
     try {
       await post("/api/myarbs/save", { id: existing?.id, game, tab: info.tab, closes: info.closes, payout: info.payout,
                                        note: document.getElementById("t-note").value, legs });
-      closeModal(); currentTab = MINE; try { localStorage.setItem("arb-tab", MINE); } catch (e) {}
-      await loadMyArbs(); render(true);
+      closeModal(); setView("positions"); render(true);
     } catch (e) { const el = document.getElementById("t-err"); el.style.display = ""; el.textContent = e.message; }
   };
 }
@@ -1378,8 +1471,9 @@ function render(force) {
   dot.className = "dot " + (s.status === "running" ? "run" : s.status.startsWith("error") ? "err" : "start");
   document.getElementById("status").textContent = s.status === "running" ? "Scanning" : s.status === "starting" ? "Loading markets (first load takes ~2 min)…" : s.status;
   document.getElementById("updated").textContent = s.last_prices ? "Prices updated " + ago(s.last_prices) : "";
-  document.getElementById("access").textContent = st.kalshi_access ? "Kalshi: " + st.kalshi_access : "";
-  document.getElementById("trading").textContent = st.trading ? "Trading: " + st.trading : "";
+  document.getElementById("access").textContent = st.kalshi_access ? "Kalshi API: " + st.kalshi_access : "";
+  document.getElementById("trading").innerHTML = st.trading && st.trading !== "on"     // only worth showing when it's not on
+    ? `<span style="color:var(--warning)">●</span> Trading ${esc(st.trading)}` : "";
   const bal = s.balances;
   document.getElementById("cash").innerHTML = bal && (bal.kalshi != null || bal.polymarket != null)
     ? `Cash: ${bal.kalshi != null ? `<span title="${esc(bal.kalshi_shards ? "By Kalshi exchange shard: " + Object.entries(bal.kalshi_shards)
@@ -1429,6 +1523,8 @@ function render(force) {
     .map(([k, r]) => ({ r, z: calc(r, r.size), stale: !live.has(k) }));
   rowsByKey = new Map([...opps, ...pinnedRows].map(o => [rowKey(o.r), o.r]));
   document.getElementById("t-count").textContent = s.last_prices ? opps.length : "–";
+  document.getElementById("v-opps").textContent = s.last_prices ? opps.length : "";
+  showActiveFilters();
   const best = opps[0];
   document.getElementById("t-best").textContent = best ? money(best.z.profit) : "–";
   document.getElementById("t-best-note").textContent = best ? `${pct(best.z.roi)} on ${money(best.z.capital)}` : "";
