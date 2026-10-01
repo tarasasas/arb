@@ -150,6 +150,7 @@ POSITIONS_REFRESH_SECS = 60    # live position check for My arbs (needs your API
 BALANCES_REFRESH_SECS = 15     # your cash on each site, used to size opportunities you can afford
 STREAM_MAX_MARKETS = 2000      # per exchange: near-arb markets and non-sports/crypto pairs streamed live
 STREAM_EVAL_SECS = 0.1         # how often streamed price changes are re-checked for arbs
+FOCUS_FILE = PROJECT_ROOT / "cache" / "focus.json"   # the dashboard's Focus setting, kept across restarts
 STREAM_FRESH_SECS = 60         # a streamed market is trusted (not polled) only if updated this recently
 STREAM_QUIET_SECS = 90         # a stream with no message at all for this long is reconnected
 AUTO_ACCEPT_MATCHES = True     # scan non-sports matches without waiting for approval

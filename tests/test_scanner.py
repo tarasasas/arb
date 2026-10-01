@@ -168,3 +168,46 @@ class StartupTests(unittest.TestCase):
         s.alerter = __import__("arb.alerts", fromlist=["Alerter"]).Alerter(lambda m: None, send=lambda t: None)
         s.start_message()
         self.assertEqual(s.state["stats"]["trading"], "on (cap $100 per trade)")
+
+
+class FocusTests(unittest.TestCase):
+    def make(self):
+        import collections
+        import tempfile
+        from datetime import timedelta
+        from pathlib import Path
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock, s.streams, s.state = __import__("threading").Lock(), {}, {"stats": {}}
+        s.logs, s.log_to_console = collections.deque(maxlen=10), False
+        now = scanner.engine.now_utc()
+        cs = []
+        for g, days in (("SOON", 0.5), ("WEEK", 6), ("LATER", 60)):
+            k, p = contract("kalshi", f"k{g}", f"T:{g}"), contract("polymarket", f"p{g}", f"T:{g}", op="<")
+            k.close_time = (now + timedelta(days=days)).isoformat()
+            cs += [k, p]
+        s.sports_cat, s.pairs_cat, s.crypto_cat = (cs, {}), ([], {}), ([], {})
+        self.dir = tempfile.TemporaryDirectory()
+        self.patch = __import__("unittest.mock", fromlist=["mock"]).patch.object(
+            scanner.config, "FOCUS_FILE", Path(self.dir.name) / "focus.json")
+        self.patch.start()
+        s.load_focus()
+        s._publish()
+        return s
+
+    def tearDown(self):
+        self.patch.stop()
+        self.dir.cleanup()
+
+    def test_focus_scans_only_markets_settling_soon_and_is_remembered(self):
+        s = self.make()
+        self.assertEqual(len(s.contracts), 6)
+        self.assertEqual(s.set_focus(1)["contracts"], 2)
+        self.assertEqual({k[0] for k in s.groups}, {"T:SOON"})
+        self.assertNotIn(("kalshi", "kLATER"), s.contract_index)
+        s.set_focus(7)
+        self.assertEqual({k[0] for k in s.groups}, {"T:SOON", "T:WEEK"})
+        s2 = scanner.Scanner.__new__(scanner.Scanner)
+        s2.load_focus()
+        self.assertEqual(s2.focus_days, 7)                      # kept for the next start
+        s.set_focus(0)
+        self.assertEqual(len(s.contracts), 6)

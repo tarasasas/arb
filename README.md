@@ -439,6 +439,23 @@ counts; orders placed on kalshi.com don't). Double-click `upgrade-kalshi.bat` (o
 `python -m arb.upgrade`) once. It prints your tier before and after. Then restart the dashboard:
 it reads your tier at start-up and uses the higher limit by itself.
 
+## Focus: scan only markets settling soon
+
+**Filters & settings → Focus** limits scanning to pairs whose Kalshi market settles within 1, 3, 7 or
+30 days, or **All markets**. Sports games carry dozens of lines each, so as a rough guide:
+
+| Focus | Share of contracts scanned |
+| - | - |
+| 1 day | ~5% (about 2,000) |
+| 3 days | ~57% |
+| 7 days | ~86% |
+
+With fewer markets each full sweep is much faster, and when focused every scanned market also goes on
+the live price streams (up to 2,000 per site), so prices update within a fraction of a second. Every arb
+found also pays out within that window, so your cash comes back sooner. The setting is a scanner setting:
+it applies right away, and the scanner keeps it in `cache/focus.json` across restarts. The
+"Contracts watched" tile shows the focus.
+
 ## Fast restarts (warm start)
 
 Matching every market on both sites takes a few minutes. So every 5 minutes the scanner saves its

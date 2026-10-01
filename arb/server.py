@@ -204,6 +204,8 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     return self._json(200, result)
                 if path == "/api/trade/fast":
                     return self._json(200, fast_trade(scanner, body.get("legs") or [], body.get("max_invest") or None))
+                if path == "/api/focus":
+                    return self._json(200, scanner.set_focus(body.get("days") or 0))
                 if path == "/api/autotrade":
                     return self._json(200, scanner.autotrader.set(bool(body.get("on"))))
                 return self._json(404, {"error": "Not found"})

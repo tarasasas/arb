@@ -1,9 +1,11 @@
 """Background scan loop: refresh catalogs, match games, refresh prices, find arbs."""
 
+import json
 import threading
 import time
 import traceback
 from collections import Counter, deque
+from datetime import timedelta
 
 from . import config, crypto, engine, kalshi, matching, nonsports, warmcache
 from .http import LanePool, priority
@@ -53,6 +55,7 @@ class Scanner:
         self.auto_pairs = []            # confident non-sports matches scanned without your approval
         self.crypto_cat = ([], {})      # crypto price markets on both sites, grouped by settlement instant
         self.trader, self.trading_status = self._make_trader()
+        self.load_focus()               # scan only markets settling soon, if you set Focus
         from .autotrade import AutoTrader
         self.autotrader = AutoTrader(self)  # off until you turn it on in the dashboard
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
@@ -190,6 +193,37 @@ class Scanner:
         self.pairs_cat = (contracts, source)
         self._publish()
 
+    # ---- focus: scan only markets settling soon -------------------------------------------------
+
+    def load_focus(self):
+        try:
+            self.focus_days = float(json.loads(config.FOCUS_FILE.read_text(encoding="utf-8")).get("days") or 0)
+        except (OSError, ValueError, AttributeError):
+            self.focus_days = 0.0
+
+    def set_focus(self, days):
+        """Scan only pairs whose Kalshi market settles within `days` (0 = everything). Fewer markets means
+        faster full sweeps, all of them on the live streams, and arbs that pay out sooner."""
+        self.focus_days = max(0.0, float(days or 0))
+        try:
+            config.FOCUS_FILE.parent.mkdir(exist_ok=True)
+            config.FOCUS_FILE.write_text(json.dumps({"days": self.focus_days}), encoding="utf-8")
+        except OSError:
+            pass
+        self._publish()
+        if self.streams:
+            self._stream_wanted([])
+        self.log(f"Focus: {'markets settling within ' + format(self.focus_days, 'g') + ' days' if self.focus_days else 'all markets'}"
+                 f" ({len(self.contracts)} contracts scanned)")
+        return {"days": self.focus_days, "contracts": len(self.contracts)}
+
+    @staticmethod
+    def _in_focus(group, cutoff):
+        """A pair group is in focus if a Kalshi market in it settles before the cutoff (no date: kept)."""
+        times = [engine._parse_time(c.close_time) for c in group["kalshi"] if c.close_time]
+        times = [t for t in times if t]
+        return not times or min(times) <= cutoff
+
     def _publish(self):
         s_contracts, s_source = self.sports_cat
         p_contracts, p_source = self.pairs_cat
@@ -197,6 +231,12 @@ class Scanner:
         contracts = s_contracts + p_contracts + c_contracts
         source = {**s_source, **p_source, **c_source}
         groups = engine.group_pairs(contracts)
+        focus = getattr(self, "focus_days", 0)
+        if focus:
+            cutoff = engine.now_utc() + timedelta(days=focus)
+            groups = {k: g for k, g in groups.items() if self._in_focus(g, cutoff)}
+            keep = {(c.exchange, c.market_id) for g in groups.values() for lst in g.values() for c in lst}
+            contracts = [c for c in contracts if (c.exchange, c.market_id) in keep]
         with self.lock:
             self.contracts, self.source, self.groups = contracts, source, groups
             self.contract_index = {(c.exchange, c.market_id): c for c in contracts}
@@ -589,6 +629,11 @@ class Scanner:
             wanted["polymarket"].append(c["p"].market_id)
         for c in self.pairs_cat[0] + self.crypto_cat[0]:
             wanted[c.exchange].append(c.market_id)
+        if getattr(self, "focus_days", 0):          # focused: stream every scanned market that fits
+            with self.lock:
+                focused = list(self.contracts)
+            for c in focused:
+                wanted[c.exchange].append(c.market_id)
         for ex, stream in self.streams.items():
             ids = list(dict.fromkeys(wanted[ex]))[:config.STREAM_MAX_MARKETS]
             stream.want(ids)
@@ -755,4 +800,5 @@ class Scanner:
             s = dict(self.state)
         s["logs"] = list(self.logs)[-30:]
         s["autotrade"] = self.autotrader.status()
+        s["focus"] = {"days": getattr(self, "focus_days", 0), "contracts": len(self.contracts)}
         return s

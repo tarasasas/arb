@@ -307,6 +307,9 @@
     <label><input id="f-clean" type="checkbox"> Hide rows with warnings</label>
     <label><input id="f-noshort" type="checkbox"> Hide Polymarket Buy NO</label>
     <label><input id="f-nosus" type="checkbox"> Hide too-good-to-be-true</label>
+    <label title="Scan only markets settling within this many days: far fewer markets, so prices update faster (and all go on the live streams), and arbs pay out sooner">Focus
+      <select id="f-focus"><option value="0">All markets</option><option value="1">Settling within 1 day</option>
+        <option value="3">within 3 days</option><option value="7">within 7 days</option><option value="30">within 30 days</option></select></label>
     <label title="Size each opportunity to the cash on each site (read live with your API keys)"><input id="f-cash" type="checkbox" checked> Size to my cash</label>
     <label title="Two exact-opposite legs (every result pays $1), no whole-number line, same overtime rules and settlement source, verified match"><input id="f-simple" type="checkbox"> Simple trades only</label>
     <label>Settles within <input id="f-days" type="number" min="0" step="1" placeholder="any" style="width:60px"> days</label>
@@ -666,6 +669,11 @@ showSortArrows();
 document.getElementById("more-toggle").addEventListener("click", e => {
   const on = document.body.classList.toggle("show-extra");
   e.target.textContent = on ? "Hide scanner details" : "Scanner details";
+});
+// Focus is a scanner setting (kept by the scanner across restarts), not a display filter.
+document.getElementById("f-focus").addEventListener("change", async e => {
+  try { const f = await post("/api/focus", { days: +e.target.value }); state.focus = f; render(true); }
+  catch (err) { alert(err.message); }
 });
 document.getElementById("filters-toggle").addEventListener("click", e => {
   const f = document.getElementById("filters"), open = f.classList.toggle("open");
@@ -1309,6 +1317,8 @@ function render(force) {
         bal.polymarket != null ? `Polymarket <b>${money(bal.polymarket)}</b>` : ""}${bal.error ? ` <span title="${esc(bal.error)}">(stale)</span>` : ""}`
     : "";
   renderAuto(s);
+  const fsel = document.getElementById("f-focus");
+  if (s.focus && document.activeElement !== fsel) fsel.value = String(s.focus.days || 0);
   const feeds = Object.entries(s.streams || {});
   document.getElementById("live").innerHTML = feeds.length ? "Live prices: " + feeds.map(([ex, v]) =>
     `<span title="${esc([`${compact(v.markets)} subscribed, ${compact(v.live)} sent a price since connecting, ` +
@@ -1353,7 +1363,8 @@ function render(force) {
   document.getElementById("t-games").textContent = compact(st.matched_games);
   document.getElementById("t-games-note").textContent = st.paired_quantities ? `${compact(st.paired_quantities)} shared lines/markets` : "";
   document.getElementById("t-contracts").textContent = compact(st.paired_contracts);
-  document.getElementById("t-contracts-note").textContent = st.pm_markets ? `of ${compact(st.pm_markets)} PM + ${compact(st.kalshi_markets)} Kalshi` : "";
+  document.getElementById("t-contracts-note").textContent = (s.focus?.days ? `focus: settling within ${s.focus.days} day${s.focus.days == 1 ? "" : "s"} · ` : "")
+    + (st.pm_markets ? `of ${compact(st.pm_markets)} PM + ${compact(st.kalshi_markets)} Kalshi` : "");
   document.getElementById("t-scan").textContent = s.hot_seconds != null ? `${s.hot_seconds}s` : (s.scan_seconds != null ? `${s.scan_seconds}s` : "–");
   document.getElementById("t-scan-note").textContent = s.scan_seconds != null
     ? `${compact(s.hot_count || 0)} near-arb markets; full sweep ${s.scan_seconds}s, ${ago(s.last_full)}` : "seconds";
