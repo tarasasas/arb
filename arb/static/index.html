@@ -19,12 +19,14 @@
     --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
     --accent: #2f5fd0; --good-text: #006300; --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
     --kalshi: #0b7a5a; --poly: #2f5fd0; --row-hover: #f0efec;
+    --chart: #2f5fd0; --grid: #e8e7e3;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
       --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
       --accent: #7ea2f2; --good-text: #0ca30c; --kalshi: #3fc39a; --poly: #7ea2f2; --row-hover: #232322;
+      --chart: #6b90e8; --grid: #2a2a28;
     }
   }
   * { box-sizing: border-box; }
@@ -115,6 +117,21 @@
   .tabs .n { opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
   .tabs button.mine { margin-left: auto; }
   .filters-toggle, .more-toggle, .m-only, .m-short { display: none; }
+  .paychart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; }
+  .paychart .head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; justify-content: space-between; }
+  .paychart h3 { margin: 0; font-size: 14px; font-weight: 650; }
+  .paychart .range button { padding: 3px 10px; border-radius: 999px; font-size: 12.5px; }
+  .paychart .range button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .paychart svg { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+  .paychart svg text { fill: var(--text-muted); font-size: 11px; }
+  .paychart svg .val { fill: var(--text-secondary); font-weight: 600; }
+  .paychart svg .hit { fill: transparent; cursor: default; outline: none; }
+  .paychart svg .bar { pointer-events: none; }
+  .paychart svg .hit:focus-visible + .bar, .paychart svg .hit:hover + .bar { opacity: .8; }
+  .paychart .notes { font-size: 12.5px; color: var(--text-secondary); margin-top: 6px; }
+  .paytip { position: fixed; z-index: 20; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgba(0,0,0,.18); max-width: 280px; display: none; }
+  .paytip b { font-size: 14px; } .paytip .key { display: inline-block; width: 12px; height: 2px; background: var(--chart); vertical-align: middle; margin-right: 6px; }
 
   /* ---- iPhone / narrow screens: opportunities as cards, filters folded away, big tap targets ---- */
   @media (max-width: 760px) {
@@ -138,6 +155,8 @@
     .tile .value { font-size: 22px !important; }
     .tiles .tile:nth-child(n+3) { display: none; }
     .autobar > .muted { display: none; }
+    .paychart .d-only { display: none; }
+    .paychart .range button { min-height: 32px; }
     .filters-toggle { display: block; width: 100%; margin: 10px 0 0; min-height: 42px; }
     .filters { display: none; margin-top: 8px; }
     .filters.open { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
@@ -987,6 +1006,122 @@ function legCell(l) {
     <b>${sideName(l)}</b> · ${compact(l.shares)} shares · paid ${money(l.paid)} ${st}
     <div class="muted" style="font-size:12px">${esc(l.title)}</div></div>`;
 }
+// ---- payouts by day: what your active arbs pay out, per calendar day -----------------------------
+let payDays = 30;
+try { payDays = +localStorage.getItem("arb-pay-days") || 30; } catch (e) {}
+const dayKey = d => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+const niceStep = max => { const raw = max / 4, p = 10 ** Math.floor(Math.log10(raw || 1));
+  return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || raw; };
+
+function payoutData(open, days) {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const buckets = Array.from({ length: days }, (_, i) => {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    return { date: d, key: dayKey(d), pay: 0, profit: 0, arbs: [] };
+  });
+  const byKey = new Map(buckets.map(b => [b.key, b]));
+  const overdue = { pay: 0, n: 0 }, later = { pay: 0, n: 0 }, unknown = { pay: 0, n: 0 };
+  for (const a of open) {
+    const t = a.closes ? new Date(a.closes) : null;
+    const where = !t || isNaN(t) ? unknown : t < start ? overdue : byKey.get(dayKey(t)) || later;
+    where.pay += a.guaranteed || 0; where.n = (where.n || 0) + 1;
+    if (where.arbs) { where.profit += a.profit || 0; where.arbs.push(a); }
+  }
+  return { buckets, overdue, later, unknown };
+}
+
+function payoutChartHtml(open) {
+  const { buckets, overdue, later, unknown } = payoutData(open, payDays);
+  // Drawn at the container's real width, so text stays 11px on a phone instead of shrinking.
+  const box = document.getElementById("myarbs")?.clientWidth || 0;
+  const W = Math.max(300, Math.min(1100, box ? box - 30 : 900)), H = W < 500 ? 170 : 200;
+  const L = 44, R = 8, T = 18, B = 26, plotH = H - T - B, plotW = W - L - R;
+  const max = Math.max(...buckets.map(b => b.pay), 0);
+  const step = niceStep(max || 1), top = Math.max(step * Math.ceil((max || 1) / step), step);
+  const y = v => T + plotH - (v / top) * plotH, slot = plotW / buckets.length;
+  const bw = Math.min(24, Math.max(2, slot - 2));                 // <= 24px, 2px surface gap between neighbors
+  const every = buckets.length <= 7 ? (W < 500 ? 2 : 1) : buckets.length <= 31 ? (W < 500 ? 10 : 7) : (W < 500 ? 30 : 14);
+  const fmtDay = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const shortMoney = v => v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "K" : "$" + Math.round(v);
+  let g = "";
+  for (let v = 0; v <= top + 1e-9; v += step) {
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>
+      <text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${shortMoney(v)}</text>`;
+  }
+  const peak = buckets.reduce((m, b, i) => b.pay > (buckets[m]?.pay || 0) ? i : m, -1);
+  buckets.forEach((b, i) => {
+    const x = L + i * slot + (slot - bw) / 2, h = b.pay > 0 ? Math.max(2, (b.pay / top) * plotH) : 0, r = Math.min(4, bw / 2, h);
+    const yb = T + plotH;
+    // Column with a 4px rounded top, square at the baseline.
+    const bar = h ? `<path class="bar" fill="var(--chart)" d="M${x},${yb} V${yb - h + r} Q${x},${yb - h} ${x + r},${yb - h}
+      H${x + bw - r} Q${x + bw},${yb - h} ${x + bw},${yb - h + r} V${yb} Z"/>` : "";
+    g += `<rect class="hit" data-i="${i}" tabindex="${b.pay ? 0 : -1}" x="${L + i * slot}" y="${T}" width="${slot}" height="${plotH}"
+      aria-label="${esc(fmtDay(b.date))}: ${money(b.pay)} pays out"></rect>${bar}`;
+    if (i === peak && b.pay > 0)
+      g += `<text class="val" x="${x + bw / 2}" y="${yb - h - 5}" text-anchor="middle">${money(b.pay)}</text>`;
+    if (i % every === 0)
+      g += `<text x="${L + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle">${i === 0 ? "Today" : esc(fmtDay(b.date))}</text>`;
+  });
+  g += `<line x1="${L}" x2="${W - R}" y1="${T + plotH}" y2="${T + plotH}" stroke="var(--border)" stroke-width="1"/>`;
+  const inRange = buckets.reduce((s, b) => s + b.pay, 0);
+  const notes = [overdue.n && `${money(overdue.pay)} from ${overdue.n} arb${overdue.n > 1 ? "s" : ""} past their close date, waiting to settle`,
+    later.n && `${money(later.pay)} more after ${fmtDay(buckets[buckets.length - 1].date)}`,
+    unknown.n && `${money(unknown.pay)} with no close date`].filter(Boolean);
+  const rows = buckets.filter(b => b.pay > 0).map(b => `<tr><td>${esc(fmtDay(b.date))}</td><td class="num">${money(b.pay)}</td>
+    <td class="num">${money(b.profit)}</td><td>${b.arbs.map(a => esc(a.game)).join("; ")}</td></tr>`).join("");
+  return `<div class="paychart">
+    <div class="head"><h3>Payouts by day <span class="muted" style="font-weight:400">${money(inRange)} in the next ${payDays} days<span class="d-only"> ·
+      what active arbs pay whatever happens, on the day they close</span></span></h3>
+      <span class="range">${[7, 30, 90].map(d => `<button data-paydays="${d}" class="${d === payDays ? "on" : ""}">${d} days</button>`).join(" ")}</span></div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Guaranteed payout per day for the next ${payDays} days">${g}</svg>
+    ${notes.length ? `<div class="notes">${notes.join(" · ")}</div>` : ""}
+    <details><summary class="muted" style="margin:6px 0 0;font-weight:400">Show as table</summary>
+      <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Day</th><th class="num">Pays out</th><th class="num">Profit</th><th>Arbs</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="empty">Nothing pays out in this range.</td></tr>`}</tbody></table></div></details>
+  </div>`;
+}
+
+let payResize;
+window.addEventListener("resize", () => { clearTimeout(payResize);
+  payResize = setTimeout(() => { if (currentTab === MINE) renderMyArbs(); }, 200); });
+
+function wirePayoutChart(el, open) {
+  const { buckets } = payoutData(open, payDays);
+  let tip = document.getElementById("paytip");
+  if (!tip) { tip = document.createElement("div"); tip.id = "paytip"; tip.className = "paytip"; document.body.appendChild(tip); }
+  const show = (b, x, yPos) => {
+    tip.replaceChildren();
+    const head = document.createElement("div");
+    const key = document.createElement("span"); key.className = "key";
+    const val = document.createElement("b"); val.textContent = money(b.pay);
+    head.append(key, val, document.createTextNode(" pays out " +
+      b.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })));
+    const sub = document.createElement("div"); sub.className = "muted";
+    sub.textContent = `${money(b.profit)} of it profit · ${b.arbs.length} arb${b.arbs.length > 1 ? "s" : ""}`;
+    tip.append(head, sub);
+    for (const a of b.arbs.slice(0, 5)) { const d = document.createElement("div"); d.textContent = `${a.game} · ${money(a.guaranteed)}`; tip.append(d); }
+    if (b.arbs.length > 5) { const d = document.createElement("div"); d.className = "muted"; d.textContent = `+${b.arbs.length - 5} more`; tip.append(d); }
+    tip.style.display = "block";
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(window.innerWidth - w - 8, Math.max(8, x + 12)) + "px";
+    tip.style.top = Math.max(8, yPos - h - 12) + "px";
+  };
+  const hide = () => { tip.style.display = "none"; };
+  el.querySelectorAll(".paychart .hit").forEach(r => {
+    const b = buckets[+r.dataset.i];
+    if (!b || !b.pay) return;
+    r.addEventListener("pointermove", e => show(b, e.clientX, e.clientY));
+    r.addEventListener("pointerleave", hide);
+    r.addEventListener("focus", () => { const bb = r.getBoundingClientRect(); show(b, bb.left + bb.width / 2, bb.top + 20); });
+    r.addEventListener("blur", hide);
+  });
+  el.querySelectorAll("[data-paydays]").forEach(btn => btn.addEventListener("click", () => {
+    payDays = +btn.dataset.paydays;
+    try { localStorage.setItem("arb-pay-days", payDays); } catch (e) {}
+    hide(); renderMyArbs();
+  }));
+}
+
 function renderMyArbs() {
   const el = document.getElementById("myarbs"); if (!el) return;
   const open = myArbs.filter(a => !a.settled), done = myArbs.filter(a => a.settled);
@@ -1019,6 +1154,7 @@ function renderMyArbs() {
       <div class="sumcard"><div class="label">All arbs, incl. settled</div><div class="big profit">${ratio(tot("profit", myArbs), tot("paid", myArbs))}</div>
         <div class="sub">${money(tot("profit", myArbs))} profit on ${money(tot("paid", myArbs))} spent</div></div>
     </div>
+    ${payoutChartHtml(open)}
     <div style="margin:4px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button data-mine="sync">Sync now</button> <span class="muted">${syncLine()}</span></div>
     <div style="margin:0 0 10px"><button data-mine="add">Add an arb by hand</button>
@@ -1036,6 +1172,7 @@ function renderMyArbs() {
     ${done.length ? `<h2 style="font-size:15px">Settled or closed</h2><div class="table-wrap"><table>${head}<tbody>${rows(done)}</tbody></table></div>` : ""}
     <p class="caveat">Locked profit counts only shares held on both sites; any extra shares on one side are treated as worth $0.
       Status is re-checked every 30 seconds. Saved on this computer in my_arbs.json.</p>`;
+  wirePayoutChart(el, open);
 }
 document.getElementById("myarbs").addEventListener("click", async e => {
   const b = e.target.closest("button[data-mine]"); if (!b) return;

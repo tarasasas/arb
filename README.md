@@ -261,6 +261,11 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   form an arb the scanner knows about are paired and added automatically, with the shares held and
   what they cost. Positions with no partner on the other site are listed under **Only on one site**.
   If you edit an arb found this way, the sync stops changing it.
+- **Payouts by day:** a chart at the top shows how much your active arbs pay out on each calendar day,
+  over the next 7, 30 or 90 days. It counts the guaranteed payout, on the day the later of the two
+  markets closes. Hover over (or tab to) a day to see its arbs and how much of it is profit. The note
+  under the chart covers arbs past their close date that are still waiting to settle, and payouts beyond
+  the range. **Show as table** lists the same numbers.
 - **Make trade** adds each trade that hedged at least one pair, with the shares and costs that filled.
 - **Track this arb** on any opportunity opens a form filled in with the dashboard's sizing. Change
   it to what actually filled on each site (shares, and the total paid including fees), then save.
