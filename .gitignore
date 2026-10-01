@@ -13,3 +13,6 @@ __pycache__/
 # Your tracked arbs (My arbs tab)
 my_arbs.json
 my_arbs.tmp
+
+# Warm-start cache (matched markets, rebuilt automatically)
+cache/

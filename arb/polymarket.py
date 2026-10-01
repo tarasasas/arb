@@ -165,22 +165,27 @@ class PolymarketClient:
 
     def raw_markets(self, categories, log=print):
         """Active markets in the given categories, as returned by the API, each market once.
-        A category slug the API rejects is logged and skipped, so one bad slug can't stop the rest."""
-        out = {}
-        for cat in categories:
-            offset = 0
+        Categories download in parallel (pages within one are sequential). A category slug the API
+        rejects is logged and skipped, so one bad slug can't stop the rest."""
+        def one(cat):
+            got, offset = [], 0
             while True:
                 try:
                     ms = self.http.get("/markets", {"active": "true", "closed": "false", "categories": cat,
                                                     "limit": PAGE, "offset": offset}).get("markets") or []
                 except Exception as e:
                     log(f"  polymarket: category {cat!r} not loaded ({e!r})")
-                    break
+                    return got
+                got += ms
+                if len(ms) < PAGE:
+                    return got
+                offset += PAGE
+
+        out = {}
+        with ThreadPoolExecutor(min(WORKERS, max(1, len(categories)))) as pool:
+            for ms in pool.map(one, categories):
                 for m in ms:
                     out.setdefault(m.get("slug"), m)
-                if len(ms) < PAGE:
-                    break
-                offset += PAGE
         return list(out.values())
 
     def markets_by_slug(self, slugs):

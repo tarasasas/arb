@@ -6,7 +6,7 @@ import traceback
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 
-from . import config, crypto, engine, kalshi, matching, nonsports
+from . import config, crypto, engine, kalshi, matching, nonsports, warmcache
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
 from .myarbs import MyArbs
@@ -583,10 +583,78 @@ class Scanner:
                     self.state["status"] = f"error: {e!r}"
                 time.sleep(5)
                 continue
+            if not hot:
+                self.save_warm()
             time.sleep(config.HOT_PAUSE_SECS if hot else config.FULL_SWEEP_SECS)
+
+    # ---- warm start ---------------------------------------------------------------------
+
+    WARM_STATE_KEYS = ("leagues", "unmatched", "tabs")
+
+    def save_warm(self, min_interval=60):
+        """Save the matched markets and near-arb list (at most once a minute) for a fast restart."""
+        if time.time() - getattr(self, "_warm_saved", 0) < min_interval or not self.catalog_time:
+            return
+        self._warm_saved = time.time()
+        try:
+            with self.lock:
+                data = {"sports_cat": self.sports_cat, "auto_pairs": self.auto_pairs,
+                        "suggestions": self.suggestions, "hot_groups": self.hot_groups,
+                        "series_fees": self.series_fees, "fee_overrides": self.fee_overrides,
+                        "state": {k: self.state.get(k) for k in self.WARM_STATE_KEYS},
+                        "stats": dict(self.state.get("stats") or {})}
+            warmcache.save(data)
+        except Exception as e:
+            self.log(f"Couldn't save the warm-start cache: {e!r}")
+
+    def load_warm(self):
+        """Start from the last run's matches, if recent. Returns True if loaded."""
+        d = warmcache.load()
+        if not d or not d.get("sports_cat") or not d["sports_cat"][0]:
+            return False
+        try:
+            self.sports_cat = d["sports_cat"]
+            self.series_fees, self.fee_overrides = d.get("series_fees") or {}, d.get("fee_overrides") or {}
+            with self.lock:
+                self.auto_pairs, self.suggestions = d.get("auto_pairs") or [], d.get("suggestions") or []
+                self.hot_groups = d.get("hot_groups") or {}
+                self.state.update({k: v for k, v in (d.get("state") or {}).items() if v is not None})
+                self.state["stats"].update({k: v for k, v in (d.get("stats") or {}).items()
+                                            if k in ("pm_markets", "kalshi_markets", "matched_games")})
+            self._publish()
+        except Exception as e:
+            self.log(f"Warm start skipped ({e!r}); loading everything fresh")
+            self.sports_cat, self.hot_groups = ([], {}), {}
+            return False
+        try:
+            self.refresh_pairs()           # a few requests: current terms for the non-sports pairs
+        except Exception as e:
+            self.log(f"Warm start: non-sports pairs wait for the fresh load ({e!r})")
+        age = (time.time() - d["time"]) / 60
+        self.log(f"Warm start: scanning {len(self.contracts)} contracts matched {age:.0f} min ago and "
+                 f"{sum(len(v) for v in self.hot_groups.values())} near-arb markets right away; "
+                 f"fresh market lists are loading in the background")
+        return True
+
+    def _stream_hot(self):
+        """Point the live streams at the saved near-arb markets before the first full sweep."""
+        wanted = {"kalshi": [], "polymarket": []}
+        with self.lock:
+            hot = list(self.hot_groups.values())
+        for ids in hot:
+            for ex, mid in ids:
+                wanted[ex].append(mid)
+        for c in self.pairs_cat[0] + self.crypto_cat[0]:
+            wanted[c.exchange].append(c.market_id)
+        for ex, stream in self.streams.items():
+            stream.want(list(dict.fromkeys(wanted[ex]))[:config.STREAM_MAX_MARKETS])
 
     def run_forever(self, stop_event=None):
         self.start_message()
+        try:
+            self.load_warm()
+        except Exception as e:
+            self.log(f"Warm start skipped ({e!r})")
         threading.Thread(target=self._catalog_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._suggest_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._crypto_loop, args=(stop_event,), daemon=True).start()
@@ -598,6 +666,7 @@ class Scanner:
         self.streams = streams.build(self.kalshi, self.on_stream_update, self.log, {}, {})
         if self.streams:
             self._publish()             # hand the streams the market objects
+            self._stream_hot()
             threading.Thread(target=self._stream_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._loop, args=(stop_event, False), daemon=True).start()
         self._loop(stop_event, True)

@@ -343,6 +343,17 @@ Streams need the `websocket-client` package; `start-dashboard.bat` installs it t
 no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
 missed Kalshi update forces a fresh book.
 
+## Fast restarts (warm start)
+
+Matching every market on both sites takes a few minutes. So once a minute the scanner saves its
+matches and its near-arb list to `cache/warm.pkl` (git-ignored). On the next start it begins checking
+prices on those saved matches within seconds, and the live streams pick up the saved near-arb markets
+straight away, while fresh market lists load in the background.
+
+Only the matching is reused. Every price is fetched live before anything is shown, and markets that
+closed in the meantime just drop out. A cache more than 12 hours old is ignored. To force a completely
+fresh start, delete the `cache` folder.
+
 ## Maker mode
 
 The **Maker mode** tab lists pairs that aren't arbs when you take both prices, but become profitable
