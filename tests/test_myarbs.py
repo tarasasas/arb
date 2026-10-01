@@ -142,3 +142,41 @@ class DuplicateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReconcileTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from arb import myarbs as m
+        self.dir = tempfile.TemporaryDirectory()
+        self.m = m.MyArbs(Path(self.dir.name) / "my_arbs.json")
+        self.a = self.m.save({"source": "make_trade", "game": "Hanshin vs Yomiuri", "payout": 1.0, "legs": [
+            {"exchange": "kalshi", "market_id": "KXNPB-HAN", "side": "yes", "shares": 20, "paid": 10.0},
+            {"exchange": "polymarket", "market_id": "npb-han-ygo", "side": "no", "shares": 20, "paid": 9.6}]})
+        self.m._live = {("kalshi", "KXNPB-HAN"): {"state": "open"}, ("polymarket", "npb-han-ygo"): {"state": "open"}}
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_selling_a_whole_leg_closes_the_arb(self):
+        changed = self.m.reconcile({}, {"npb-han-ygo": {"side": "no", "shares": 20}})
+        self.assertEqual(len(changed), 1)
+        a = self.m.items[0]
+        self.assertIn("you sold 20 Kalshi YES", a["closed"]["why"])
+        self.assertEqual(a["legs"][0]["shares"], 0)
+        self.assertEqual(self.m.reconcile({}, {}), [])                       # already closed: left alone
+
+    def test_selling_part_of_a_leg_shrinks_it(self):
+        self.m.reconcile({"KXNPB-HAN": {"side": "yes", "shares": 5}}, {"npb-han-ygo": {"side": "no", "shares": 20}})
+        a = self.m.items[0]
+        self.assertNotIn("closed", a)
+        self.assertEqual((a["legs"][0]["shares"], a["legs"][0]["paid"]), (5, 2.5))
+        self.assertIn("You sold 15 Kalshi YES", a["note"])
+
+    def test_settled_markets_and_unread_accounts_are_left_alone(self):
+        self.m._live[("kalshi", "KXNPB-HAN")] = {"state": "settled"}
+        self.assertEqual(self.m.reconcile({}, {"npb-han-ygo": {"side": "no", "shares": 20}}), [])
+        self.m._live[("kalshi", "KXNPB-HAN")] = {"state": "open"}
+        self.assertEqual(self.m.reconcile({}, {"npb-han-ygo": {"side": "no", "shares": 20}}, read=("polymarket",)), [])
+        self.assertEqual(self.m.items[0]["legs"][0]["shares"], 20)

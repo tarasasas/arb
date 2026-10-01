@@ -254,6 +254,13 @@ class Scanner:
             pairs, kpos, ppos, unpaired,
             lambda kc: {"game": kc.game_label or kc.game_key.split(":", 1)[-1], "tab": engine.row_tab(kc),
                         "closes": kc.close_time})
+        try:                               # follow legs you sold yourself (needs each market's live state)
+            self.my_arbs.snapshot(self.kalshi, self.pm)
+            read = tuple(ex for ex, name in (("kalshi", "Kalshi"), ("polymarket", "Polymarket")) if name not in acc.missing)
+            for a in self.my_arbs.reconcile(kpos, ppos, read):
+                self.log(f"My arbs: {a['game']}: {a['note'].split('. ')[0]}")
+        except Exception as e:
+            self.log(f"My arbs: couldn't compare with your positions ({e!r})")
         self.my_arbs.sync_state = {"status": "ok", "time": engine.now_utc().isoformat(), "missing": acc.missing,
                                    "positions": len(kpos) + len(ppos), "paired": len(pairs)}
 

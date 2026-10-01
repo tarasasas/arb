@@ -261,6 +261,11 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   form an arb the scanner knows about are paired and added automatically, with the shares held and
   what they cost. Positions with no partner on the other site are listed under **Only on one site**.
   If you edit an arb found this way, the sync stops changing it.
+- **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
+  recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
+  cost cut pro rata. An arb with a leg sold out moves to **Settled or closed**, with a note saying what
+  you sold, and the shares you still hold show under **Only on one site**. Only legs whose market is
+  still open are changed: when a market settles its position disappears too, and that isn't a sale.
 - **Payouts by day:** a chart at the top shows how much your active arbs pay out on each calendar day,
   over the next 7, 30 or 90 days. It counts the guaranteed payout, on the day the later of the two
   markets closes. Hover over (or tab to) a day to see its arbs and how much of it is profit. The note

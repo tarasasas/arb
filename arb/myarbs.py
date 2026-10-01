@@ -168,6 +168,45 @@ class MyArbs:
                        **row_info(kc)})
         self.unpaired = unpaired
 
+    def reconcile(self, kpos, ppos, read=("kalshi", "polymarket")):
+        """Follow sales you made yourself: a tracked leg whose live position is now smaller (or gone)
+        is cut to what you still hold, its cost pro rata; an arb with a leg sold out is closed.
+        Only legs whose market is known to be still open are touched, because a market that settles
+        also makes the position disappear. read: the exchanges whose positions were read.
+        Returns the arbs that changed."""
+        names = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
+        changed = []
+        with self.lock:
+            for a in self.items:
+                if a.get("closed"):
+                    continue
+                sold = []
+                for leg in a["legs"]:
+                    if leg["exchange"] not in read:
+                        continue
+                    st = self._live.get((leg["exchange"], leg["market_id"])) or {}
+                    if st.get("state") != "open":
+                        continue
+                    pos = (kpos if leg["exchange"] == "kalshi" else ppos).get(leg["market_id"])
+                    live = pos["shares"] if pos and pos.get("side") == leg["side"] else 0.0
+                    if live + 1e-6 < leg["shares"]:
+                        if leg["shares"] > 0:
+                            leg["paid"] = round(leg["paid"] * live / leg["shares"], 2)
+                        sold.append(f"{leg['shares'] - live:g} {names[leg['exchange']]} {leg['side'].upper()}")
+                        leg["shares"] = live
+                if not sold:
+                    continue
+                when = datetime.now(timezone.utc).isoformat()
+                if any(leg["shares"] <= 1e-9 for leg in a["legs"]):
+                    a["closed"] = {"time": when, "why": f"you sold {' and '.join(sold)}"}
+                    a["note"] = f"Closed: you sold {' and '.join(sold)}. " + (a.get("note") or "")
+                else:
+                    a["note"] = f"You sold {' and '.join(sold)}; shares updated. " + (a.get("note") or "")
+                changed.append(a)
+            if changed:
+                self._save()
+        return changed
+
     def delete(self, arb_id):
         with self.lock:
             self.items = [a for a in self.items if a["id"] != arb_id]
@@ -212,7 +251,7 @@ class MyArbs:
             worth = [l["worth_now"] for l in legs]
             out.append({**a, "legs": legs, **s,
                         "worth_now": round(sum(worth), 2) if None not in worth else None,
-                        "settled": all(l["state"] in ("settled", "closed") for l in legs)})
+                        "settled": bool(a.get("closed")) or all(l["state"] in ("settled", "closed") for l in legs)})
         return out
 
     def state(self):
