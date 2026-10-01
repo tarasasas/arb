@@ -74,6 +74,11 @@ AUTO_TRADE_DAILY_LIMIT = _env_num("AUTO_TRADE_DAILY_LIMIT", 100)   # $ spent by 
 AUTO_TRADE_MIN_PROFIT = _env_num("AUTO_TRADE_MIN_PROFIT", 0.50)    # $ profit at dashboard sizing
 AUTO_TRADE_MIN_ROI = _env_num("AUTO_TRADE_MIN_ROI", 0.5) / 100     # % of the money put in
 AUTO_TRADE_COOLDOWN_SECS = _env_num("AUTO_TRADE_COOLDOWN_SECS", 60)  # per pair of markets
+# In-play games move between the two orders (and Polymarket can delay in-play orders), so the second
+# leg often misses and the first is sold back at a loss. Off unless AUTO_TRADE_LIVE_GAMES=1.
+AUTO_TRADE_LIVE_GAMES = os.environ.get("AUTO_TRADE_LIVE_GAMES", "0").strip().lower() in ("1", "true", "yes", "on")
+AUTO_TRADE_GAME_COOLDOWN_SECS = _env_num("AUTO_TRADE_GAME_COOLDOWN_SECS", 600)   # whole game, after a miss
+AUTO_TRADE_MAX_DAILY_LOSS = _env_num("AUTO_TRADE_MAX_DAILY_LOSS", 5)             # $ net loss that stops it
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 # external-api.kalshi.com is Kalshi's recommended host, but it rejects Python's urllib

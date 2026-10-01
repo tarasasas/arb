@@ -153,3 +153,38 @@ class AutoTraderTests(unittest.TestCase):
         self.assertEqual(s.trader.calls[0], ("prepare", 10))
         autotrade.fast_trade(s, autotrade.legs_of(row()))
         self.assertEqual(s.trader.calls[2], ("prepare", config.FAST_MAX_TRADE))
+
+
+class SafetyTests(unittest.TestCase):
+    def make(self, rows, **kw):
+        s = FakeScanner(rows, FakeTrader(**kw))
+        a = autotrade.AutoTrader(s, run_async=False)
+        a.set(True)
+        return s, a
+
+    def test_games_in_play_are_skipped(self):
+        live = row(warnings=["Game already started: prices move fast, and the quotes may be seconds apart."])
+        s, a = self.make([live])
+        self.assertIsNone(a.check(s.state["opportunities"]))
+        with mock.patch.object(config, "AUTO_TRADE_LIVE_GAMES", True):
+            self.assertIsNotNone(a.check(s.state["opportunities"]))
+
+    def test_a_miss_pauses_the_whole_game(self):
+        partial = {"status": "partial", "plan": {"payout": 1.0}, "hedged_pairs": 0, "net": -1.1, "unhedged_shares": 0,
+                   "legs_filled": {"kalshi": {"paid": 0}, "polymarket": {"paid": 0}},
+                   "steps": ["Kalshi: bought 20 YES", "Polymarket: order rejected", "Kalshi: sold back 20 unhedged YES"]}
+        s, a = self.make([row(game="KTI vs KWT", k="K1", p="p1"), row(game="KTI vs KWT", k="K2", p="p2")], result=partial)
+        a.check(s.state["opportunities"])
+        self.assertIn("sold back", a.history[0]["note"])
+        self.assertIsNone(a.check(s.state["opportunities"]))        # other line of the same game: paused
+
+    def test_daily_loss_limit_stops_it(self):
+        loss = {"status": "partial", "plan": {"payout": 1.0}, "hedged_pairs": 0, "net": -3.0, "unhedged_shares": 0,
+                "legs_filled": {"kalshi": {"paid": 0}, "polymarket": {"paid": 0}}, "steps": []}
+        s, a = self.make([row(game="A", k="K1", p="p1"), row(game="B", k="K2", p="p2")], result=loss)
+        with mock.patch.object(config, "AUTO_TRADE_MAX_DAILY_LOSS", 5):
+            a.check(s.state["opportunities"])
+            self.assertTrue(a.on)
+            a.check(s.state["opportunities"])
+        self.assertFalse(a.on)
+        self.assertIn("net loss today", a.halted)

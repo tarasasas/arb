@@ -27,6 +27,11 @@ def pair_id(legs):
     return tuple(sorted(f"{l['exchange'].lower()}:{l['market_id']}:{l['side']}" for l in legs))
 
 
+def in_play(row):
+    """A game that has already started (the scanner flags it in the row's warnings)."""
+    return any(w.startswith("Game already started") for w in row.get("warnings") or [])
+
+
 def row_info(row):
     return {"game": row.get("game"), "tab": row.get("tab"), "closes": row.get("closes")} if row else None
 
@@ -86,6 +91,7 @@ class AutoTrader:
         self.spend = {}                 # local date -> dollars used by Auto-trade
         self.net = {}                   # local date -> net profit locked by Auto-trade
         self.tried = {}                 # pair id -> time of the last attempt
+        self.game_pause = {}            # game -> time until which it's skipped (after a miss)
         self.history = deque(maxlen=20)
 
     @staticmethod
@@ -110,6 +116,7 @@ class AutoTrader:
                 "net_today": round(self.net.get(self._today(), 0.0), 2),
                 "daily_limit": config.AUTO_TRADE_DAILY_LIMIT, "max_trade": config.AUTO_TRADE_MAX_TRADE,
                 "min_profit": config.AUTO_TRADE_MIN_PROFIT, "min_roi": config.AUTO_TRADE_MIN_ROI,
+                "live_games": config.AUTO_TRADE_LIVE_GAMES, "max_daily_loss": config.AUTO_TRADE_MAX_DAILY_LOSS,
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
                 "allow_auto_matched": config.FAST_ALLOW_AUTO_MATCHED, "allow_too_good": config.FAST_ALLOW_TOO_GOOD,
                 "history": list(self.history)}
@@ -120,6 +127,8 @@ class AutoTrader:
         ok = [r for r in rows if (r.get("fast") or {}).get("ok")
               and (r.get("profit") or 0) >= config.AUTO_TRADE_MIN_PROFIT
               and (r.get("roi") or 0) >= config.AUTO_TRADE_MIN_ROI
+              and (config.AUTO_TRADE_LIVE_GAMES or not in_play(r))
+              and self.game_pause.get(r.get("game"), 0) <= now
               and now - self.tried.get(pair_id(r["legs"]), 0) >= config.AUTO_TRADE_COOLDOWN_SECS]
         return max(ok, key=lambda r: r["profit"], default=None)
 
@@ -155,6 +164,13 @@ class AutoTrader:
                 self.net[self._today()] = self.net.get(self._today(), 0.0) + res["net"]
             entry.update({"status": res["status"], "pairs": res["hedged_pairs"], "spent": used, "net": res["net"],
                           "unhedged": res["unhedged_shares"]})
+            if res["status"] in ("partial", "no_fill"):
+                # The second leg missed (or the first didn't fill): leave this game alone for a while.
+                self.game_pause[row.get("game")] = time.time() + config.AUTO_TRADE_GAME_COOLDOWN_SECS
+                entry["note"] = "; ".join(res.get("steps") or []) + (f" {res['note']}" if res.get("note") else "")
+            if self.net.get(self._today(), 0.0) <= -config.AUTO_TRADE_MAX_DAILY_LOSS:
+                self._halt(f"net loss today is ${-self.net[self._today()]:.2f} (limit ${config.AUTO_TRADE_MAX_DAILY_LOSS:g}): "
+                           f"check what's happening before turning it back on", notify=False)
             if res["status"] == "unknown" or res["unhedged_shares"] > 0:
                 self._halt(f"last trade left {res['unhedged_shares']:g} shares unhedged or unconfirmed: check "
                            f"both accounts, then turn Auto-trade back on", notify=False)
