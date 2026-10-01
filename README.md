@@ -349,6 +349,12 @@ Streams need the `websocket-client` package; `start-dashboard.bat` installs it t
 no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
 missed Kalshi update forces a fresh book.
 
+If a stream goes quiet (no message for 90 seconds) it reconnects by itself. Every full sweep still
+polls every market as a backstop, and a streamed market is only trusted without polling while it has
+updated in the last minute, so a silent stream can't freeze prices. The header shows each stream's
+state, for example "Kalshi ● 640 of 1,900 live", or "quiet 95s (polling)". Hover over it for its
+subscriptions, reconnects and last error.
+
 ## On your iPhone
 
 The dashboard works on a phone. On a narrow screen opportunities show as cards, the filters fold

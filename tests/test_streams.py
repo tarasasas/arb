@@ -165,3 +165,37 @@ class RealSocketTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreshnessTests(unittest.TestCase):
+    def test_fresh_only_recent_and_connected(self):
+        from arb import streams
+        st = streams.PolymarketStream(lambda m, p: {}, {}, lambda e, m: None, lambda m: None, connect=lambda u, h: None)
+        st.connected = True
+        st._updated("a")
+        st.updated_at["b"] = __import__("time").time() - 1000
+        self.assertEqual(st.fresh(60), {"a"})
+        st.connected = False
+        self.assertEqual(st.fresh(60), set())
+
+    def test_want_reconnects_when_old_subscriptions_pile_up(self):
+        from arb import streams
+        logs, closed = [], []
+
+        class WS:
+            def send(self, m):
+                pass
+
+            def close(self):
+                closed.append(True)
+        st = streams.PolymarketStream(lambda m, p: {}, {}, lambda e, m: None, logs.append, connect=lambda u, h: None)
+        st.ws, st.connected = WS(), True
+        st.subscribed = {f"old-{i}" for i in range(500)}
+        st.want([f"new-{i}" for i in range(50)])
+        self.assertEqual(closed, [True])
+        st2 = streams.PolymarketStream(lambda m, p: {}, {}, lambda e, m: None, logs.append, connect=lambda u, h: None)
+        st2.ws, st2.connected = WS(), True
+        st2.subscribed = {f"old-{i}" for i in range(50)}
+        st2.want([f"new-{i}" for i in range(100)])
+        self.assertEqual(len(closed), 1)                      # a few stale ones: just add the new
+        self.assertEqual(len(st2.subscribed), 150)

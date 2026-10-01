@@ -1137,8 +1137,12 @@ function render(force) {
   renderAuto(s);
   const feeds = Object.entries(s.streams || {});
   document.getElementById("live").innerHTML = feeds.length ? "Live prices: " + feeds.map(([ex, v]) =>
-    `<span title="${esc(v.error || "")}">${ex === "kalshi" ? "Kalshi" : "Polymarket"} ${v.connected
-      ? `<span style="color:var(--good)">●</span> ${compact(v.live)} mkts` : `<span style="color:var(--critical)">●</span> reconnecting`}</span>`).join(" · ")
+    `<span title="${esc([`${compact(v.markets)} subscribed, ${compact(v.live)} sent a price since connecting, ` +
+        `${compact(v.fresh)} in the last minute`, v.reconnects ? `${v.reconnects} reconnects` : "",
+        v.last_message_secs != null ? `last message ${v.last_message_secs}s ago` : "", v.error || ""].filter(Boolean).join(" · "))}">${
+      ex === "kalshi" ? "Kalshi" : "Polymarket"} ${!v.connected ? `<span style="color:var(--critical)">●</span> reconnecting`
+      : v.last_message_secs > 60 ? `<span style="color:var(--warning)">●</span> quiet ${Math.round(v.last_message_secs)}s (polling)`
+      : `<span style="color:var(--good)">●</span> ${compact(v.fresh ?? v.live)} of ${compact(v.markets)} live`}</span>`).join(" · ")
     : "Live prices: off (polling)";
 
   const minP = +document.getElementById("f-min").value || 0, minR = (+document.getElementById("f-roi").value || 0) / 100;

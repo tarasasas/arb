@@ -88,14 +88,30 @@ class _Stream(threading.Thread):
         self.lock, self.stop_event = threading.Lock(), threading.Event()
         self.ws, self.connected, self.last_msg, self.updates = None, False, 0.0, 0
         self.seen = set()                   # markets with a live book since the last (re)connect
+        self.updated_at = {}                # market id -> time of its last streamed book
+        self.reconnects = 0
         self.error = None
 
     # public
+    def fresh(self, max_age):
+        """Markets whose streamed book is recent enough to trust without polling."""
+        if not self.connected:
+            return set()
+        cutoff = time.time() - max_age
+        return {mid for mid, t in list(self.updated_at.items()) if t >= cutoff}
+
     def want(self, ids):
-        """Set the markets to stream; new ones are subscribed on the live connection."""
+        """Set the markets to stream; new ones are subscribed on the live connection. Subscriptions
+        only add up on a connection, so once most of them are no longer wanted, reconnect and
+        subscribe the current set from scratch."""
         with self.lock:
             self.wanted = set(ids)
+            stale = len(self.subscribed - self.wanted)
         ws = self.ws
+        if ws and self.connected and stale > max(200, len(self.wanted)):
+            self.log(f"{self.exchange} stream: {stale} old subscriptions, reconnecting with the current list")
+            self._drop(ws)
+            return
         if ws and self.connected:
             try:
                 self._sync_subscriptions(ws)
@@ -105,8 +121,15 @@ class _Stream(threading.Thread):
     def status(self):
         age = time.time() - self.last_msg if self.last_msg else None
         return {"connected": self.connected, "markets": len(self.subscribed), "live": len(self.seen),
-                "updates": self.updates,
+                "fresh": len(self.fresh(config.STREAM_FRESH_SECS)), "updates": self.updates,
+                "reconnects": self.reconnects,
                 "last_message_secs": round(age, 1) if age is not None else None, "error": self.error}
+
+    def _drop(self, ws):
+        try:
+            ws.close()
+        except Exception:
+            pass
 
     def stop(self):
         self.stop_event.set()
@@ -122,13 +145,22 @@ class _Stream(threading.Thread):
             try:
                 self.ws = self._open()
                 self.connected, self.error, backoff = True, None, 1
-                self.subscribed, self.seen = set(), set()
+                self.subscribed, self.seen, self.updated_at = set(), set(), {}
+                self.last_msg = time.time()
                 self._on_connect()
                 self._sync_subscriptions(self.ws)
                 while not self.stop_event.is_set():
-                    raw = self.ws.recv()
+                    try:
+                        raw = self.ws.recv()
+                    except Exception as e:
+                        if type(e).__name__ in ("WebSocketTimeoutException", "TimeoutError", "timeout"):
+                            raw = None if time.time() - self.last_msg > config.STREAM_QUIET_SECS else "{}"
+                        else:
+                            raise
                     if raw is None or raw == "":
-                        raise ConnectionError("stream closed")
+                        raise ConnectionError("stream closed or went quiet")
+                    if raw == "{}":
+                        continue
                     self.last_msg = time.time()
                     self._handle(json.loads(raw))
             except Exception as e:
@@ -137,7 +169,8 @@ class _Stream(threading.Thread):
                 self.error = repr(e)
                 self.log(f"{self.exchange} stream: {e!r}; reconnecting in {backoff}s")
             finally:
-                self.connected, self.seen = False, set()
+                self.connected, self.seen, self.updated_at = False, set(), {}
+                self.reconnects += 1
                 try:
                     self.ws and self.ws.close()
                 except Exception:
@@ -156,6 +189,7 @@ class _Stream(threading.Thread):
     def _updated(self, market_id):
         self.updates += 1
         self.seen.add(market_id)
+        self.updated_at[market_id] = time.time()
         self.on_update(self.exchange, market_id)
 
     def _on_connect(self):

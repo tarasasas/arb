@@ -363,8 +363,9 @@ class Scanner:
     # ---- prices -----------------------------------------------------------------------
 
     def _streamed(self):
-        """(exchange, market id) pairs whose book is live on a connected stream right now."""
-        return {(ex, mid) for ex, s in self.streams.items() if s.connected for mid in list(s.seen)}
+        """(exchange, market id) pairs with a recent book from a connected stream. Only these skip
+        polling, so a stream that goes quiet can't freeze prices."""
+        return {(ex, mid) for ex, s in self.streams.items() for mid in s.fresh(config.STREAM_FRESH_SECS)}
 
     def refresh_prices(self, hot=False, stream_groups=None):
         """Full sweep (hot=False): every watched contract. Hot sweep: only the quantities that
@@ -381,7 +382,9 @@ class Scanner:
         with self.lock:
             contracts, source, groups = self.contracts, self.source, self.groups
             hot_keys = self.hot_groups
-        streamed = self._streamed()
+        # Full sweeps poll every market (a backstop for the streams); near-arb passes skip markets
+        # with a fresh streamed book.
+        streamed = self._streamed() if (hot or stream_groups is not None) else set()
         if stream_groups is not None:
             groups = {g: groups[g] for g in stream_groups if g in groups}
             contracts = [c for g in groups.values() for lst in g.values() for c in lst]

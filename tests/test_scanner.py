@@ -87,6 +87,9 @@ class HotPassTests(unittest.TestCase):
         class Live:
             connected, seen = True, {"kA", "pA", "kB", "pB"}
 
+            def fresh(self, max_age):
+                return set(self.seen)
+
             def status(self):
                 return {"connected": True}
         self.s.streams = {"kalshi": Live(), "polymarket": Live()}
@@ -105,6 +108,40 @@ class HotPassTests(unittest.TestCase):
         gs = set().union(*(self.s.market_groups[d] for d in self.s.dirty))
         self.s.refresh_prices(stream_groups=gs)
         self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"A"})
+
+
+    def test_full_sweep_polls_even_streamed_markets(self):
+        class Live:
+            connected, seen = True, {"kA", "pA", "kB", "pB"}
+
+            def fresh(self, max_age):
+                return set(self.seen)
+
+            def status(self):
+                return {"connected": True}
+        Live.want = lambda self, ids: None
+        self.s.streams = {"kalshi": Live(), "polymarket": Live()}
+        self.s.crypto_cat = ([], {})
+        polled = []
+        self.s.kalshi.refresh_books = lambda ms: polled.extend(m.ticker for m in ms)
+        self.s.refresh_prices(hot=False)
+        self.assertEqual(sorted(polled), ["kA", "kB"])       # a quiet stream can't freeze prices
+
+    def test_stale_streamed_market_is_polled_on_hot_pass(self):
+        class Quiet:
+            connected, seen = True, {"kA", "pA"}
+
+            def fresh(self, max_age):
+                return set()                                  # nothing streamed recently
+
+            def status(self):
+                return {"connected": True}
+        self.s.refresh_prices(hot=False)
+        self.s.streams = {"kalshi": Quiet(), "polymarket": Quiet()}
+        polled = []
+        self.s.kalshi.refresh_books = lambda ms: polled.extend(m.ticker for m in ms)
+        self.s.refresh_prices(hot=True)
+        self.assertIn("kA", polled)
 
 
 if __name__ == "__main__":
