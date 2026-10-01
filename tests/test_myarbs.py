@@ -292,6 +292,14 @@ class VerifyTests(unittest.TestCase):
         self.m.verify(lambda ex, mid: [other] if ex == "kalshi" else [mine_p])   # not matched together
         self.assertEqual(self.m.items[0]["check"]["structure"], "unknown")
 
+    def test_a_matched_arb_stays_confirmed_when_a_market_stops_trading(self):
+        self.track("yes", "no")
+        self.m.verify(lambda ex, mid: self.c.get((ex, mid)))
+        self.m.verify(lambda ex, mid: self.c.get((ex, mid)) if ex == "kalshi" else None)   # Polymarket closed
+        check = self.m.items[0]["check"]
+        self.assertEqual(check["structure"], "ok")
+        self.assertIn("Polymarket market isn't trading", check["why"])
+
 
 class PayoutDateTests(VerifyTests):
     def test_payout_date_follows_the_markets(self):

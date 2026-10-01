@@ -276,7 +276,16 @@ class MyArbs:
                 kcs = as_list(lookup("kalshi", kl["market_id"])) if kl else []
                 pcs = as_list(lookup("polymarket", pl["market_id"])) if pl else []
                 m = best_match(kcs, pcs, kl["side"], pl["side"]) if kcs and pcs else None
-                if not kcs or not pcs:
+                prev = a.get("check") or {}
+                if (not kcs or not pcs) and (prev.get("structure") == "ok" or a.get("source") == "account"):
+                    # Matched before (positions from your accounts are only paired through a match), but a
+                    # market has left the scanner's list, usually because that site stopped trading it.
+                    # The shares and the rules haven't changed, so the earlier check stands.
+                    gone = " and ".join(n for n, c in (("Kalshi", kcs), ("Polymarket", pcs)) if not c)
+                    check = {"structure": "ok", "why": f"matched when last checked; the {gone} market isn't "
+                                                       f"trading right now, so it can't be re-checked",
+                             "checked": prev.get("checked")}
+                elif not kcs or not pcs:
                     check = {"structure": "unknown", "why": "can't re-check the match: a market is no longer listed"}
                 elif not m:
                     check = {"structure": "unknown",
@@ -287,7 +296,8 @@ class MyArbs:
                         check = {"structure": "broken",
                                  "why": "these positions don't pay out in every outcome: one result loses both"}
                     else:
-                        check = {"structure": "ok", "why": f"pays ${pay:g} per pair whatever happens"}
+                        check = {"structure": "ok", "why": f"pays ${pay:g} per pair whatever happens",
+                                 "checked": datetime.now(timezone.utc).isoformat()}
                         a["payout"] = pay
                     # Payout date from the markets' current settle times (the later of the two).
                     from .engine import _parse_time
