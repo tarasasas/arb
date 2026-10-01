@@ -15,6 +15,7 @@ import math
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from . import config, engine
@@ -67,14 +68,19 @@ class Trader:
         if payout <= 0:
             raise TradeError("This pair doesn't guarantee a payout.")
 
-        info, levels, balance = {}, {}, {}
+        # All six lookups at once, so both books are read at the same moment.
+        with ThreadPoolExecutor(6) as pool:
+            jobs = {(what, ex): pool.submit(getattr(self.venues[ex], what), *args)
+                    for ex in EXCHANGES
+                    for what, args in (("market_info", (contracts[ex].market_id,)),
+                                       ("levels", (contracts[ex].market_id,)), ("balance", ()))}
+            got = {key: job.result() for key, job in jobs.items()}
+        info = {ex: got[("market_info", ex)] for ex in EXCHANGES}
+        levels = {ex: got[("levels", ex)][sides[ex]] for ex in EXCHANGES}
+        balance = {ex: got[("balance", ex)] for ex in EXCHANGES}
         for ex in EXCHANGES:
-            v, mid = self.venues[ex], contracts[ex].market_id
-            info[ex] = v.market_info(mid)
             if not info[ex]["open"]:
                 raise TradeError(f"The {NAMES[ex]} market isn't open for trading.")
-            levels[ex] = v.levels(mid)[sides[ex]]
-            balance[ex] = v.balance()
 
         k, p = contracts["kalshi"], contracts["polymarket"]
         cand = {"k": SimpleNamespace(exchange="kalshi", fee_coef=k.fee_coef),

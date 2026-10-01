@@ -2,6 +2,7 @@
 
 import os
 import re
+import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ class KalshiMarket:
     no_ask_size: float | None = None
     # Depth for buying each side: [(price, qty)] best first.
     levels: dict = field(default_factory=dict)
+    quoted_at: float = 0.0   # time.time() when the request behind the current quote was sent
 
 
 def parse_series(series_ticker):
@@ -116,7 +118,7 @@ def parse_market(m, series_info, fee_coef):
         close_time=m.get("expected_expiration_time") or m.get("close_time") or "", fee_coef=fee_coef,
     )
     km.yes_ask, km.no_ask = _f(m.get("yes_ask_dollars")), _f(m.get("no_ask_dollars"))
-    km.yes_ask_size = _f(m.get("yes_ask_size_fp"))
+    km.yes_ask_size, km.no_ask_size = _f(m.get("yes_ask_size_fp")), _f(m.get("no_ask_size_fp"))
     return km
 
 
@@ -221,39 +223,84 @@ class KalshiClient:
                     log(f"  kalshi: {i + 1}/{len(series)} series, {len(result)} markets")
         return result
 
-    def refresh_books(self, markets):
-        """Fetch order books (100 tickers per request) and set levels + top of book."""
+    def refresh_tops(self, markets, high=False):
+        """Top of book only, from the market listing: up to 200 tickers per request where the
+        order-book endpoint takes 100, so a sweep needs half the rate budget. Depth for sizing
+        comes from refresh_books() on the few candidates. Same freshness rule as refresh_books."""
+        by_ticker = {m.ticker: m for m in markets}
+        chunks, cur, size = [], [], 0
+        for t in by_ticker:
+            if cur and (len(cur) == 200 or size + len(t) + 1 > 6000):      # 400 tickers -> HTTP 414
+                chunks.append(cur)
+                cur, size = [], 0
+            cur.append(t)
+            size += len(t) + 1
+        if cur:
+            chunks.append(cur)
+
+        def fetch(chunk):
+            sent = time.time()
+            try:
+                return chunk, sent, self.http.get("/markets", {"tickers": ",".join(chunk), "limit": 1000}, high=high)
+            except Exception:
+                return chunk, sent, None
+
+        with ThreadPoolExecutor(self.workers) as pool:
+            results = list(pool.map(fetch, chunks))
+        for chunk, sent, d in results:
+            seen = {}
+            for raw in (d or {}).get("markets", []):
+                seen[raw.get("ticker")] = raw
+            for t in chunk:
+                m = by_ticker[t]
+                if sent < m.quoted_at:
+                    continue
+                raw = seen.get(t)
+                if raw is None or raw.get("status") not in ("active", "open"):
+                    m.yes_ask = m.no_ask = m.yes_ask_size = m.no_ask_size = None
+                else:
+                    m.yes_ask, m.no_ask = _f(raw.get("yes_ask_dollars")), _f(raw.get("no_ask_dollars"))
+                    m.yes_ask_size, m.no_ask_size = _f(raw.get("yes_ask_size_fp")), _f(raw.get("no_ask_size_fp"))
+                m.quoted_at = sent
+
+    def refresh_books(self, markets, high=False):
+        """Fetch order books (100 tickers per request) and set levels + top of book. A book is
+        only applied if it was requested after the one the market already holds, so a slow full
+        sweep never overwrites a fresher quote from the near-arb re-check."""
         by_ticker = {m.ticker: m for m in markets}
         tickers = list(by_ticker)
         chunks = [tickers[i:i + 100] for i in range(0, len(tickers), 100)]
 
         def fetch(chunk):
+            sent = time.time()
             try:
-                return chunk, self.http.get("/markets/orderbooks", [("tickers", t) for t in chunk])
+                return chunk, sent, self.http.get("/markets/orderbooks", [("tickers", t) for t in chunk], high=high)
             except Exception:
-                return chunk, None
+                return chunk, sent, None
 
         with ThreadPoolExecutor(self.workers) as pool:
             results = list(pool.map(fetch, chunks))
-        for chunk, d in results:
+        for chunk, sent, d in results:
             if d is None:
                 # Leave these markets unpriced this cycle rather than acting on stale books.
                 for t in chunk:
                     m = by_ticker[t]
-                    m.levels, m.yes_ask, m.no_ask = {}, None, None
+                    if sent >= m.quoted_at:
+                        m.levels, m.yes_ask, m.no_ask, m.quoted_at = {}, None, None, sent
                 continue
             for ob in d.get("orderbooks", []):
                 m = by_ticker.get(ob.get("ticker"))
-                if not m:
+                if not m or sent < m.quoted_at:
                     continue
                 m.levels = buy_levels(ob.get("orderbook_fp") or {})
                 buy_yes, buy_no = m.levels["yes"], m.levels["no"]
                 m.yes_ask, m.yes_ask_size = buy_yes[0] if buy_yes else (None, None)
                 m.no_ask, m.no_ask_size = buy_no[0] if buy_no else (None, None)
+                m.quoted_at = sent
 
     def live_levels(self, ticker):
         """Current depth for buying each side of one market: {"yes": [...], "no": [...]}."""
-        return buy_levels(self.http.get(f"/markets/{ticker}/orderbook").get("orderbook_fp") or {})
+        return buy_levels(self.http.get(f"/markets/{ticker}/orderbook", high=True).get("orderbook_fp") or {})
 
 
 def buy_levels(book):

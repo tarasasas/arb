@@ -1,6 +1,7 @@
 """Polymarket US public market data: sports market parsing, batched quotes, order books."""
 
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -46,6 +47,7 @@ class PMMarket:
     no_ask: float | None = None
     levels: dict = field(default_factory=dict)
     state: str = ""
+    quoted_at: float = 0.0   # time.time() when the request behind the current quote was sent
 
 
 def _q(v):
@@ -189,37 +191,44 @@ class PolymarketClient:
             out.update({m["slug"]: m for m in d.get("markets") or []})
         return out
 
-    def refresh_quotes(self, markets):
-        """Refresh top of book for many markets, 100 slugs per request, in parallel."""
+    def refresh_quotes(self, markets, high=False):
+        """Refresh top of book for many markets, 100 slugs per request, in parallel. A quote is
+        only applied if it was requested after the one the market already holds."""
         by_slug = {m.slug: m for m in markets}
         slugs = list(by_slug)
         chunks = [slugs[i:i + 100] for i in range(0, len(slugs), 100)]
 
         def fetch(chunk):
+            sent = time.time()
             try:
-                return chunk, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200)])
+                return chunk, sent, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200)], high=high)
             except Exception:
-                return chunk, {}        # unpriced this cycle (handled below as "not seen")
+                return chunk, sent, {}        # unpriced this cycle (handled below as "not seen")
 
         with ThreadPoolExecutor(WORKERS) as pool:
-            for chunk, d in pool.map(fetch, chunks):
+            for chunk, sent, d in pool.map(fetch, chunks):
                 seen = set()
                 for m in d.get("markets") or []:
                     pm = by_slug.get(m.get("slug"))
                     if pm:
                         seen.add(pm.slug)
+                        if sent < pm.quoted_at:
+                            continue
                         if m.get("closed") or not m.get("active"):
                             pm.yes_ask = pm.no_ask = None
                         else:
                             set_quotes(pm, m)
+                        pm.quoted_at = sent
                 for s in chunk:
-                    if s not in seen:
-                        by_slug[s].yes_ask = by_slug[s].no_ask = None
+                    pm = by_slug[s]
+                    if s not in seen and sent >= pm.quoted_at:
+                        pm.yes_ask = pm.no_ask = None
+                        pm.quoted_at = sent
 
     def live_levels(self, slug):
         """Current depth for buying each side: {"yes": [...], "no": [...], "state": ...}.
         Buying YES lifts offers; buying NO = shorting into bids at cost (1 - bid)."""
-        d = self.http.get(f"/markets/{slug}/book").get("marketData") or {}
+        d = self.http.get(f"/markets/{slug}/book", high=True).get("marketData") or {}
         bids = [(_q(l.get("px")), float(l.get("qty") or 0)) for l in d.get("bids") or []]
         offers = [(_q(l.get("px")), float(l.get("qty") or 0)) for l in d.get("offers") or []]
         bids = sorted(((p, q) for p, q in bids if p is not None and q > 0), key=lambda t: -t[0])
@@ -227,8 +236,10 @@ class PolymarketClient:
         return {"yes": offers, "no": [(round(1 - p, 4), q) for p, q in bids], "state": d.get("state")}
 
     def refresh_book(self, pm):
+        sent = time.time()
         lv = self.live_levels(pm.slug)
         pm.levels = {"yes": lv["yes"], "no": lv["no"]}
         pm.yes_ask = lv["yes"][0][0] if lv["yes"] else None
         pm.no_ask = lv["no"][0][0] if lv["no"] else None
         pm.state = lv["state"]
+        pm.quoted_at = max(pm.quoted_at, sent)

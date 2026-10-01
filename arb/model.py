@@ -42,6 +42,8 @@ class Contract:
     # Top of book for buying each side: price per contract and size (None if unknown).
     ask: dict = field(default_factory=lambda: {YES: None, NO: None})
     ask_size: dict = field(default_factory=lambda: {YES: None, NO: None})
+    # guaranteed_payout() against other contracts, which depends only on terms, never on price.
+    pay_cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def integer_line(self):

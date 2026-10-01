@@ -274,41 +274,49 @@ class Scanner:
         kms = [source[("kalshi", c.market_id)] for c in contracts if c.exchange == "kalshi"]
         pms = [source[("polymarket", c.market_id)] for c in contracts if c.exchange == "polymarket"]
         with ThreadPoolExecutor(2) as pool:
-            jobs = [pool.submit(self.kalshi.refresh_books, kms), pool.submit(self.pm.refresh_quotes, pms)]
+            jobs = [pool.submit(self.kalshi.refresh_tops, kms, hot), pool.submit(self.pm.refresh_quotes, pms, hot)]
             for j in jobs:
                 j.result()
         matching.sync_quotes(contracts, source)
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
         if not hot:
+            # The closest pairs only: a bigger hot list re-checks more slowly, and arbs come from
+            # the pairs nearest to breaking even.
             hot_map = {}
-            for c in cands:
+            for c in cands[:config.HOT_MAX_PAIRS]:
                 ids = hot_map.setdefault((c["k"].game_key, c["k"].var), set())
                 ids.update({("kalshi", c["k"].market_id), ("polymarket", c["p"].market_id)})
             with self.lock:
                 self.hot_groups = hot_map
         now = engine.now_utc()
         opportunities, near = [], []
+        # Size the profitable pairs on fresh depth from both exchanges, fetched together so the two
+        # legs' books are moments apart (all Polymarket books in parallel, all Kalshi books in one
+        # batched request).
         book_budget = 15 if hot else 60        # Polymarket book fetches per cycle
-        fetched = set()
+        sized, slugs = [], set()
         for cand in cands:
-            if cand["edge"] > 0 and book_budget > 0:
+            if cand["edge"] > 0 and (cand["p"].market_id in slugs or len(slugs) < book_budget):
+                slugs.add(cand["p"].market_id)
+                sized.append(cand)
+        self._refresh_candidate_books(sized, source)
+        sized_ids = {id(c) for c in sized}
+        for cand in cands:
+            if id(cand) in sized_ids:
                 km = source[("kalshi", cand["k"].market_id)]
                 pm = source[("polymarket", cand["p"].market_id)]
-                if pm.slug not in fetched:
-                    fetched.add(pm.slug)
-                    book_budget -= 1
-                    try:
-                        self.pm.refresh_book(pm)
-                    except Exception as e:
-                        self.log(f"Book fetch failed for {pm.slug}: {e!r}")
-                        pm.levels, pm.yes_ask, pm.no_ask = {}, None, None
-                if not pm.levels:
-                    continue
+                if not pm.levels or not km.levels or pm.state not in ("", None, "MARKET_STATE_OPEN"):
+                    continue                # no book, or trading suspended (e.g. mid-game)
                 # Re-read top of book after the fresh fetch.
+                cand["ak"] = km.yes_ask if cand["sk"] == "yes" else km.no_ask
                 cand["ap"] = pm.yes_ask if cand["sp"] == "yes" else pm.no_ask
-                if cand["ap"] is None:
+                if cand["ak"] is None or cand["ap"] is None:
                     continue
+                k, p = cand["k"], cand["p"]
+                cand["edge"] = (cand["payout"] - cand["ak"] - cand["ap"] - engine.fee_per_contract(k.fee_coef, cand["ak"])
+                                - engine.fee_per_contract(p.fee_coef, cand["ap"]))
+                cand["quote_age"] = round(time.time() - min(km.quoted_at, pm.quoted_at), 1)
                 levels_k, levels_p = km.levels.get(cand["sk"], []), pm.levels.get(cand["sp"], [])
                 sizing = engine.size_opportunity(cand, levels_k, levels_p)
                 cand["depth"] = {"kalshi": levels_k[:DEPTH_LEVELS], "polymarket": levels_p[:DEPTH_LEVELS]}
@@ -329,7 +337,26 @@ class Scanner:
                 self.state["last_full"] = now.isoformat()
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
-                     f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")
+                     f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (the closest re-checked every ~2s until next sweep)")
+
+    def _refresh_candidate_books(self, cands, source):
+        """Fresh depth for both legs of every candidate, fetched at the same time."""
+        if not cands:
+            return
+        kms = list({c["k"].market_id: source[("kalshi", c["k"].market_id)] for c in cands}.values())
+        pms = list({c["p"].market_id: source[("polymarket", c["p"].market_id)] for c in cands}.values())
+
+        def pm_book(pm):
+            try:
+                self.pm.refresh_book(pm)
+            except Exception as e:
+                self.log(f"Book fetch failed for {pm.slug}: {e!r}")
+                pm.levels, pm.yes_ask, pm.no_ask = {}, None, None
+
+        with ThreadPoolExecutor(1 + min(len(pms), 6)) as pool:
+            k_job = pool.submit(self.kalshi.refresh_books, kms, True)
+            list(pool.map(pm_book, pms))
+            k_job.result()
 
     # ---- loop -------------------------------------------------------------------------
 

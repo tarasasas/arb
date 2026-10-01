@@ -55,7 +55,7 @@ class KalshiVenue:
         return self.client.live_levels(ticker)
 
     def market_info(self, ticker):
-        m = self.client.http.get(f"/markets/{ticker}")["market"]
+        m = self.client.http.get(f"/markets/{ticker}", high=True)["market"]
         ranges = [(float(r["start"]), float(r["end"]), float(r["step"])) for r in m.get("price_ranges") or []]
 
         def tick(price):
@@ -68,7 +68,7 @@ class KalshiVenue:
                 "min_qty": 0.01 if m.get("fractional_trading_enabled") else 1.0}
 
     def balance(self):
-        return float(self.client.http.get("/portfolio/balance")["balance"]) / 100
+        return float(self.client.http.get("/portfolio/balance", high=True)["balance"]) / 100
 
     def _order(self, ticker, book_side, qty, yes_price, reduce_only=False):
         body = {"ticker": ticker, "side": book_side, "count": f"{qty:.2f}", "price": f"{yes_price:.4f}",
@@ -114,7 +114,7 @@ class PolymarketVenue:
         return self.public.live_levels(slug)
 
     def market_info(self, slug):
-        m = self.public.http.get(f"/market/slug/{slug}")["market"]
+        m = self.public.http.get(f"/market/slug/{slug}", high=True)["market"]
         tick = float(m.get("orderPriceMinTickSize") or 0.01)
         return {"open": bool(m.get("active")) and not m.get("closed") and m.get("status") == "MARKET_STATUS_OPEN",
                 "tick": lambda _p: tick, "min_qty": float(m.get("minimumTradeQty") or 1)}

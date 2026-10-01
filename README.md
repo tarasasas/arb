@@ -27,12 +27,16 @@ python -m arb --once       # one scan, results printed to the terminal
 python -m unittest discover -s tests -t .
 ```
 
-The first market load takes about 30 seconds with a Kalshi key, or about 70 without.
+The first market load takes about 30 seconds with a Kalshi key, or about 60 without.
 After that, two loops run in parallel:
 
-- **Hot list:** the ~3,000 markets within 3¢ of an arb are re-checked every ~5 seconds.
-- **Full sweep:** every watched contract is re-checked continuously, taking ~25 seconds
-  per pass.
+- **Hot list:** the 400 pairs closest to an arb (within 3¢) are re-checked every ~2 seconds.
+  Their requests go ahead of the full sweep's, so a sweep in progress doesn't slow them.
+- **Full sweep:** every watched contract is re-checked continuously, taking ~35 seconds
+  per pass without a Kalshi key (less with one).
+
+Every profitable pair is then sized on order books fetched from both exchanges at the same
+moment, and a quote is never overwritten by an older response.
 
 Market lists reload in the background every 5 minutes. Use `--port N` if 8791 is taken.
 
