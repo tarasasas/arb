@@ -277,6 +277,27 @@ class MyArbs:
                 self._save()
         return changed
 
+    def fill_placed_times(self, first_fill):
+        """Set each arb's "placed" time (when you actually traded it) from your first Kalshi fill in its
+        market. Arbs found through the position check otherwise only know when the app first saw them.
+        first_fill(ticker) -> ISO time or None. Looked up once per arb. Returns how many were set."""
+        with self.lock:
+            todo = [(a, l["market_id"]) for a in self.items if not a.get("placed")
+                    for l in a["legs"] if l["exchange"] == "kalshi"]
+        done = 0
+        for a, ticker in todo:
+            try:
+                t = first_fill(ticker)
+            except Exception:
+                continue
+            with self.lock:
+                a["placed"] = min(x for x in (t, a.get("created")) if x) if (t or a.get("created")) else None
+                done += 1
+        if done:
+            with self.lock:
+                self._save()
+        return done
+
     def verify(self, lookup):
         """Re-check that each tracked arb really is one: from the two markets' rules, the positions must
         pay out whatever happens (the payout per pair is refreshed from that). lookup(exchange,

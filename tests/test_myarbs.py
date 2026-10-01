@@ -355,3 +355,22 @@ class ClaimTests(unittest.TestCase):
         self.assertEqual(mine.known_pairs, 1)
         self.assertEqual([u["market_id"] for u in mine.unpaired], ["KXOTHER"])
 
+
+class PlacedTimeTests(unittest.TestCase):
+    def test_placed_time_from_first_kalshi_fill_once(self):
+        import tempfile
+        from pathlib import Path
+        from arb import myarbs as m
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        mine = m.MyArbs(Path(d.name) / "my_arbs.json")
+        mine.save({"source": "account", "game": "G", "payout": 1.0, "legs": [
+            {"exchange": "kalshi", "market_id": "K", "side": "no", "shares": 1, "paid": 0.5},
+            {"exchange": "polymarket", "market_id": "p", "side": "yes", "shares": 1, "paid": 0.4}]})
+        calls = []
+        first = lambda t: calls.append(t) or "2026-09-20T15:00:00Z"
+        self.assertEqual(mine.fill_placed_times(first), 1)
+        self.assertEqual(mine.items[0]["placed"], "2026-09-20T15:00:00Z")
+        self.assertEqual(mine.fill_placed_times(first), 0)                    # not looked up again
+        self.assertEqual(calls, ["K"])
+

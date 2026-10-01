@@ -342,6 +342,10 @@ class Scanner:
             for a in self.my_arbs.update_cost_basis(kpos, ppos, read):
                 self.log(f"My arbs: {a['game']}: cost updated from your accounts to "
                          f"${sum(l['paid'] for l in a['legs']):.2f}")
+            if acc.kalshi_http:             # when each arb was really placed (first Kalshi fill), once per arb
+                self.my_arbs.fill_placed_times(lambda t: min(
+                    (f.get("created_time") for f in (acc.kalshi_http.get("/portfolio/fills", {"ticker": t, "limit": 200})
+                                                     .get("fills") or []) if f.get("created_time")), default=None))
             for a in self.my_arbs.verify(self.find_matches):
                 self.log(f"My arbs: {a['game']}: {a['check']['why']}")
         except Exception as e:

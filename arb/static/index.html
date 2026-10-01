@@ -161,8 +161,9 @@
     #myarbs tbody tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px 8px; background: var(--surface-1);
       border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-top: 10px; }
     #myarbs tbody td { display: block; padding: 0; border: 0; }
-    #myarbs td.c-mkt, #myarbs td.c-when, #myarbs td.c-legs, #myarbs td.c-acts, #myarbs td.empty { grid-column: 1 / -1; }
-    #myarbs td.c-when { font-size: 12.5px; color: var(--text-muted); } #myarbs td.c-when::before { content: "pays out "; }
+    #myarbs td.c-mkt, #myarbs td.c-when, #myarbs td.c-placed, #myarbs td.c-legs, #myarbs td.c-acts, #myarbs td.empty { grid-column: 1 / -1; }
+    #myarbs td.c-when, #myarbs td.c-placed { font-size: 12.5px; color: var(--text-muted); }
+    #myarbs td.c-when::before { content: "pays out "; } #myarbs td.c-placed::before { content: "placed "; }
     #myarbs td.c-legs { margin: 8px 0; padding-top: 8px; border-top: 1px solid var(--border); }
     #myarbs td.num { text-align: left; } #myarbs td.num::before { content: attr(data-l); display: block; font-size: 11px;
       color: var(--text-muted); font-weight: 400; }
@@ -1309,10 +1310,11 @@ function wirePayoutChart(el, open) {
 }
 
 // My arbs: click a column heading to sort by it, again to flip the order (remembered on this device).
-let mySort = { key: "closes", dir: "asc" };
+let mySort = { key: "placed", dir: "desc" };
 try { mySort = JSON.parse(localStorage.getItem("arb-my-sort")) || mySort; } catch (e) {}
 const MY_SORT = {
   game: a => (a.game || "").toLowerCase(), closes: a => a.closes ? Date.parse(a.closes) : null,
+  placed: a => (a.placed || a.created) ? Date.parse(a.placed || a.created) : null,
   unhedged: a => a.unhedged.reduce((s, u) => s + u.shares, 0), paid: a => a.paid, guaranteed: a => a.guaranteed,
   profit: a => a.profit, roi: a => a.roi, worth_now: a => a.worth_now,
 };
@@ -1370,6 +1372,7 @@ function renderMyArbs() {
         <div class="muted">${a.source === "make_trade" ? "via Make trade"
           : a.source === "account" ? `from your accounts${a.edited ? " (edited)" : ""}` : "added by hand"}</div>
         ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}${a.settled ? "" : verdictHtml(a)}</td>
+      <td class="c-placed" style="white-space:nowrap">${esc(localTime(a.placed || a.created))}</td>
       <td class="c-when" style="white-space:nowrap">${esc(localTime(a.closes))}</td>
       <td class="c-legs">${a.legs.map(legCell).join("")}
         ${a.unhedged.length ? `<div class="warn" style="white-space:normal">${WARN_ICON}${a.unhedged.map(u =>
@@ -1379,7 +1382,8 @@ function renderMyArbs() {
       <td class="num c-worth" data-l="Worth now">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
       <td class="c-acts"><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
           <button data-mine="del" data-id="${esc(a.id)}">${a.settled ? "Remove" : "Delete"}</button></td></tr>`).join("");
-  const head = `<thead><tr>${myTh("game", "Market")}${myTh("closes", "Pays out", "", "Sort by when it pays out")}${
+  const head = `<thead><tr>${myTh("game", "Market")}${myTh("placed", "Placed", "", "When you placed it (your first Kalshi fill)")}${
+    myTh("closes", "Pays out", "", "Sort by when it pays out")}${
     myTh("unhedged", "Your orders", "", "Sort by shares not hedged")}${myTh("paid", "Paid", "num")}${
     myTh("guaranteed", "Pays whatever happens", "num")}${myTh("profit", "Locked profit", "num")}${myTh("roi", "ROI", "num")}${
     myTh("worth_now", "Worth now", "num", "If you sold both legs at the best bids right now, before fees")}<th></th></tr></thead>`;
@@ -1401,7 +1405,7 @@ function renderMyArbs() {
       <button data-mine="add" title="Positions on both sites are paired automatically. Anything else: Track this arb on an opportunity, or add it here.">Add by hand</button>
       <span class="muted">${syncLine()}</span></div>
     <div class="table-wrap"><table>${head}<tbody>${rows(open) ||
-      `<tr><td colspan="9" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
+      `<tr><td colspan="10" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
     ${done.length ? `<h2 style="font-size:15px">Settled or closed</h2><div class="table-wrap"><table>${head}<tbody>${rows(done)}</tbody></table></div>` : ""}
     <p class="caveat">Locked profit counts only shares held on both sites; extra shares on one side count as $0 (they're listed below).</p>`;
   wirePayoutChart(el, open);
@@ -1412,7 +1416,7 @@ document.getElementById("myarbs").addEventListener("click", async e => {
   if (th) {
     const k = th.dataset.msort;
     mySort = mySort.key === k ? { key: k, dir: mySort.dir === "asc" ? "desc" : "asc" }
-                              : { key: k, dir: ["game", "closes"].includes(k) ? "asc" : "desc" };
+                              : { key: k, dir: ["game", "closes"].includes(k) ? "asc" : "desc" };   // placed: newest first
     try { localStorage.setItem("arb-my-sort", JSON.stringify(mySort)); } catch (e) {}
     renderMyArbs();
     return;
