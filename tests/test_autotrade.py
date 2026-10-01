@@ -81,6 +81,7 @@ class AutoTraderTests(unittest.TestCase):
         self.assertIsNotNone(a.check(s.state["opportunities"]))
         self.assertEqual(s.trader.calls, [("prepare", config.AUTO_TRADE_MAX_TRADE), ("execute", "p1")])
         self.assertEqual(a.spent_today(), 19.5)
+        self.assertEqual(a.status()["net_today"], 1.0)
         self.assertIsNone(a.check(s.state["opportunities"]))        # same pair: cooldown
         s.my_arbs.add_from_trade.assert_called_once()
 

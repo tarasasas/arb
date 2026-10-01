@@ -69,7 +69,7 @@
              padding: 6px 10px; margin: 2px 0 12px; font-size: 13px; }
   .callout ul { margin: 2px 0 0 16px; padding: 0; } .callout li { margin: 2px 0; }
   .callout.bad { border-left-color: var(--critical); }
-  .sumgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 760px; margin: 2px 0 10px; }
+  .sumgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; max-width: 760px; margin: 2px 0 10px; }
   @media (max-width: 640px) { .sumgrid { grid-template-columns: 1fr; } }
   .sumcard { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface-1); }
   .sumcard .label { font-size: 12px; color: var(--text-secondary); }
@@ -533,6 +533,8 @@ function renderAuto(s) {
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
     <span class="muted">Crypto, plus anything settling within ${a.fast_max_hours}h, never auto-matched pairs or rows with rule warnings ·
       up to ${money(a.max_trade)} per trade · profit ≥ ${money(a.min_profit)} · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</span>
+    ${a.spent_today > 0 ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
+      <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}
     ${a.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(a.halted)}</div>` : ""}
     ${!on && !a.on ? `<span class="muted">(trading ${esc(state?.stats?.trading || "is off")})</span>` : ""}
     ${hist ? `<details><summary class="muted">Last auto-trades</summary><ol>${hist}</ol></details>` : ""}`;
@@ -815,7 +817,8 @@ function legCell(l) {
 function renderMyArbs() {
   const el = document.getElementById("myarbs"); if (!el) return;
   const open = myArbs.filter(a => !a.settled), done = myArbs.filter(a => a.settled);
-  const tot = k => open.reduce((s, a) => s + (a[k] || 0), 0);
+  const tot = (k, list = open) => list.reduce((s, a) => s + (a[k] || 0), 0);
+  const ratio = (p, c) => c > 0 ? pct(p / c) : "–";
   const rows = list => list.map(a => `<tr>
       <td><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
         <div class="muted">pays out ${esc(localTime(a.closes))}${a.source === "make_trade" ? " · via Make trade"
@@ -837,8 +840,11 @@ function renderMyArbs() {
         <div class="sub">${done.length} settled</div></div>
       <div class="sumcard"><div class="label">Money in active arbs</div><div class="big">${money(tot("paid"))}</div>
         <div class="sub">pays back ${money(tot("guaranteed"))} whatever happens</div></div>
-      <div class="sumcard"><div class="label">Locked profit</div><div class="big profit">${money(tot("profit"))}</div>
-        <div class="sub">across active arbs, fees included</div></div>
+      <div class="sumcard"><div class="label">Locked profit</div><div class="big profit">${money(tot("profit"))}
+        <span style="font-size:.55em">${ratio(tot("profit"), tot("paid"))}</span></div>
+        <div class="sub">profit ÷ money in, active arbs, fees included</div></div>
+      <div class="sumcard"><div class="label">All arbs, incl. settled</div><div class="big profit">${ratio(tot("profit", myArbs), tot("paid", myArbs))}</div>
+        <div class="sub">${money(tot("profit", myArbs))} profit on ${money(tot("paid", myArbs))} spent</div></div>
     </div>
     <div style="margin:4px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button data-mine="sync">Sync now</button> <span class="muted">${syncLine()}</span></div>

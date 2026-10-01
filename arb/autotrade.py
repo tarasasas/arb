@@ -84,6 +84,7 @@ class AutoTrader:
         self.on, self.busy, self.halted = False, False, None
         self.lock = threading.Lock()
         self.spend = {}                 # local date -> dollars used by Auto-trade
+        self.net = {}                   # local date -> net profit locked by Auto-trade
         self.tried = {}                 # pair id -> time of the last attempt
         self.history = deque(maxlen=20)
 
@@ -106,6 +107,7 @@ class AutoTrader:
 
     def status(self):
         return {"on": self.on, "busy": self.busy, "halted": self.halted, "spent_today": self.spent_today(),
+                "net_today": round(self.net.get(self._today(), 0.0), 2),
                 "daily_limit": config.AUTO_TRADE_DAILY_LIMIT, "max_trade": config.AUTO_TRADE_MAX_TRADE,
                 "min_profit": config.AUTO_TRADE_MIN_PROFIT, "min_roi": config.AUTO_TRADE_MIN_ROI,
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
@@ -149,6 +151,7 @@ class AutoTrader:
             used = spent(res)
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used
+                self.net[self._today()] = self.net.get(self._today(), 0.0) + res["net"]
             entry.update({"status": res["status"], "pairs": res["hedged_pairs"], "spent": used, "net": res["net"],
                           "unhedged": res["unhedged_shares"]})
             if res["status"] == "unknown" or res["unhedged_shares"] > 0:
