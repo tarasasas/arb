@@ -689,7 +689,8 @@ function renderAuto(s) {
   el.innerHTML = `<b>⚡ Auto-trade</b>
     <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
-    <span class="muted">Crypto, plus anything settling within ${a.fast_max_hours}h, never auto-matched pairs or rows with rule warnings ·
+    <span class="muted">Crypto, plus anything settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with rule warnings ·
+      ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit" : ""} ·
       up to ${money(a.max_trade)} per trade · profit ≥ ${money(a.min_profit)} · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</span>
     ${a.spent_today > 0 && a.net_today != null ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
       <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}
@@ -700,7 +701,8 @@ function renderAuto(s) {
   if (d) { d.open = autoOpen; d.addEventListener("toggle", () => { autoOpen = d.open; }); }
   document.getElementById("auto-toggle").onclick = async () => {
     if (!a.on && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
-        `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for crypto and other arbs settling within ${a.fast_max_hours}h. ` +
+        `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for crypto and other arbs settling within ${a.fast_max_hours}h` +
+        `${a.allow_auto_matched ? ", including auto-matched pairs you haven't checked (a wrong match can lose on both sides)" : ""}. ` +
         `It turns itself off if a trade leaves shares unhedged. Change the limits in .env.`)) return;
     try { state.autotrade = await post("/api/autotrade", { on: !a.on }); renderAuto(state); }
     catch (e) { alert(e.message); }

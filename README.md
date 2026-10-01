@@ -194,9 +194,13 @@ Some arbs last only seconds, so these skip the confirm screen. They run the same
 3. Buy the other side for exactly what filled, never above break-even.
 4. Sell back right away any shares that couldn't be hedged.
 
-**Which rows qualify:** crypto pairs (matched by contract terms, so there's nothing for you to
-check) and anything settling within `FAST_MAX_HOURS`. Never auto-matched pairs, rows marked too good
-to be true, or rows with a one-way-rules, different-settlement-source or prices-contradict warning.
+**Which rows qualify:** crypto pairs (matched by contract terms), and anything settling within
+`FAST_MAX_HOURS`. That includes pairs auto-matched by wording that you haven't checked
+(`FAST_ALLOW_AUTO_MATCHED`), and rows flagged too good to be true, so any return of at least
+`AUTO_TRADE_MIN_ROI` qualifies, with no upper limit (`FAST_ALLOW_TOO_GOOD`). Live prices are always
+re-checked before ordering. Rows with a one-way-rules, different-settlement-source or prices-contradict
+warning never qualify. A wrong auto-match can lose on both sides, so set either setting to `0` to
+require your check.
 
 - **⚡ Fast trade** (a button on qualifying rows): one click places both orders, up to `FAST_MAX_TRADE`
   (and your **Max to invest**, if you set one).
@@ -213,6 +217,8 @@ Limits, in `.env` (defaults shown):
 
 ```
 FAST_MAX_HOURS=24
+FAST_ALLOW_AUTO_MATCHED=1       # 0 = only pairs you or the sports matcher verified
+FAST_ALLOW_TOO_GOOD=1           # 0 = skip rows flagged too good to be true
 FAST_MAX_TRADE=50
 AUTO_TRADE_MAX_TRADE=25
 AUTO_TRADE_DAILY_LIMIT=100

@@ -111,6 +111,7 @@ class AutoTrader:
                 "daily_limit": config.AUTO_TRADE_DAILY_LIMIT, "max_trade": config.AUTO_TRADE_MAX_TRADE,
                 "min_profit": config.AUTO_TRADE_MIN_PROFIT, "min_roi": config.AUTO_TRADE_MIN_ROI,
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
+                "allow_auto_matched": config.FAST_ALLOW_AUTO_MATCHED, "allow_too_good": config.FAST_ALLOW_TOO_GOOD,
                 "history": list(self.history)}
 
     def pick(self, rows, now=None):

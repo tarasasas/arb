@@ -58,6 +58,11 @@ DASHBOARD_PHONE = os.environ.get("DASHBOARD_PHONE", "").strip().lower() in ("1",
 # Only rows that need no checking by you qualify: crypto (paired by contract terms) or anything
 # settling within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
 FAST_MAX_HOURS = _env_num("FAST_MAX_HOURS", 24)
+# Also allow pairs the matcher paired by wording (not verified by you). Set to 0 to require your check.
+FAST_ALLOW_AUTO_MATCHED = os.environ.get("FAST_ALLOW_AUTO_MATCHED", "1").strip().lower() not in ("0", "false", "no", "off")
+# Also allow rows flagged "too good to be true" (no upper limit on the return). Live prices are always
+# re-checked before ordering. Set to 0 to skip them.
+FAST_ALLOW_TOO_GOOD = os.environ.get("FAST_ALLOW_TOO_GOOD", "1").strip().lower() not in ("0", "false", "no", "off")
 FAST_MAX_TRADE = _env_num("FAST_MAX_TRADE", 50)             # $ per Fast trade, both legs
 AUTO_TRADE_MAX_TRADE = _env_num("AUTO_TRADE_MAX_TRADE", 25)  # $ per Auto-trade, both legs
 AUTO_TRADE_DAILY_LIMIT = _env_num("AUTO_TRADE_DAILY_LIMIT", 100)   # $ spent by Auto-trade per day

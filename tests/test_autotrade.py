@@ -29,11 +29,31 @@ class FastCheckTests(unittest.TestCase):
         self.assertFalse(self.check(closes=(NOW + timedelta(days=5)).isoformat())["ok"])
         self.assertFalse(self.check()["ok"])
 
-    def test_never_auto_matched_suspicious_or_flagged(self):
-        self.assertFalse(self.check(tab="Crypto", suspicious=True)["ok"])
-        self.assertFalse(self.check(tab="Crypto", pair={"auto": True})["ok"])
+    def test_rule_warnings_always_block(self):
         for w in ("ONE-WAY RULES: x", "DIFFERENT SETTLEMENT SOURCES (a vs b). x", "PRICES CONTRADICT THIS MATCH: x"):
             self.assertFalse(self.check(tab="Crypto", warnings=[w])["ok"], w)
+            self.assertFalse(self.check(tab="Crypto", pair={"auto": True}, warnings=[w])["ok"], w)
+
+    def test_auto_matched_allowed_unless_turned_off(self):
+        auto = dict(tab="Crypto", pair={"auto": True}, warnings=["AUTO-MATCHED, NOT VERIFIED: the scanner paired these"])
+        with mock.patch.object(config, "FAST_ALLOW_AUTO_MATCHED", True):
+            self.assertTrue(self.check(**auto)["ok"])
+            soon = self.check(**{**auto, "tab": "Politics"}, closes=(NOW + timedelta(hours=2)).isoformat())
+            self.assertTrue(soon["ok"])
+            self.assertIn("auto-matched", soon["why"])
+        with mock.patch.object(config, "FAST_ALLOW_AUTO_MATCHED", False):
+            self.assertFalse(self.check(**auto)["ok"])
+            self.assertFalse(self.check(tab="Crypto", warnings=auto["warnings"])["ok"])
+
+    def test_too_good_allowed_unless_turned_off(self):
+        with mock.patch.object(config, "FAST_ALLOW_TOO_GOOD", True):
+            self.assertTrue(self.check(tab="Crypto", suspicious=True)["ok"])
+        with mock.patch.object(config, "FAST_ALLOW_TOO_GOOD", False):
+            self.assertFalse(self.check(tab="Crypto", suspicious=True)["ok"])
+
+    def test_far_out_still_needs_make_trade(self):
+        far = self.check(tab="Politics", pair={"auto": True}, closes=(NOW + timedelta(days=200)).isoformat())
+        self.assertFalse(far["ok"])
 
 
 class FakeTrader:
