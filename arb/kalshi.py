@@ -278,7 +278,8 @@ class KalshiClient:
         return result
 
     def refresh_books(self, markets):
-        """Fetch order books (100 tickers per request) and set levels + top of book."""
+        """Fetch order books (100 tickers per request) and set levels + top of book.
+        Returns the tickers whose request failed (unpriced this cycle, but not known to be gone)."""
         by_ticker = {m.ticker: m for m in markets}
         tickers = list(by_ticker)
         chunks = [tickers[i:i + 100] for i in range(0, len(tickers), 100)]
@@ -291,12 +292,14 @@ class KalshiClient:
 
         with LanePool(self.workers) as pool:
             results = list(pool.map(fetch, chunks))
+        failed = set()
         for chunk, d in results:
             if d is None:
                 # Leave these markets unpriced this cycle rather than acting on stale books.
                 for t in chunk:
                     m = by_ticker[t]
                     m.levels, m.yes_ask, m.no_ask = {}, None, None
+                failed.update(chunk)
                 continue
             seen = set()
             for ob in d.get("orderbooks", []):
@@ -312,6 +315,7 @@ class KalshiClient:
                 if t not in seen:            # not in the reply (closed, halted): don't keep last cycle's book
                     m = by_ticker[t]
                     m.levels, m.yes_ask, m.no_ask = {}, None, None
+        return failed
 
     def live_levels(self, ticker):
         """Current depth for buying each side of one market: {"yes": [...], "no": [...]}."""

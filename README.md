@@ -343,6 +343,32 @@ Streams need the `websocket-client` package; `start-dashboard.bat` installs it t
 no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
 missed Kalshi update forces a fresh book.
 
+## On your iPhone
+
+The dashboard works on a phone. On a narrow screen opportunities show as cards, the filters fold
+under **Filters & settings**, and every button is big enough to tap.
+
+1. Add a password to `.env` (at least 8 characters). It's needed because the dashboard can place trades:
+   ```
+   DASHBOARD_PASSWORD=pick-something-long
+   ```
+2. Start with phone mode: `start-dashboard.bat --phone` (or put `DASHBOARD_PHONE=1` in `.env` to
+   always use it). The console prints the address to open, like `http://192.168.1.20:8791`.
+3. On the iPhone, on the same Wi-Fi, open that address in Safari and log in with the password.
+4. In Safari, tap **Share → Add to Home Screen**. It then opens full-screen like an app.
+
+If the page doesn't load, Windows Firewall is blocking it: allow Python on **Private networks** when
+Windows asks, or under *Windows Security → Firewall → Allow an app through firewall*.
+
+On this computer the dashboard still opens at `http://localhost:8791` with no login. Every other
+device has to log in, and the login lasts 90 days, or until you change the password. After 10 wrong
+passwords from a device, that device has to wait 5 minutes.
+
+Away from home: phone mode only works on your own Wi-Fi. Don't open the port on your router.
+Instead install [Tailscale](https://tailscale.com) (free) on the PC and the phone, and use the PC's
+Tailscale address in place of the Wi-Fi one. The connection is then encrypted and private to your
+devices.
+
 ## Fast restarts (warm start)
 
 Matching every market on both sites takes a few minutes. So every 5 minutes the scanner saves its

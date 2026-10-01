@@ -72,6 +72,17 @@ class HotPassTests(unittest.TestCase):
         self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"B"})
 
 
+    def test_full_sweep_keeps_a_row_whose_request_failed(self):
+        self.s.refresh_prices(hot=False)
+        km = self.s.source[("kalshi", "kA")]
+
+        def failing(ms):                   # the request for kA errors: its book is cleared, not refreshed
+            km.levels, km.yes_ask, km.no_ask = {}, None, None
+            return {"kA"}
+        self.s.kalshi.refresh_books = failing
+        self.s.refresh_prices(hot=False)
+        self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"A", "B"})
+
     def test_streamed_update_rechecks_without_polling(self):
         class Live:
             connected, seen = True, {"kA", "pA", "kB", "pB"}

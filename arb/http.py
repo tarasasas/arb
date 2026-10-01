@@ -69,7 +69,7 @@ class RateLimitedClient:
     def set_rate(self, rps):
         self.min_interval = 1.0 / rps
 
-    PRIORITY_BURST = 3     # while background work waits, it gets every 4th slot (it must never starve)
+    PRIORITY_BURST = 1     # while background work waits, it gets every other slot (it must never starve)
 
     def _wait_turn(self):
         """Take the next request slot. Slots are claimed only when due (not reserved ahead), so a

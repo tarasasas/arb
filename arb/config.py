@@ -50,6 +50,10 @@ def _env_num(name, default):
         return default
 
 
+# ---- Dashboard on your phone (python -m arb --phone, or DASHBOARD_PHONE=1) ----------------------
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "").strip()
+DASHBOARD_PHONE = os.environ.get("DASHBOARD_PHONE", "").strip().lower() in ("1", "true", "yes", "on")
+
 # ---- Fast trade (one click, no confirm) and Auto-trade (no click), for time-sensitive arbs ------
 # Only rows that need no checking by you qualify: crypto (paired by contract terms) or anything
 # settling within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.

@@ -400,11 +400,12 @@ class Scanner:
                if c.exchange == "kalshi" and ("kalshi", c.market_id) not in streamed]
         pms = [source[("polymarket", c.market_id)] for c in contracts
                if c.exchange == "polymarket" and ("polymarket", c.market_id) not in streamed]
+        failed = set()                     # markets whose request failed: their rows are kept, not dropped
         if stream_groups is None and (kms or pms):
             with LanePool(2) as pool:
                 jobs = [pool.submit(self.kalshi.refresh_books, kms), pool.submit(self.pm.refresh_quotes, pms)]
-                for j in jobs:
-                    j.result()
+                failed_k, failed_p = (j.result() or set() for j in jobs)
+            failed = {("kalshi", t) for t in failed_k} | {("polymarket", sl) for sl in failed_p}
         matching.sync_quotes(contracts, source)
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
@@ -423,13 +424,13 @@ class Scanner:
         # Fetch the books this pass will need all at once, in parallel, best edges first.
         want = list(dict.fromkeys(c["p"].market_id for c in cands if c["edge"] > 0
                                   and ("polymarket", c["p"].market_id) not in streamed))[:book_budget]
-        failed = {}
+        book_errors = {}
 
         def get_book(slug):
             try:
                 self.pm.refresh_book(source[("polymarket", slug)])
             except Exception as e:
-                failed[slug] = e
+                book_errors[slug] = e
         if want:
             with LanePool(min(8, len(want))) as pool:
                 list(pool.map(get_book, want))
@@ -447,13 +448,14 @@ class Scanner:
                     fetched.add(pm.slug)
                     book_budget -= 1
                     try:
-                        if pm.slug in failed:
-                            raise failed[pm.slug]
+                        if pm.slug in book_errors:
+                            raise book_errors[pm.slug]
                         if pm.slug not in prefetched:
                             self.pm.refresh_book(pm)
                     except Exception as e:
                         self.log(f"Book fetch failed for {pm.slug}: {e!r}")
                         pm.levels, pm.yes_ask, pm.no_ask = {}, None, None
+                        failed.add(("polymarket", pm.slug))
                 if not pm.levels:
                     continue
                 # Re-read top of book after the fresh fetch, and the edge with it: the screen used the
@@ -486,8 +488,9 @@ class Scanner:
             key = _row_key(r)
             if key in found or (r.get("trade_until") and r["trade_until"].replace("Z", "+00:00") <= now.isoformat()):
                 continue
-            if key in unchecked or (hot and not {("kalshi", key[0]), ("polymarket", key[2])} <= covered):
-                opportunities.append(r)
+            legs = {("kalshi", key[0]), ("polymarket", key[2])}
+            if key in unchecked or legs & failed or (hot and not legs <= covered):
+                opportunities.append(r)    # not re-checked this pass (or its request failed): keep it
         opportunities.sort(key=lambda r: -r["profit"])
         secs = round(time.time() - t0, 1)
         with self.lock:

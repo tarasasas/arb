@@ -196,7 +196,8 @@ class PolymarketClient:
         return out
 
     def refresh_quotes(self, markets):
-        """Refresh top of book for many markets, 100 slugs per request, in parallel."""
+        """Refresh top of book for many markets, 100 slugs per request, in parallel.
+        Returns the slugs whose request failed (unpriced this cycle, but not known to be gone)."""
         by_slug = {m.slug: m for m in markets}
         slugs = list(by_slug)
         chunks = [slugs[i:i + 100] for i in range(0, len(slugs), 100)]
@@ -205,10 +206,14 @@ class PolymarketClient:
             try:
                 return chunk, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200)])
             except Exception:
-                return chunk, {}        # unpriced this cycle (handled below as "not seen")
+                return chunk, None      # unpriced this cycle
 
+        failed = set()
         with LanePool(WORKERS) as pool:
             for chunk, d in pool.map(fetch, chunks):
+                if d is None:
+                    failed.update(chunk)
+                    d = {}
                 seen = set()
                 for m in d.get("markets") or []:
                     pm = by_slug.get(m.get("slug"))
@@ -221,6 +226,7 @@ class PolymarketClient:
                 for s in chunk:
                     if s not in seen:
                         by_slug[s].yes_ask = by_slug[s].no_ask = None
+        return failed
 
     def live_levels(self, slug):
         """Current depth for buying each side: {"yes": [...], "no": [...], "state": ...}.

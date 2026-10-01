@@ -58,5 +58,5 @@ class FairShareTests(unittest.TestCase):
         for t in threads:
             t.join()
         total = counts["pri"] + counts["bg"]
-        self.assertGreater(counts["bg"], total * 0.15)       # ~1 in 4
-        self.assertGreater(counts["pri"], total * 0.6)
+        self.assertGreater(counts["bg"], total * 0.3)        # ~1 in 2
+        self.assertGreater(counts["pri"], total * 0.3)

@@ -44,6 +44,8 @@ def main(argv=None):
     ap.add_argument("--once", action="store_true", help="run one scan, print results, exit")
     ap.add_argument("--port", type=int, default=8791)
     ap.add_argument("--no-browser", action="store_true", help="don't open the dashboard automatically")
+    ap.add_argument("--phone", action="store_true",
+                    help="also serve the dashboard on your local network for your phone (needs DASHBOARD_PASSWORD in .env)")
     args = ap.parse_args(argv)
 
     scanner = Scanner()
@@ -55,7 +57,9 @@ def main(argv=None):
         return 0
 
     from .server import serve
-    serve(scanner, args.port, open_browser=not args.no_browser)
+    from . import config
+    serve(scanner, args.port, open_browser=not args.no_browser,
+          phone=args.phone or config.DASHBOARD_PHONE, password=config.DASHBOARD_PASSWORD)
     return 0
 
 

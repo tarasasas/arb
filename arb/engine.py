@@ -479,6 +479,7 @@ def to_row(cand, sizing, now):
         "trade_until": k.trade_until or p.trade_until or None,
         "not_simple": not_simple_reasons(cand),
         "suspicious": too_good, "closes": close.isoformat() if close else None,
+        "checked": now.isoformat(),
         "depth": cand.get("depth"),
         "fee_coef": {"kalshi": k.fee_coef, "polymarket": p.fee_coef},
     }

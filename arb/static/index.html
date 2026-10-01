@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Arb Scanner</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Arbs">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f4f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
 <meta name="arb-token" content="__ARB_TOKEN__">
 <style>
   :root {
@@ -106,6 +114,69 @@
   .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tabs .n { opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
   .tabs button.mine { margin-left: auto; }
+  .filters-toggle { display: none; }
+
+  /* ---- iPhone / narrow screens: opportunities as cards, filters folded away, big tap targets ---- */
+  @media (max-width: 760px) {
+    body { font-size: 15px; -webkit-text-size-adjust: 100%; }
+    main { padding: calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+                    calc(40px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+    header { gap: 4px 12px; margin-bottom: 10px; }
+    header h1 { flex-basis: 100%; font-size: 18px; }
+    header h1 .muted { display: none; }
+    #access, #updated { display: none; }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
+    .tile { padding: 10px 12px !important; }
+    .tile .value { font-size: 22px !important; }
+    .tiles .tile:nth-child(n+3) { display: none; }
+    .autobar > .muted { display: none; }
+    .filters-toggle { display: block; width: 100%; margin: 10px 0 0; min-height: 42px; }
+    .filters { display: none; margin-top: 8px; }
+    .filters.open { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+    .filters label { display: flex; justify-content: flex-start; align-items: center; gap: 10px; }
+    .filters label > input:not([type="checkbox"]):first-of-type, .filters label > select { margin-left: auto; }
+    .filters label > input[type="search"] { margin-left: 0; width: 100%; }
+    input, select, textarea { font-size: 16px !important; }       /* stops iOS zooming into fields */
+    button { min-height: 38px; }
+    input[type="checkbox"] { width: 20px; height: 20px; }
+    .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tabs button { flex: none; min-height: 36px; }
+    .tabs button.mine { margin-left: 0; }
+    .autobar { padding: 10px 12px; }
+
+    .opps-wrap { background: none; border: 0; overflow: visible; }
+    #opps-table, #opps-table tbody { display: block; }
+    #opps-table thead { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    #opps-table thead tr { display: contents; }
+    #opps-table thead th { display: none; }
+    #opps-table thead th.sortable { display: inline-block; padding: 6px 10px; border: 1px solid var(--border);
+      border-radius: 999px; background: var(--surface-1); font-size: 13px; }
+    #opps-table tr.row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 10px;
+      background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-top: 10px; }
+    #opps-table tr.row td { display: block; padding: 0; border: 0; text-align: left; }
+    #opps-table tr.row td[data-label]::before { content: attr(data-label); display: block; font-size: 11px;
+      color: var(--text-muted); font-weight: 500; }
+    #opps-table td.c-profit { font-size: 20px; }
+    #opps-table td.c-roi, #opps-table td.c-ann { font-size: 16px; align-self: end; }
+    #opps-table td.c-n, #opps-table td.c-cap { grid-column: span 1; }
+    #opps-table td.c-game, #opps-table td.c-legs, #opps-table td.c-checks { grid-column: 1 / -1; margin-top: 8px; }
+    #opps-table td.c-legs { border-top: 1px solid var(--border); padding-top: 8px; }
+    #opps-table td.c-checks button { min-height: 40px; }
+    #opps-table tr.details { display: block; background: var(--surface-1); border: 1px solid var(--border);
+      border-top: 0; border-radius: 0 0 12px 12px; margin-top: -8px; padding-top: 4px; }
+    #opps-table tr.details > td { display: block; padding: 10px 12px; }
+    #opps-table tr.details > td { max-width: calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
+    #opps-table tr.details table { display: block; max-width: 100%; min-width: 0; overflow-x: auto; }
+    #opps-table tr.details pre { white-space: pre-wrap; word-break: break-word; }
+    #opps-table tr > td.empty { display: block; }
+    .table-wrap { -webkit-overflow-scrolling: touch; }
+    .modal-bg { padding: env(safe-area-inset-top) 0 0; align-items: stretch; }
+    .modal { border-radius: 0; min-height: 100%; max-width: none; padding: 16px 14px calc(24px + env(safe-area-inset-bottom)); }
+    .modal table { display: block; overflow-x: auto; }
+    .modal .actions { flex-wrap: wrap; }
+    .modal .actions button { flex: 1; min-height: 44px; }
+  }
   .state { font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
   .state.settled { border-color: var(--good); color: var(--good-text); }
   .form-grid { display: grid; grid-template-columns: auto 1fr 1fr; gap: 8px 12px; align-items: center; margin: 10px 0; }
@@ -173,7 +244,8 @@
     <div class="tile"><div class="label">Near-arb re-check</div><div class="value" id="t-scan">–</div><div class="note" id="t-scan-note">seconds</div></div>
   </section>
 
-  <div class="filters">
+  <button type="button" id="filters-toggle" class="filters-toggle" aria-expanded="false">Filters &amp; settings</button>
+  <div class="filters" id="filters">
     <label>Max to invest per arb $ <input id="f-budget" type="number" min="0" step="50" placeholder="no limit" style="width:100px"></label>
     <label>League <select id="f-league"><option value="">All</option></select></label>
     <label>Min profit $ <input id="f-min" type="number" min="0" step="0.5" value="0"></label>
@@ -200,8 +272,8 @@
   <div id="myarbs" style="display:none"></div>
   <div id="opps-wrap">
   <div class="caveat" id="cash-note" style="margin:0 0 6px"></div>
-  <div class="table-wrap">
-    <table>
+  <div class="table-wrap opps-wrap">
+    <table id="opps-table">
       <thead><tr>
         <th class="num sortable" data-sort="profit">Profit</th><th class="num sortable" data-sort="roi">ROI</th>
         <th class="num sortable" data-sort="annualized">Annualized</th><th class="num sortable" data-sort="n">Contracts</th>
@@ -518,6 +590,10 @@ document.querySelectorAll("th.sortable").forEach(th => th.addEventListener("clic
   showSortArrows(); render(true);
 }));
 showSortArrows();
+document.getElementById("filters-toggle").addEventListener("click", e => {
+  const f = document.getElementById("filters"), open = f.classList.toggle("open");
+  e.target.setAttribute("aria-expanded", open);
+});
 
 function showResult(res) {
   loadMyArbs();
@@ -568,7 +644,7 @@ function renderAuto(s) {
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
     <span class="muted">Crypto, plus anything settling within ${a.fast_max_hours}h, never auto-matched pairs or rows with rule warnings ·
       up to ${money(a.max_trade)} per trade · profit ≥ ${money(a.min_profit)} · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</span>
-    ${a.spent_today > 0 ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
+    ${a.spent_today > 0 && a.net_today != null ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
       <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}
     ${a.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(a.halted)}</div>` : ""}
     ${!on && !a.on ? `<span class="muted">(trading ${esc(state?.stats?.trading || "is off")})</span>` : ""}
@@ -1069,15 +1145,15 @@ function render(force) {
   body.innerHTML = all.length ? all.map(({ r, z, stale }) => {
     const key = rowKey(r), isPinned = pinned.has(key);
     const row = `<tr class="row" data-key="${esc(key)}">
-      <td class="num profit">${money(z.profit)}</td><td class="num">${pct(z.roi)}</td><td class="num">${pct(z.annualized)}</td>
-      <td class="num">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}${z.limitedBy
+      <td class="num profit c-profit" data-label="Profit">${money(z.profit)}</td><td class="num c-roi" data-label="ROI">${pct(z.roi)}</td><td class="num c-ann" data-label="Annualized">${pct(z.annualized)}</td>
+      <td class="num c-n" data-label="Shares">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}${z.limitedBy
         ? `<br>limited by ${z.limitedBy.map(x => LIMIT_TEXT[x]).join(" and ")}` : ""}</div>` : ""}</td>
-      <td class="num">${money(z.capital)}</td>
-      <td><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}
+      <td class="num c-cap" data-label="Capital">${money(z.capital)}</td>
+      <td class="c-game"><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}
         <div class="secondary">${esc(r.quantity)}</div>
-        <div class="muted">closes ${esc(localTime(r.closes))}</div>
+        <div class="muted">closes ${esc(localTime(r.closes))}${r.checked ? ` · prices checked ${ago(r.checked)}` : ""}</div>
         ${stale ? `<div class="warn">${WARN_ICON}No longer an arb at current prices; numbers are from when it was</div>` : ""}</td>
-      <td>${legHtml(r.legs[0], z.k)}${legHtml(r.legs[1], z.p)}</td><td>${checksHtml(r)}</td></tr>`;
+      <td class="c-legs">${legHtml(r.legs[0], z.k)}${legHtml(r.legs[1], z.p)}</td><td class="c-checks">${checksHtml(r)}</td></tr>`;
     const det = open.has(key) || isPinned || document.getElementById("f-expand").checked ? `<tr class="details"><td colspan="8">
       ${r.warnings.length ? `<div class="callout ${r.suspicious ? "bad" : ""}"><b>Check before trading</b><ul>${
         r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
