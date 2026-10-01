@@ -49,6 +49,12 @@
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { font-size: 12px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text); }
+  th.sortable::after { content: "↕"; margin-left: 4px; opacity: .35; }
+  th.sortable.asc::after { content: "▲"; opacity: 1; }
+  th.sortable.desc::after { content: "▼"; opacity: 1; }
+  th.sortable.asc, th.sortable.desc { color: var(--text); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   tbody tr.row { cursor: pointer; } tbody tr.row:hover { background: var(--row-hover); }
   tr:last-child td { border-bottom: 0; }
@@ -197,8 +203,10 @@
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th class="num">Profit</th><th class="num">ROI</th><th class="num">Annualized</th><th class="num">Contracts</th>
-        <th class="num">Capital</th><th>Game</th><th>Trades</th><th>Checks</th>
+        <th class="num sortable" data-sort="profit">Profit</th><th class="num sortable" data-sort="roi">ROI</th>
+        <th class="num sortable" data-sort="annualized">Annualized</th><th class="num sortable" data-sort="n">Contracts</th>
+        <th class="num sortable" data-sort="capital">Capital</th><th class="sortable" data-sort="closes" title="Sort by when it pays out">Game</th>
+        <th>Trades</th><th>Checks</th>
       </tr></thead>
       <tbody id="opps"></tbody>
     </table>
@@ -483,6 +491,33 @@ function renderPlan(plan, r) {
   tick(); countdown = setInterval(tick, 1000);
   document.getElementById("confirm-btn").onclick = () => executePlan(plan, r);
 }
+
+// Click a column header to sort by it; click again to flip. Too-good-to-be-true rows stay at the bottom.
+let sortBy = { key: "profit", dir: "desc" };
+try { sortBy = JSON.parse(localStorage.getItem("arb-sort")) || sortBy; } catch (e) {}
+const SORT_VALUE = {
+  profit: o => o.z.profit, roi: o => o.z.roi, annualized: o => o.z.annualized, n: o => o.z.n, capital: o => o.z.capital,
+  closes: o => o.r.closes ? Date.parse(o.r.closes) : null,
+};
+function sortCompare(a, b) {
+  const f = SORT_VALUE[sortBy.key] || SORT_VALUE.profit, va = f(a), vb = f(b);
+  if (va == null || vb == null) return (va == null) - (vb == null);   // unknown values last
+  return sortBy.dir === "asc" ? va - vb : vb - va;
+}
+function showSortArrows() {
+  document.querySelectorAll("th.sortable").forEach(th => {
+    th.classList.toggle("asc", th.dataset.sort === sortBy.key && sortBy.dir === "asc");
+    th.classList.toggle("desc", th.dataset.sort === sortBy.key && sortBy.dir === "desc");
+  });
+}
+document.querySelectorAll("th.sortable").forEach(th => th.addEventListener("click", () => {
+  const k = th.dataset.sort;
+  sortBy = sortBy.key === k ? { key: k, dir: sortBy.dir === "desc" ? "asc" : "desc" }
+                            : { key: k, dir: k === "closes" ? "asc" : "desc" };   // soonest payout first
+  try { localStorage.setItem("arb-sort", JSON.stringify(sortBy)); } catch (e) {}
+  showSortArrows(); render(true);
+}));
+showSortArrows();
 
 function showResult(res) {
   loadMyArbs();
@@ -1000,7 +1035,7 @@ function render(force) {
         o.z.limitedBy.filter(x => x !== "budget")))].map(x => LIMIT_TEXT[x]).join(", ")}). Untick "Size to my cash" to see ${short.length > 1 ? "them" : "it"}.`
     : "";
   const opps = listed.filter(o => inTab(o.r))
-    .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || b.z.profit - a.z.profit);
+    .sort((a, b) => (a.r.suspicious ? 1 : 0) - (b.r.suspicious ? 1 : 0) || sortCompare(a, b) || b.z.profit - a.z.profit);
   // Rows you're mid-trade on: refresh their snapshot while the arb exists, keep showing it after.
   const live = new Set(s.opportunities.map(rowKey));
   for (const r of s.opportunities) if (pinned.has(rowKey(r))) pinned.set(rowKey(r), r);
