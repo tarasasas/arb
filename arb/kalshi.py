@@ -2,6 +2,7 @@
 
 import os
 import re
+import time
 import urllib.error
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -49,6 +50,7 @@ class KalshiMarket:
     no_ask_size: float | None = None
     # Depth for buying each side: [(price, qty)] best first.
     levels: dict = field(default_factory=dict)
+    quoted_at: float = 0.0   # when the request behind the current quote was sent (or the stream update arrived)
     # Kalshi exchange shard the market trades on (0 default, 2 crypto/commodities, 3 some sports).
     # Orders only use cash held on that shard.
     shard: int = 0
@@ -299,26 +301,28 @@ class KalshiClient:
 
     def refresh_books(self, markets):
         """Fetch order books (100 tickers per request) and set levels + top of book.
-        Returns the tickers whose request failed (unpriced this cycle, but not known to be gone)."""
+        Returns the tickers whose request failed (unpriced this cycle, but not known to be gone).
+        A book is applied only if its request went out after the market's current quote, so a slow
+        poll never replaces a newer streamed book."""
         by_ticker = {m.ticker: m for m in markets}
         tickers = list(by_ticker)
         chunks = [tickers[i:i + 100] for i in range(0, len(tickers), 100)]
 
         def fetch(chunk):
+            sent = time.time()
             try:
-                return chunk, self.http.get("/markets/orderbooks", [("tickers", t) for t in chunk])
+                return chunk, sent, self.http.get("/markets/orderbooks", [("tickers", t) for t in chunk])
             except Exception:
-                return chunk, None
+                return chunk, sent, None
 
         with LanePool(self.workers) as pool:
             results = list(pool.map(fetch, chunks))
         failed = set()
-        for chunk, d in results:
+        for chunk, sent, d in results:
             if d is None:
                 # Leave these markets unpriced this cycle rather than acting on stale books.
                 for t in chunk:
-                    m = by_ticker[t]
-                    m.levels, m.yes_ask, m.no_ask = {}, None, None
+                    _unprice(by_ticker[t], sent)
                 failed.update(chunk)
                 continue
             seen = set()
@@ -327,19 +331,78 @@ class KalshiClient:
                 if not m:
                     continue
                 seen.add(m.ticker)
+                if sent < getattr(m, "quoted_at", 0.0):
+                    continue
                 m.levels = buy_levels(ob.get("orderbook_fp") or {})
                 buy_yes, buy_no = m.levels["yes"], m.levels["no"]
                 m.yes_ask, m.yes_ask_size = buy_yes[0] if buy_yes else (None, None)
                 m.no_ask, m.no_ask_size = buy_no[0] if buy_no else (None, None)
+                m.quoted_at = sent
             for t in chunk:
                 if t not in seen:            # not in the reply (closed, halted): don't keep last cycle's book
-                    m = by_ticker[t]
-                    m.levels, m.yes_ask, m.no_ask = {}, None, None
+                    _unprice(by_ticker[t], sent)
+        return failed
+
+    def refresh_tops(self, markets):
+        """Top of book only, from the market list: 200 tickers per request where order books take
+        100, so a full sweep needs half the requests. Depth comes from refresh_books() on the pairs
+        that need it. Same freshness rule and return value as refresh_books()."""
+        by_ticker = {m.ticker: m for m in markets}
+        chunks, cur, size = [], [], 0
+        for t in by_ticker:
+            if cur and (len(cur) == 200 or size + len(t) + 1 > 6000):     # 400 tickers -> HTTP 414
+                chunks.append(cur)
+                cur, size = [], 0
+            cur.append(t)
+            size += len(t) + 1
+        if cur:
+            chunks.append(cur)
+
+        def fetch(chunk):
+            sent = time.time()
+            try:
+                return chunk, sent, self.http.get("/markets", {"tickers": ",".join(chunk), "limit": 1000})
+            except Exception:
+                return chunk, sent, None
+
+        with LanePool(self.workers) as pool:
+            results = list(pool.map(fetch, chunks))
+        failed = set()
+        for chunk, sent, d in results:
+            if d is None:
+                failed.update(chunk)
+            got = {raw.get("ticker"): raw for raw in (d or {}).get("markets") or []}
+            for t in chunk:
+                m, raw = by_ticker[t], got.get(t)
+                if raw is None or raw.get("status") not in ("active", "open"):
+                    _unprice(m, sent)
+                    continue
+                if sent < getattr(m, "quoted_at", 0.0):
+                    continue
+                yes, no = _ask(raw.get("yes_ask_dollars")), _ask(raw.get("no_ask_dollars"))
+                book_top = tuple((m.levels.get(s) or [(None,)])[0][0] for s in ("yes", "no")) if m.levels else None
+                if book_top != (yes, no):
+                    m.levels = {}            # depth from before no longer matches; refetched when needed
+                m.yes_ask, m.no_ask = yes, no
+                m.yes_ask_size, m.no_ask_size = _f(raw.get("yes_ask_size_fp")), _f(raw.get("no_ask_size_fp"))
+                m.quoted_at = sent
         return failed
 
     def live_levels(self, ticker):
         """Current depth for buying each side of one market: {"yes": [...], "no": [...]}."""
         return buy_levels(self.http.get(f"/markets/{ticker}/orderbook").get("orderbook_fp") or {})
+
+
+def _ask(v):
+    """A listed ask, or None when there's nobody selling (listed as 0 or 1)."""
+    p = _f(v)
+    return p if p is not None and 0 < p < 1 else None
+
+
+def _unprice(m, sent):
+    """No usable book from a request sent at `sent` (failed, or the market wasn't in the reply)."""
+    if sent >= getattr(m, "quoted_at", 0.0):
+        m.levels, m.yes_ask, m.no_ask, m.quoted_at = {}, None, None, sent
 
 
 def buy_levels(book):

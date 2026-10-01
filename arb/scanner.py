@@ -568,16 +568,20 @@ class Scanner:
                if c.exchange == "polymarket" and ("polymarket", c.market_id) not in streamed]
         failed = set()                     # markets whose request failed: their rows are kept, not dropped
         if stream_groups is None and (kms or pms):
+            # Full sweeps read Kalshi's best prices from the market list (half the requests); the pairs
+            # that need depth get their order books below. Near-arb passes fetch the books directly.
+            kalshi_read = self.kalshi.refresh_books if hot else self.kalshi.refresh_tops
             with LanePool(2) as pool:
-                jobs = [pool.submit(self.kalshi.refresh_books, kms), pool.submit(self.pm.refresh_quotes, pms)]
+                jobs = [pool.submit(kalshi_read, kms), pool.submit(self.pm.refresh_quotes, pms)]
                 failed_k, failed_p = (j.result() or set() for j in jobs)
             failed = {("kalshi", t) for t in failed_k} | {("polymarket", sl) for sl in failed_p}
         matching.sync_quotes(contracts, source)
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
         if not hot:
+            # The closest pairs only: a long hot list re-checks slowly, and arbs come from the closest.
             hot_map = {}
-            for c in cands:
+            for c in cands[:config.HOT_MAX_PAIRS]:
                 ids = hot_map.setdefault((c["k"].game_key, c["k"].var), set())
                 ids.update({("kalshi", c["k"].market_id), ("polymarket", c["p"].market_id)})
             with self.lock:
@@ -597,9 +601,18 @@ class Scanner:
                 self.pm.refresh_book(source[("polymarket", slug)])
             except Exception as e:
                 book_errors[slug] = e
-        if want:
-            with LanePool(min(8, len(want))) as pool:
+        # Kalshi depth for the same pairs, fetched at the same moment so both legs' books match in time
+        # (a full sweep read only Kalshi's best prices; its maker rows need depth for near-arbs too).
+        want_k = list(dict.fromkeys(c["k"].market_id for c in cands if (c["edge"] > 0 or not hot)
+                                    and ("kalshi", c["k"].market_id) not in streamed))
+        if stream_groups is not None:
+            want_k = []                     # a stream pass: Kalshi books are live already
+        if want or want_k:
+            with LanePool(min(8, len(want)) + 1) as pool:
+                k_job = pool.submit(self.kalshi.refresh_books, [source[("kalshi", t)] for t in want_k]) if want_k else None
                 list(pool.map(get_book, want))
+                if k_job:
+                    failed |= {("kalshi", t) for t in (k_job.result() or set())}
         prefetched = set(want)
         for cand in cands:
             pm_slug = cand["p"].market_id
@@ -627,7 +640,8 @@ class Scanner:
                 # Re-read top of book after the fresh fetch, and the edge with it: the screen used the
                 # quotes from before the fetch, which on a fast market (crypto windows) can be seconds old.
                 cand["ap"] = pm.yes_ask if cand["sp"] == "yes" else pm.no_ask
-                if cand["ap"] is None:
+                cand["ak"] = km.yes_ask if cand["sk"] == "yes" else km.no_ask
+                if cand["ap"] is None or cand["ak"] is None:
                     continue
                 cand["edge"] = (cand["payout"] - cand["ak"] - cand["ap"]
                                 - engine.fee_per_contract(cand["k"].fee_coef, cand["ak"])

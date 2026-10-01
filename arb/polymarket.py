@@ -1,6 +1,7 @@
 """Polymarket US public market data: sports market parsing, batched quotes, order books."""
 
 import re
+import time
 from dataclasses import dataclass, field
 
 from . import config
@@ -45,6 +46,7 @@ class PMMarket:
     no_ask: float | None = None
     levels: dict = field(default_factory=dict)
     state: str = ""
+    quoted_at: float = 0.0   # when the request behind the current quote was sent (or the stream update arrived)
     tick: float = 0.01   # price step (orderPriceMinTickSize); maker mode posts one step better
 
 
@@ -203,14 +205,15 @@ class PolymarketClient:
         chunks = [slugs[i:i + 100] for i in range(0, len(slugs), 100)]
 
         def fetch(chunk):
+            sent = time.time()
             try:
-                return chunk, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200)])
+                return chunk, sent, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200)])
             except Exception:
-                return chunk, None      # unpriced this cycle
+                return chunk, sent, None      # unpriced this cycle
 
         failed = set()
         with LanePool(WORKERS) as pool:
-            for chunk, d in pool.map(fetch, chunks):
+            for chunk, sent, d in pool.map(fetch, chunks):
                 if d is None:
                     failed.update(chunk)
                     d = {}
@@ -219,13 +222,18 @@ class PolymarketClient:
                     pm = by_slug.get(m.get("slug"))
                     if pm:
                         seen.add(pm.slug)
-                        if m.get("closed") or not m.get("active"):
+                        if sent < getattr(pm, "quoted_at", 0.0):
+                            continue             # a newer quote (stream or book) is already there
+                        if (m.get("closed") or not m.get("active")
+                                or m.get("status") not in (None, "MARKET_STATUS_OPEN")):   # e.g. suspended
                             pm.yes_ask = pm.no_ask = None
                         else:
                             set_quotes(pm, m)
+                        pm.quoted_at = sent
                 for s in chunk:
-                    if s not in seen:
+                    if s not in seen and sent >= getattr(by_slug[s], "quoted_at", 0.0):
                         by_slug[s].yes_ask = by_slug[s].no_ask = None
+                        by_slug[s].quoted_at = sent
         return failed
 
     def live_levels(self, slug):
@@ -239,8 +247,12 @@ class PolymarketClient:
         return {"yes": offers, "no": [(round(1 - p, 4), q) for p, q in bids], "state": d.get("state")}
 
     def refresh_book(self, pm):
+        sent = time.time()
         lv = self.live_levels(pm.slug)
-        pm.levels = {"yes": lv["yes"], "no": lv["no"]}
-        pm.yes_ask = lv["yes"][0][0] if lv["yes"] else None
-        pm.no_ask = lv["no"][0][0] if lv["no"] else None
-        pm.state = lv["state"]
+        if sent < getattr(pm, "quoted_at", 0.0):
+            return                               # the stream delivered a newer book meanwhile
+        tradable = lv["state"] in (None, "", "MARKET_STATE_OPEN")       # suspended mid-game: no prices
+        pm.levels = {"yes": lv["yes"], "no": lv["no"]} if tradable else {"yes": [], "no": []}
+        pm.yes_ask = pm.levels["yes"][0][0] if pm.levels["yes"] else None
+        pm.no_ask = pm.levels["no"][0][0] if pm.levels["no"] else None
+        pm.state, pm.quoted_at = lv["state"], sent

@@ -202,3 +202,4 @@ HOT_PAUSE_SECS = 0.5           # pause between re-checks of the near-arb "hot li
 MIN_PROFIT_DOLLARS = 0.01      # hide opportunities below this guaranteed profit
 NEAR_MISS_EDGE = -0.03         # also track pairs within 3 cents of breaking even (per contract)
 MAX_NEAR_MISSES = 50
+HOT_MAX_PAIRS = 400            # near-arb pairs re-checked between full sweeps (closest first)

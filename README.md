@@ -31,9 +31,12 @@ python -m unittest discover -s tests -t .
 The first market load takes about 30 seconds with a Kalshi key, or about 70 without.
 After that, two loops run in parallel:
 
-- **Hot list:** the ~3,000 markets within 3¢ of an arb are re-checked every ~5 seconds.
-- **Full sweep:** every watched contract is re-checked continuously, taking ~25 seconds
-  per pass.
+- **Hot list:** the 400 pairs closest to an arb (within 3¢, `HOT_MAX_PAIRS`) are re-checked every
+  ~2 seconds.
+- **Full sweep:** every watched contract is re-checked continuously. It reads Kalshi's best prices
+  from the market list (200 markets per request), then fetches order books only for the pairs within
+  3¢ of an arb, at the same moment as their Polymarket books. A pass takes ~40 seconds without a
+  Kalshi key, less with one.
 
 Market lists reload in the background every 5 minutes. Use `--port N` if 8791 is taken.
 
@@ -418,7 +421,8 @@ missed Kalshi update forces a fresh book.
 
 If a stream goes quiet (no message for 90 seconds) it reconnects by itself. Every full sweep still
 polls every market as a backstop, and a streamed market is only trusted without polling while it has
-updated in the last minute, so a silent stream can't freeze prices. The header shows each stream's
+updated in the last minute, so a silent stream can't freeze prices. A polled price never replaces a
+newer streamed one: each quote remembers when it was requested, and an older answer is ignored. The header shows each stream's
 state, for example "Kalshi ● 640 of 1,900 live", or "quiet 95s (polling)". Hover over it for its
 subscriptions, reconnects and last error.
 

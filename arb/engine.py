@@ -43,7 +43,10 @@ def screen(groups, min_edge, now=None):
                             continue
                         if ak + ap >= 1 - min_edge:      # guaranteed payout is at most ~1
                             continue
-                        pay = guaranteed_payout([(k, sk), (p, sp)])
+                        key = (sk, p.market_id, p.var, p.op, p.line, sp)
+                        pay = k.pay_cache.get(key)
+                        if pay is None:              # once per pair, not every sweep (was ~20s of CPU)
+                            pay = k.pay_cache[key] = guaranteed_payout([(k, sk), (p, sp)])
                         if pay <= 0:
                             continue
                         edge = pay - ak - ap - fee_per_contract(k.fee_coef, ak) - fee_per_contract(p.fee_coef, ap)

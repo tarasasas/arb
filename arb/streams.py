@@ -69,6 +69,7 @@ def apply_levels(market, levels, tradable=True):
     market.levels = levels
     market.yes_ask = levels["yes"][0][0] if levels["yes"] else None
     market.no_ask = levels["no"][0][0] if levels["no"] else None
+    market.quoted_at = time.time()          # a poll sent before this can't overwrite it
 
 
 # ---- connection handling ----------------------------------------------------------------------

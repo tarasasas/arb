@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from arb import scanner
 from arb.model import Contract
@@ -29,6 +30,9 @@ class HotPassTests(unittest.TestCase):
 
         class K:
             def refresh_books(self, ms):
+                pass
+
+            def refresh_tops(self, ms):
                 pass
 
         class P:
@@ -89,7 +93,7 @@ class HotPassTests(unittest.TestCase):
         def failing(ms):                   # the request for kA errors: its book is cleared, not refreshed
             km.levels, km.yes_ask, km.no_ask = {}, None, None
             return {"kA"}
-        self.s.kalshi.refresh_books = failing
+        self.s.kalshi.refresh_tops = self.s.kalshi.refresh_books = failing
         self.s.refresh_prices(hot=False)
         self.assertEqual({r["game"] for r in self.s.state["opportunities"]}, {"A", "B"})
 
@@ -134,9 +138,23 @@ class HotPassTests(unittest.TestCase):
         self.s.streams = {"kalshi": Live(), "polymarket": Live()}
         self.s.crypto_cat = ([], {})
         polled = []
-        self.s.kalshi.refresh_books = lambda ms: polled.extend(m.ticker for m in ms)
+        self.s.kalshi.refresh_tops = lambda ms: polled.extend(m.ticker for m in ms)   # full sweeps read the list
         self.s.refresh_prices(hot=False)
         self.assertEqual(sorted(polled), ["kA", "kB"])       # a quiet stream can't freeze prices
+
+    def test_full_sweep_reads_list_prices_then_books_for_candidates(self):
+        tops, books = [], []
+        self.s.kalshi.refresh_tops = lambda ms: tops.extend(m.ticker for m in ms)
+        self.s.kalshi.refresh_books = lambda ms: books.extend(m.ticker for m in ms)
+        self.s.refresh_prices(hot=False)
+        self.assertEqual(sorted(tops), ["kA", "kB"])
+        self.assertEqual(sorted(books), ["kA", "kB"])         # depth for the two arbs, fetched once
+        self.assertEqual(len(self.s.state["opportunities"]), 2)
+
+    def test_hot_list_keeps_only_the_closest_pairs(self):
+        with mock.patch.object(scanner.config, "HOT_MAX_PAIRS", 1):
+            self.s.refresh_prices(hot=False)
+        self.assertEqual(len(self.s.hot_groups), 1)
 
     def test_stale_streamed_market_is_polled_on_hot_pass(self):
         class Quiet:
