@@ -53,6 +53,8 @@ class Scanner:
         self.auto_pairs = []            # confident non-sports matches scanned without your approval
         self.crypto_cat = ([], {})      # crypto price markets on both sites, grouped by settlement instant
         self.trader, self.trading_status = self._make_trader()
+        from .autotrade import AutoTrader
+        self.autotrader = AutoTrader(self)  # off until you turn it on in the dashboard
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
                       "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
                       "scan_seconds": None, "logs": []}
@@ -475,6 +477,7 @@ class Scanner:
                 self.state["last_full"] = now.isoformat()
         self.merge_lock.release()
         self.alerter.check(opportunities)
+        self.autotrader.check(opportunities)
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
                      f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")
@@ -616,4 +619,5 @@ class Scanner:
         with self.lock:
             s = dict(self.state)
         s["logs"] = list(self.logs)[-30:]
+        s["autotrade"] = self.autotrader.status()
         return s

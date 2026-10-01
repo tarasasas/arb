@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
+from .autotrade import fast_trade, record_trade
 from .trader import TradeError
 
 STATIC = Path(__file__).parent / "static"
@@ -100,16 +101,12 @@ def serve(scanner, port, open_browser=True):
                     return self._json(200, {"ok": True})
                 if path == "/api/trade/execute":
                     result = scanner.trader.execute(body.get("plan_id", ""))
-                    threading.Thread(target=scanner.refresh_balances, daemon=True).start()   # cash just changed
-                    try:
-                        if result.get("plan"):
-                            scanner.my_arbs.add_from_trade(result["plan"], result, body.get("row"))
-                    except Exception as e:
-                        scanner.log(f"Couldn't add the trade to My arbs: {e!r}")
-                    scanner.log(f"Trade {result['status']}: {result['hedged_pairs']:g} pairs hedged, "
-                                f"net ${result['net']:.2f}" +
-                                (f", {result['unhedged_shares']:g} UNHEDGED" if result["unhedged_shares"] else ""))
+                    record_trade(scanner, result, body.get("row"))
                     return self._json(200, result)
+                if path == "/api/trade/fast":
+                    return self._json(200, fast_trade(scanner, body.get("legs") or [], body.get("max_invest") or None))
+                if path == "/api/autotrade":
+                    return self._json(200, scanner.autotrader.set(bool(body.get("on"))))
                 return self._json(404, {"error": "Not found"})
             except (TradeError, ValueError, KeyError) as e:
                 return self._json(400, {"error": str(e)})

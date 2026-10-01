@@ -42,6 +42,25 @@ SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg befo
 SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks below the best bid
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
 
+
+def _env_num(name, default):
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+# ---- Fast trade (one click, no confirm) and Auto-trade (no click), for time-sensitive arbs ------
+# Only rows that need no checking by you qualify: crypto (paired by contract terms) or anything
+# settling within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
+FAST_MAX_HOURS = _env_num("FAST_MAX_HOURS", 24)
+FAST_MAX_TRADE = _env_num("FAST_MAX_TRADE", 50)             # $ per Fast trade, both legs
+AUTO_TRADE_MAX_TRADE = _env_num("AUTO_TRADE_MAX_TRADE", 25)  # $ per Auto-trade, both legs
+AUTO_TRADE_DAILY_LIMIT = _env_num("AUTO_TRADE_DAILY_LIMIT", 100)   # $ spent by Auto-trade per day
+AUTO_TRADE_MIN_PROFIT = _env_num("AUTO_TRADE_MIN_PROFIT", 0.50)    # $ profit at dashboard sizing
+AUTO_TRADE_MIN_ROI = _env_num("AUTO_TRADE_MIN_ROI", 0.5) / 100     # % of the money put in
+AUTO_TRADE_COOLDOWN_SECS = _env_num("AUTO_TRADE_COOLDOWN_SECS", 60)  # per pair of markets
+
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 # external-api.kalshi.com is Kalshi's recommended host, but it rejects Python's urllib
 # (403) while api.elections.kalshi.com, also officially supported, accepts it.

@@ -24,6 +24,7 @@ class HotPassTests(unittest.TestCase):
         s.hot_groups = {}
         s.streams, s.merge_lock, s.pairs_cat = {}, __import__("threading").Lock(), ([], {})
         s.alerter = __import__("arb.alerts", fromlist=["Alerter"]).Alerter(lambda m: None, send=lambda t: None)
+        s.autotrader = __import__("arb.autotrade", fromlist=["AutoTrader"]).AutoTrader(s)
 
         class K:
             def refresh_books(self, ms):

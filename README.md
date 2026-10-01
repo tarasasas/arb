@@ -185,6 +185,46 @@ so the two can differ by one second's move; that only matters if the close lands
 dollars of a line. ETH, SOL, XRP, DOGE, BNB and HYPE pair the same way as soon as Polymarket lists
 them.
 
+## ⚡ Fast trade and Auto-trade (crypto and other time-sensitive arbs)
+
+Some arbs last only seconds, so these skip the confirm screen. They run the same safe sequence as
+**Make trade**:
+1. Check live order books and balances.
+2. Buy the side with the thinner order book first.
+3. Buy the other side for exactly what filled, never above break-even.
+4. Sell back right away any shares that couldn't be hedged.
+
+**Which rows qualify:** crypto pairs (matched by contract terms, so there's nothing for you to
+check) and anything settling within `FAST_MAX_HOURS`. Never auto-matched pairs, rows marked too good
+to be true, or rows with a one-way-rules, different-settlement-source or prices-contradict warning.
+
+- **⚡ Fast trade** (a button on qualifying rows): one click places both orders, up to `FAST_MAX_TRADE`
+  (and your **Max to invest**, if you set one).
+- **Auto-trade** (the bar above the tabs): places qualifying arbs by itself, one at a time.
+  - It's **off every time the scanner starts**, and you're asked once when you turn it on.
+  - It only trades when the profit at live prices is at least `AUTO_TRADE_MIN_PROFIT`.
+  - It never spends more than `AUTO_TRADE_MAX_TRADE` per trade or `AUTO_TRADE_DAILY_LIMIT` per day.
+  - It waits `AUTO_TRADE_COOLDOWN_SECS` before trying the same pair again.
+  - It **turns itself off** (and alerts your phone, if alerts are set up) if a trade leaves shares
+    unhedged or an order can't be confirmed.
+  - Every trade goes to My arbs and `trades.jsonl`.
+
+Limits, in `.env` (defaults shown):
+
+```
+FAST_MAX_HOURS=24
+FAST_MAX_TRADE=50
+AUTO_TRADE_MAX_TRADE=25
+AUTO_TRADE_DAILY_LIMIT=100
+AUTO_TRADE_MIN_PROFIT=0.50
+AUTO_TRADE_MIN_ROI=0.5          # percent
+AUTO_TRADE_COOLDOWN_SECS=60
+```
+
+Crypto twins settle on the same CF Benchmarks index, but Kalshi averages the 60 seconds *before* the
+close and Polymarket the 60 seconds *ending at* it. A close within a few dollars of the line could, rarely,
+split them.
+
 ## Sizing to your cash
 
 With your API keys in `.env`, the scanner reads the cash on each site every 15 seconds (and right

@@ -105,6 +105,14 @@
   .form-grid { display: grid; grid-template-columns: auto 1fr 1fr; gap: 8px 12px; align-items: center; margin: 10px 0; }
   .form-grid input { width: 100%; box-sizing: border-box; }
   button.trade { margin-top: 8px; font-weight: 600; border-color: var(--accent); color: var(--accent); }
+  button.fast { margin-top: 6px; font-weight: 600; background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.fast:disabled { opacity: .5; }
+  .autobar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 0 0 12px; padding: 10px 14px;
+    border: 1px solid var(--border); border-radius: 10px; }
+  .autobar.on { border-color: var(--good); }
+  .autobar.halted { border-color: var(--critical); }
+  .autobar details { flex-basis: 100%; }
+  .autobar details li { margin: 2px 0; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 6px 16px; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start;
               justify-content: center; padding: 60px 16px; z-index: 10; overflow-y: auto; }
@@ -178,6 +186,8 @@
     <label><input id="f-notify" type="checkbox"> Desktop notification</label>
     <button id="alert-test" type="button" title="Send a test to your phone (Discord/Telegram set in .env)">Test phone alert</button>
   </div>
+
+  <div class="autobar" id="autobar"></div>
 
   <h2>Opportunities</h2>
   <div class="tabs" id="tabs-bar" role="tablist"></div>
@@ -474,13 +484,8 @@ function renderPlan(plan, r) {
   document.getElementById("confirm-btn").onclick = () => executePlan(plan, r);
 }
 
-async function executePlan(plan, r) {
-  clearInterval(countdown);
-  showModal(`<h3>Placing orders…</h3><div class="muted">Don't close this window.</div>`);
-  try {
-    const res = await post("/api/trade/execute", { plan_id: plan.id,
-      row: r ? { game: r.game, tab: r.tab, closes: r.closes } : null });
-    loadMyArbs();
+function showResult(res) {
+  loadMyArbs();
     const unhedged = res.unhedged_shares > 0;
     showModal(`<h3>${res.status === "ok" ? "Trade complete" : res.status === "no_fill" ? "Nothing traded" :
                   res.status === "partial" ? "Trade partly completed" : "Check your accounts"}</h3>
@@ -493,6 +498,62 @@ async function executePlan(plan, r) {
         shares are still unhedged. Sell them or hedge them manually.</div>` : ""}
       <div class="policy">Check both accounts to confirm. Details are in D:\\Projects\\arb\\trades.jsonl.</div>
       <div class="actions"><button class="primary" onclick="closeModal()">Done</button></div>`);
+}
+
+// ⚡ Fast trade: plan and place both orders in one step (the server re-checks live books and caps).
+let fastBusy = false;
+async function fastTrade(key) {
+  const r = rowsByKey.get(key); if (!r || fastBusy) return;
+  fastBusy = true;
+  showModal(`<h3>⚡ Placing orders…</h3><div class="muted">${esc(r.game)}: checking live prices and trading now. Don't close this window.</div>`);
+  try {
+    const res = await post("/api/trade/fast", {
+      legs: r.legs.map(l => ({ exchange: l.exchange.toLowerCase(), market_id: l.market_id, side: l.side })),
+      max_invest: +document.getElementById("f-budget").value || null });
+    showResult(res);
+  } catch (e) {
+    showModal(`<h3>Fast trade not placed</h3><div class="alert">${esc(e.message)}</div>
+      <div class="policy">If it says to check an account, do that before trying again.</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  } finally { fastBusy = false; }
+}
+
+// Auto-trade: places fast-eligible arbs by itself, within the caps in .env. Off every time the scanner starts.
+let autoOpen = false;
+function renderAuto(s) {
+  const a = s.autotrade, el = document.getElementById("autobar");
+  if (!a) { el.style.display = "none"; return; }
+  const on = tradingOn();
+  el.className = "autobar" + (a.on ? " on" : a.halted ? " halted" : "");
+  const hist = (a.history || []).map(h => `<li>${esc(h.time.slice(11))} · ${esc(h.game || "")} · <b>${esc(h.status)}</b>${
+    h.spent != null ? ` · ${money(h.spent)} in, net ${money(h.net)}` : ""}${h.unhedged ? ` · <span style="color:var(--critical)">${compact(h.unhedged)} unhedged</span>` : ""}${
+    h.note ? ` <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("");
+  el.innerHTML = `<b>⚡ Auto-trade</b>
+    <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
+    <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
+    <span class="muted">Crypto, plus anything settling within ${a.fast_max_hours}h, never auto-matched pairs or rows with rule warnings ·
+      up to ${money(a.max_trade)} per trade · profit ≥ ${money(a.min_profit)} · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</span>
+    ${a.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(a.halted)}</div>` : ""}
+    ${!on && !a.on ? `<span class="muted">(trading ${esc(state?.stats?.trading || "is off")})</span>` : ""}
+    ${hist ? `<details><summary class="muted">Last auto-trades</summary><ol>${hist}</ol></details>` : ""}`;
+  const d = el.querySelector("details");
+  if (d) { d.open = autoOpen; d.addEventListener("toggle", () => { autoOpen = d.open; }); }
+  document.getElementById("auto-toggle").onclick = async () => {
+    if (!a.on && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
+        `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for crypto and other arbs settling within ${a.fast_max_hours}h. ` +
+        `It turns itself off if a trade leaves shares unhedged. Change the limits in .env.`)) return;
+    try { state.autotrade = await post("/api/autotrade", { on: !a.on }); renderAuto(state); }
+    catch (e) { alert(e.message); }
+  };
+}
+
+async function executePlan(plan, r) {
+  clearInterval(countdown);
+  showModal(`<h3>Placing orders…</h3><div class="muted">Don't close this window.</div>`);
+  try {
+    const res = await post("/api/trade/execute", { plan_id: plan.id,
+      row: r ? { game: r.game, tab: r.tab, closes: r.closes } : null });
+    showResult(res);
   } catch (e) {
     showModal(`<h3>Trade failed</h3><div class="alert">${esc(e.message)}</div>
       <div class="policy">Check both accounts before trying again.</div>
@@ -685,7 +746,9 @@ function checksHtml(r) {
             <button data-action="wrong" data-key="${key}">Wrong match</button></div>`
     : `<div class="warn" style="margin-top:6px">${OK_ICON}Match verified by you</div>`;
   return w + simple + match + `<div><button data-action="track" data-key="${key}" title="Add it to My arbs after you place both orders yourself">Track this arb</button></div><div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
-    title="${r.maker ? "Maker orders rest in the book, so place them yourself (see the steps in the row)" : on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`;
+    title="${r.maker ? "Maker orders rest in the book, so place them yourself (see the steps in the row)" : on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`
+    + (r.fast?.ok && !r.maker ? `<div><button class="fast" data-action="fast" data-key="${key}" ${on && !fastBusy ? "" : "disabled"}
+      title="One click: checks live prices and places both orders right away, no confirm step (${esc(r.fast.why)}; up to ${money(state?.autotrade?.fast_max_trade)})">⚡ Fast trade</button></div>` : "");
 }
 // ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
 const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
@@ -905,6 +968,7 @@ function render(force) {
     ? `Cash: ${bal.kalshi != null ? `Kalshi <b>${money(bal.kalshi)}</b>` : ""}${bal.kalshi != null && bal.polymarket != null ? " · " : ""}${
         bal.polymarket != null ? `Polymarket <b>${money(bal.polymarket)}</b>` : ""}${bal.error ? ` <span title="${esc(bal.error)}">(stale)</span>` : ""}`
     : "";
+  renderAuto(s);
   const feeds = Object.entries(s.streams || {});
   document.getElementById("live").innerHTML = feeds.length ? "Live prices: " + feeds.map(([ex, v]) =>
     `<span title="${esc(v.error || "")}">${ex === "kalshi" ? "Kalshi" : "Polymarket"} ${v.connected
@@ -1019,6 +1083,7 @@ opps.addEventListener("click", e => {
     const k = btn.dataset.key;
     if (btn.dataset.action === "live") checkLive(k);
     if (btn.dataset.action === "trade") openTrade(k);
+    if (btn.dataset.action === "fast") fastTrade(k);
     if (btn.dataset.action === "track") openTrack(rowsByKey.get(k));
     if (btn.dataset.action === "verify" || btn.dataset.action === "wrong") verifyMatch(k, btn);
     if (btn.dataset.action === "unpin") { pinned.delete(k); delete ui[k]; render(true); }
