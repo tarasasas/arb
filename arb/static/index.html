@@ -114,7 +114,7 @@
   .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tabs .n { opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
   .tabs button.mine { margin-left: auto; }
-  .filters-toggle { display: none; }
+  .filters-toggle, .more-toggle, .m-only, .m-short { display: none; }
 
   /* ---- iPhone / narrow screens: opportunities as cards, filters folded away, big tap targets ---- */
   @media (max-width: 760px) {
@@ -122,9 +122,17 @@
     main { padding: calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
                     calc(40px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
     header { gap: 4px 12px; margin-bottom: 10px; }
-    header h1 { flex-basis: 100%; font-size: 18px; }
+    header h1 { font-size: 18px; }
     header h1 .muted { display: none; }
-    #access, #updated { display: none; }
+    #access, #updated, #trading, #live { display: none; }
+    .tiles { display: none !important; }
+    .opps-wrap + .caveat, #opps-wrap > .caveat:not(#cash-note), #opps-wrap > p.caveat { display: none; }
+    .autobar details { display: none; }
+    .autobar { gap: 6px 10px; }
+    .desk-extra { display: none; }
+    body.show-extra .desk-extra { display: block; }
+    .more-toggle { display: block; width: 100%; margin-top: 18px; min-height: 42px; color: var(--text-secondary); }
+    h2 { margin: 18px 0 8px; }
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
     .tile { padding: 10px 12px !important; }
     .tile .value { font-size: 22px !important; }
@@ -147,25 +155,52 @@
 
     .opps-wrap { background: none; border: 0; overflow: visible; }
     #opps-table, #opps-table tbody { display: block; }
-    #opps-table thead { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    #opps-table thead { display: flex; gap: 6px; margin-bottom: 4px; overflow-x: auto; scrollbar-width: none; }
+    #opps-table thead::-webkit-scrollbar { display: none; }
     #opps-table thead tr { display: contents; }
     #opps-table thead th { display: none; }
-    #opps-table thead th.sortable { display: inline-block; padding: 6px 10px; border: 1px solid var(--border);
-      border-radius: 999px; background: var(--surface-1); font-size: 13px; }
-    #opps-table tr.row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 10px;
-      background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-top: 10px; }
+    #opps-table thead th.sortable { display: inline-block; flex: none; padding: 4px 10px; border: 1px solid var(--border);
+      border-radius: 999px; background: var(--surface-1); font-size: 12px; }
+    #opps-table thead th[data-sort="annualized"], #opps-table thead th[data-sort="n"] { display: none; }
+
+    /* card: [profit  ROI  capital] / game / when / two order lines / [status  buttons] */
+    #opps-table tr.row { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 0 10px;
+      background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-top: 10px; }
     #opps-table tr.row td { display: block; padding: 0; border: 0; text-align: left; }
-    #opps-table tr.row td[data-label]::before { content: attr(data-label); display: block; font-size: 11px;
-      color: var(--text-muted); font-weight: 500; }
-    #opps-table td.c-profit { font-size: 20px; }
-    #opps-table td.c-roi, #opps-table td.c-ann { font-size: 16px; align-self: end; }
-    #opps-table td.c-n, #opps-table td.c-cap { grid-column: span 1; }
-    #opps-table td.c-game, #opps-table td.c-legs, #opps-table td.c-checks { grid-column: 1 / -1; margin-top: 8px; }
-    #opps-table td.c-legs { border-top: 1px solid var(--border); padding-top: 8px; }
-    #opps-table td.c-checks button { min-height: 40px; }
+    #opps-table td.c-profit { font-size: 22px; font-weight: 650; }
+    #opps-table td.c-roi { font-size: 15px; color: var(--text-secondary); }
+    #opps-table td.c-cap { text-align: right; color: var(--text-muted); font-size: 13px; }
+    #opps-table td.c-cap::before { content: "in "; }
+    #opps-table tr.row td.c-ann, #opps-table tr.row td.c-n { display: none; }
+    #opps-table td.c-game { grid-column: 1 / -1; margin-top: 4px; line-height: 1.3; }
+    #opps-table td.c-game .g-quantity, #opps-table td.c-game > .muted:not(.g-when) { display: none; }
+    #opps-wrap > h2, main > h2:first-of-type { display: none; }
+    #opps-table td.c-game .g-when { font-size: 12.5px; margin-top: 2px; }
+    #opps-table td.c-legs { grid-column: 1 / -1; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+    #opps-table td.c-legs .leg { grid-template-columns: 82px minmax(0, 1fr); margin-bottom: 2px; }
+    #opps-table td.c-legs .ex { font-size: 10.5px; padding-top: 2px; }
+    #opps-table td.c-legs .mkt { display: none; }
+    #opps-table td.c-legs .what { font-size: 14px; }
+    #opps-table td.c-legs .d-only { display: none; }
+    #opps-table td.c-legs .m-short { display: inline; }
+    .tabs button.zero:not(.on) { display: none; }
+    header { flex-wrap: wrap; } header .status { font-size: 13px; }
+    .autobar { padding: 6px 10px; border-radius: 10px; font-size: 14px; margin-bottom: 8px; }
+    .autobar button { min-height: 32px !important; padding: 0 12px; }
+    .filters-toggle { min-height: 38px !important; margin-bottom: 8px !important; }
+    #opps-table td.c-checks { grid-column: 1 / -1; display: flex !important; align-items: center; justify-content: space-between;
+      gap: 8px; margin-top: 10px; }
+    #opps-table td.c-checks .ck-more { display: none; }
+    #opps-table td.c-checks .ck-status .warn { font-size: 12.5px; }
+    #opps-table td.c-checks .ck-buttons { display: flex; gap: 8px; }
+    #opps-table td.c-checks .ck-buttons button { margin: 0; min-height: 40px; padding: 0 14px; }
+    #opps-table td.c-checks .ck-buttons button:disabled { display: none; }
+    .m-only { display: block; }
+    .m-checks { margin-bottom: 10px; } .m-checks .ck-status { display: none; }
+    .m-checks button { min-height: 40px; margin: 4px 6px 0 0; }
     #opps-table tr.details { display: block; background: var(--surface-1); border: 1px solid var(--border);
-      border-top: 0; border-radius: 0 0 12px 12px; margin-top: -8px; padding-top: 4px; }
-    #opps-table tr.details > td { display: block; padding: 10px 12px; }
+      border-top: 0; border-radius: 0 0 14px 14px; margin-top: -12px; padding-top: 6px; }
+    #opps-table tr.details > td { display: block; padding: 10px 14px; }
     #opps-table tr.details > td { max-width: calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
     #opps-table tr.details table { display: block; max-width: 100%; min-width: 0; overflow-x: auto; }
     #opps-table tr.details pre { white-space: pre-wrap; word-break: break-word; }
@@ -289,6 +324,8 @@
     share, the price shown here. Opportunities can share a leg, so don't add their profits together.</p>
   </div>
 
+  <button type="button" class="more-toggle" id="more-toggle">Scanner details</button>
+  <div class="desk-extra">
   <h2>Closest to breaking even</h2>
   <div class="table-wrap">
     <table>
@@ -336,10 +373,11 @@
     </table>
   </div>
 
-  <div class="modal-bg" id="modal-bg"><div class="modal" id="modal"></div></div>
-
   <details><summary>Unmatched Polymarket games</summary><div class="log" id="unmatched"></div></details>
   <details><summary>Scanner log</summary><div class="log" id="log"></div></details>
+  </div>
+
+  <div class="modal-bg" id="modal-bg"><div class="modal" id="modal"></div></div>
 </main>
 
 <script>
@@ -414,8 +452,13 @@ function legHtml(l, s) {
     ? `<b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> · <b>${s.n.toLocaleString()}</b> shares · limit <b>${cents(limitOf(s))}</b>
        <span class="muted">= ${money(s.cost + s.fee)}</span>`
     : `<b>Buy → ${l.side === "yes" ? "Yes" : "No"}</b> @ ${cents(l.price)}`;
+  const side = l.side === "yes" ? "Yes" : "No";
+  const short = s && s.n
+    ? `<b>${l.maker ? "Post " : ""}Buy ${side}</b> · ${s.n.toLocaleString()} @ ≤<b>${cents(l.maker ? s.avg : limitOf(s))}</b>${
+        l.maker ? "" : ` <span class="muted">· ${money(s.cost + s.fee)}</span>`}`
+    : `<b>Buy ${side}</b> @ ${cents(l.price)}`;
   return `<div class="leg"><span class="ex ${cls}">${esc(l.exchange.toUpperCase())}</span>
-    <span class="what">${what}<span class="mkt" title="${esc(l.title)}">${esc(l.title)}</span></span></div>`;
+    <span class="what"><span class="d-only">${what}</span><span class="m-short">${short}</span><span class="mkt" title="${esc(l.title)}">${esc(l.title)}</span></span></div>`;
 }
 
 // ---- order-book depth + "match your fill" --------------------------------------------------
@@ -590,6 +633,10 @@ document.querySelectorAll("th.sortable").forEach(th => th.addEventListener("clic
   showSortArrows(); render(true);
 }));
 showSortArrows();
+document.getElementById("more-toggle").addEventListener("click", e => {
+  const on = document.body.classList.toggle("show-extra");
+  e.target.textContent = on ? "Hide scanner details" : "Scanner details";
+});
 document.getElementById("filters-toggle").addEventListener("click", e => {
   const f = document.getElementById("filters"), open = f.classList.toggle("open");
   e.target.setAttribute("aria-expanded", open);
@@ -858,10 +905,10 @@ function checksHtml(r) {
        <div><button data-action="verify" data-key="${key}">Correct match</button>
             <button data-action="wrong" data-key="${key}">Wrong match</button></div>`
     : `<div class="warn" style="margin-top:6px">${OK_ICON}Match verified by you</div>`;
-  return w + simple + match + `<div><button data-action="track" data-key="${key}" title="Add it to My arbs after you place both orders yourself">Track this arb</button></div><div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
+  return `<div class="ck-status">${w}</div><div class="ck-more">${simple}${match}<div><button data-action="track" data-key="${key}" title="Add it to My arbs after you place both orders yourself">Track this arb</button></div></div><div class="ck-buttons"><div><button class="trade" data-action="trade" data-key="${key}" ${on ? "" : "disabled"}
     title="${r.maker ? "Maker orders rest in the book, so place them yourself (see the steps in the row)" : on ? "Check live prices, then confirm" : esc(state?.stats?.trading || "Trading is off")}">Make trade</button></div>`
     + (r.fast?.ok && !r.maker ? `<div><button class="fast" data-action="fast" data-key="${key}" ${on && !fastBusy ? "" : "disabled"}
-      title="One click: checks live prices and places both orders right away, no confirm step (${esc(r.fast.why)}; up to ${money(state?.autotrade?.fast_max_trade)})">⚡ Fast trade</button></div>` : "");
+      title="One click: checks live prices and places both orders right away, no confirm step (${esc(r.fast.why)}; up to ${money(state?.autotrade?.fast_max_trade)})">⚡ Fast trade</button></div>` : "") + `</div>`;
 }
 // ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
 const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
@@ -874,7 +921,7 @@ function renderTabs(rows) {
   for (const r of rows) counts[r.tab || "Other"] = (counts[r.tab || "Other"] || 0) + 1;
   document.getElementById("tabs-bar").innerHTML = TAB_ORDER
     .filter(t => t === "All" || counts[t] || t === currentTab || t === "Sports")
-    .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
+    .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}${counts[t] ? "" : " zero"}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
     .join("") + `<button role="tab" aria-selected="${currentTab === MAKER}" class="mine ${currentTab === MAKER ? "on" : ""}"
       data-tab="${MAKER}" title="Near-misses that turn profitable when the Polymarket leg rests as a maker order">${MAKER}<span class="n">${(state?.maker || []).length}</span></button>`
     + `<button role="tab" aria-selected="${currentTab === MINE}" class="${currentTab === MINE ? "on" : ""}"
@@ -1150,11 +1197,12 @@ function render(force) {
         ? `<br>limited by ${z.limitedBy.map(x => LIMIT_TEXT[x]).join(" and ")}` : ""}</div>` : ""}</td>
       <td class="num c-cap" data-label="Capital">${money(z.capital)}</td>
       <td class="c-game"><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}
-        <div class="secondary">${esc(r.quantity)}</div>
-        <div class="muted">closes ${esc(localTime(r.closes))}${r.checked ? ` · prices checked ${ago(r.checked)}` : ""}</div>
+        <div class="secondary g-quantity">${esc(r.quantity)}</div>
+        <div class="muted g-when">closes ${esc(localTime(r.closes))}${r.checked ? ` · prices checked ${ago(r.checked)}` : ""}</div>
         ${stale ? `<div class="warn">${WARN_ICON}No longer an arb at current prices; numbers are from when it was</div>` : ""}</td>
       <td class="c-legs">${legHtml(r.legs[0], z.k)}${legHtml(r.legs[1], z.p)}</td><td class="c-checks">${checksHtml(r)}</td></tr>`;
     const det = open.has(key) || isPinned || document.getElementById("f-expand").checked ? `<tr class="details"><td colspan="8">
+      <div class="m-only m-checks">${checksHtml(r).split('<div class="ck-buttons">')[0]}</div>
       ${r.warnings.length ? `<div class="callout ${r.suspicious ? "bad" : ""}"><b>Check before trading</b><ul>${
         r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${mathHtml(r, z)}
