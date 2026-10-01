@@ -592,3 +592,9 @@ class FailSafeTests(unittest.TestCase):
         self.assertEqual(res["status"], "no_fill")
         self.assertEqual(res["missed"][0]["exchange"], "Polymarket")
         self.assertIn("$0.700", res["missed"][0]["why"])
+
+    @mock.patch.object(trader_mod.config, "TRADE_ORDER", "together")
+    def test_together_checks_both_books(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 1000)])
+        p = FakeVenue("polymarket", no=[(0.50, 30), (0.80, 1000)])   # Polymarket is the thin one here
+        self.assertEqual(make(k, p).prepare(LEGS, hedge_depth=2)["size"], 15)

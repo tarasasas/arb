@@ -274,21 +274,28 @@ class Trader:
         first = "polymarket" if mode == "polymarket_first" else min(EXCHANGES, key=lambda ex: spare[ex])
         second = "kalshi" if first == "polymarket" else "polymarket"
 
-        def hedge_room(n):
-            """Shares the second leg's book holds at or below the price where n pairs break even."""
-            cn = cost_at(n)
-            room = (payout - (cn[first]["amount"] + cn[first]["fee"]) / n) * n
-            pmax = break_even_price(second, n, room, contracts[second].fee_coef, info[second]["tick"])
-            return sum(q for pr, q in levels[second] if pr <= pmax + 1e-9)
+        # Legs that may have to hedge the other: the second one, or either when both go out together.
+        hedgers = [(first, second), (second, first)] if mode == "together" else [(first, second)]
 
-        if hedge_depth > 1 and n > 0 and hedge_room(n) < hedge_depth * n:
+        def hedge_room(n, a, b):
+            """Shares leg b's book holds at or below the price where n pairs break even, given leg a's cost."""
+            cn = cost_at(n)
+            room = (payout - (cn[a]["amount"] + cn[a]["fee"]) / n) * n
+            pmax = break_even_price(b, n, room, contracts[b].fee_coef, info[b]["tick"])
+            return sum(q for pr, q in levels[b] if pr <= pmax + 1e-9)
+
+        def deep_enough(n):
+            return all(hedge_room(n, a, b) >= hedge_depth * n for a, b in hedgers)
+
+        if hedge_depth > 1 and n > 0 and not deep_enough(n):
             lo, hi = 0, int(n // step)
             while lo < hi:
                 mid = (lo + hi + 1) // 2
-                lo, hi = (mid, hi) if hedge_room(mid * step) >= hedge_depth * mid * step else (lo, mid - 1)
+                lo, hi = (mid, hi) if deep_enough(mid * step) else (lo, mid - 1)
             if lo <= 0:
-                raise TradeError(f"The {NAMES[second]} book is too thin to hedge safely (it needs {hedge_depth:g}x the "
-                                 f"shares within break-even). Nothing was traded.")
+                thin = " and ".join(NAMES[b] for a, b in hedgers if hedge_room(step, a, b) < hedge_depth * step)
+                raise TradeError(f"The {thin or NAMES[second]} book is too thin to hedge safely (it needs {hedge_depth:g}x "
+                                 f"the shares within break-even). Nothing was traded.")
             n = lo * step
             c = cost_at(n)
             spare = {ex: sum(q for pr, q in levels[ex] if pr <= c[ex]["limit"] + 1e-9) - n for ex in EXCHANGES}

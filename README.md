@@ -353,12 +353,11 @@ Trade requests need a token that only the dashboard page receives, so other webs
 trigger orders. The server listens on localhost only.
 
 **Order of the two orders** (`TRADE_ORDER` in `.env`):
-- `polymarket_first` (default): Polymarket, the slower site, goes first, then Kalshi is bought for exactly
-  what filled. If Polymarket misses (its price moved before the order arrived), nothing is traded at all
-  and there's no sell-back loss. Kalshi answers quickly, so its price has little time to move, and
-  if it does the order retries up to break-even.
-- `together`: both at the same moment. This is fastest overall, but when one side misses, the other has
-  already filled and gets sold back at a small loss.
+- `together` (default): both orders go out at the same moment, so neither waits for the other site's
+  answer and both land on the prices the scanner saw. If one side fills less, the short side is bought
+  again for the difference (never above break-even) and anything still unmatched is sold back.
+- `polymarket_first`: Polymarket goes first, then Kalshi is bought for exactly what filled. A Polymarket
+  miss trades nothing, but Kalshi's price has the whole Polymarket round trip (often a second) to move.
 - `thinner_first`: the book with less depth goes first.
 
 The checks before ordering (market info, order book and cash on both sites) run all at once, and
