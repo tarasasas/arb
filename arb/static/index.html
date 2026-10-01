@@ -1008,30 +1008,51 @@ function legCell(l) {
 }
 // ---- payouts by day: what your active arbs pay out, per calendar day -----------------------------
 let payDays = 30;
-try { payDays = +localStorage.getItem("arb-pay-days") || 30; } catch (e) {}
+try { const v = localStorage.getItem("arb-pay-days"); if (v !== null && !isNaN(+v)) payDays = +v; } catch (e) {}
 const dayKey = d => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 const niceStep = max => { const raw = max / 4, p = 10 ** Math.floor(Math.log10(raw || 1));
   return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || raw; };
 
-function payoutData(open, days) {
+// Ranges: up to 90 days one column per day, 6 months one per week, 1 year / All one per month.
+const PAY_RANGES = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [182, "6 months"], [365, "1 year"], [0, "All"]];
+const fmtDay = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+function payoutData(open, range) {
   const start = new Date(); start.setHours(0, 0, 0, 0);
-  const buckets = Array.from({ length: days }, (_, i) => {
-    const d = new Date(start); d.setDate(start.getDate() + i);
-    return { date: d, key: dayKey(d), pay: 0, profit: 0, arbs: [] };
+  const DAY = 864e5;
+  const latest = Math.max(0, ...open.map(a => a.closes ? new Date(a.closes) - start : 0).filter(v => !isNaN(v)));
+  const days = range || Math.max(30, Math.ceil(latest / DAY) + 1);
+  const unit = days <= 90 ? "day" : days <= 200 ? "week" : "month";
+  const end = new Date(start); end.setDate(start.getDate() + days);
+  const starts = [];
+  for (let d = new Date(start); d < end;) {
+    starts.push(new Date(d));
+    if (unit === "day") d.setDate(d.getDate() + 1);
+    else if (unit === "week") d.setDate(d.getDate() + 7);
+    else d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  }
+  const buckets = starts.map((d, i) => {
+    const thisYear = d.getFullYear() === start.getFullYear();
+    const mon = d.toLocaleDateString(undefined, { month: "short" });
+    const label = unit === "month" ? (thisYear ? mon : `${mon} '${String(d.getFullYear()).slice(2)}`)
+      : i === 0 && unit === "day" ? "Today" : fmtDay(d);
+    const long = unit === "day" ? d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
+      : unit === "week" ? `the week of ${fmtDay(d)}` : d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    return { date: d, next: starts[i + 1] || end, label, long, pay: 0, profit: 0, arbs: [] };
   });
-  const byKey = new Map(buckets.map(b => [b.key, b]));
   const overdue = { pay: 0, n: 0 }, later = { pay: 0, n: 0 }, unknown = { pay: 0, n: 0 };
   for (const a of open) {
     const t = a.closes ? new Date(a.closes) : null;
-    const where = !t || isNaN(t) ? unknown : t < start ? overdue : byKey.get(dayKey(t)) || later;
-    where.pay += a.guaranteed || 0; where.n = (where.n || 0) + 1;
-    if (where.arbs) { where.profit += a.profit || 0; where.arbs.push(a); }
+    const where = !t || isNaN(t) ? unknown : t < start ? overdue : t >= end ? later
+      : buckets.find(b => t >= b.date && t < b.next);
+    where.pay += a.guaranteed || 0;
+    if (where.arbs) { where.profit += a.profit || 0; where.arbs.push(a); } else where.n += 1;
   }
-  return { buckets, overdue, later, unknown };
+  return { buckets, overdue, later, unknown, unit, end, days };
 }
 
 function payoutChartHtml(open) {
-  const { buckets, overdue, later, unknown } = payoutData(open, payDays);
+  const { buckets, overdue, later, unknown, unit, end } = payoutData(open, payDays);
   // Drawn at the container's real width, so text stays 11px on a phone instead of shrinking.
   const box = document.getElementById("myarbs")?.clientWidth || 0;
   const W = Math.max(300, Math.min(1100, box ? box - 30 : 900)), H = W < 500 ? 170 : 200;
@@ -1040,8 +1061,7 @@ function payoutChartHtml(open) {
   const step = niceStep(max || 1), top = Math.max(step * Math.ceil((max || 1) / step), step);
   const y = v => T + plotH - (v / top) * plotH, slot = plotW / buckets.length;
   const bw = Math.min(24, Math.max(2, slot - 2));                 // <= 24px, 2px surface gap between neighbors
-  const every = buckets.length <= 7 ? (W < 500 ? 2 : 1) : buckets.length <= 31 ? (W < 500 ? 10 : 7) : (W < 500 ? 30 : 14);
-  const fmtDay = d => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const every = Math.max(1, Math.ceil(buckets.length / Math.floor(plotW / (unit === "month" ? 44 : 64))));
   const shortMoney = v => v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "K" : "$" + Math.round(v);
   let g = "";
   for (let v = 0; v <= top + 1e-9; v += step) {
@@ -1056,24 +1076,25 @@ function payoutChartHtml(open) {
     const bar = h ? `<path class="bar" fill="var(--chart)" d="M${x},${yb} V${yb - h + r} Q${x},${yb - h} ${x + r},${yb - h}
       H${x + bw - r} Q${x + bw},${yb - h} ${x + bw},${yb - h + r} V${yb} Z"/>` : "";
     g += `<rect class="hit" data-i="${i}" tabindex="${b.pay ? 0 : -1}" x="${L + i * slot}" y="${T}" width="${slot}" height="${plotH}"
-      aria-label="${esc(fmtDay(b.date))}: ${money(b.pay)} pays out"></rect>${bar}`;
+      aria-label="${esc(b.long)}: ${money(b.pay)} pays out"></rect>${bar}`;
     if (i === peak && b.pay > 0)
       g += `<text class="val" x="${x + bw / 2}" y="${yb - h - 5}" text-anchor="middle">${money(b.pay)}</text>`;
     if (i % every === 0)
-      g += `<text x="${L + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle">${i === 0 ? "Today" : esc(fmtDay(b.date))}</text>`;
+      g += `<text x="${L + i * slot + slot / 2}" y="${H - 8}" text-anchor="middle">${esc(b.label)}</text>`;
   });
   g += `<line x1="${L}" x2="${W - R}" y1="${T + plotH}" y2="${T + plotH}" stroke="var(--border)" stroke-width="1"/>`;
   const inRange = buckets.reduce((s, b) => s + b.pay, 0);
   const notes = [overdue.n && `${money(overdue.pay)} from ${overdue.n} arb${overdue.n > 1 ? "s" : ""} past their close date, waiting to settle`,
-    later.n && `${money(later.pay)} more after ${fmtDay(buckets[buckets.length - 1].date)}`,
+    later.n && `${money(later.pay)} more after ${fmtDay(new Date(end - 864e5))}`,
     unknown.n && `${money(unknown.pay)} with no close date`].filter(Boolean);
-  const rows = buckets.filter(b => b.pay > 0).map(b => `<tr><td>${esc(fmtDay(b.date))}</td><td class="num">${money(b.pay)}</td>
+  const rows = buckets.filter(b => b.pay > 0).map(b => `<tr><td>${esc(unit === "day" ? fmtDay(b.date) : b.long)}</td><td class="num">${money(b.pay)}</td>
     <td class="num">${money(b.profit)}</td><td>${b.arbs.map(a => esc(a.game)).join("; ")}</td></tr>`).join("");
   return `<div class="paychart">
-    <div class="head"><h3>Payouts by day <span class="muted" style="font-weight:400">${money(inRange)} in the next ${payDays} days<span class="d-only"> ·
+    <div class="head"><h3>Payouts by ${unit} <span class="muted" style="font-weight:400">${money(inRange)} ${payDays
+      ? `in the next ${payDays === 365 ? "year" : PAY_RANGES.find(r => r[0] === payDays)?.[1] || payDays + " days"}` : "in total"}<span class="d-only"> ·
       what active arbs pay whatever happens, on the day they close</span></span></h3>
-      <span class="range">${[7, 30, 90].map(d => `<button data-paydays="${d}" class="${d === payDays ? "on" : ""}">${d} days</button>`).join(" ")}</span></div>
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Guaranteed payout per day for the next ${payDays} days">${g}</svg>
+      <span class="range">${PAY_RANGES.map(([d, name]) => `<button data-paydays="${d}" class="${d === payDays ? "on" : ""}">${name}</button>`).join(" ")}</span></div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Guaranteed payout per ${unit}${payDays ? "" : " for all active arbs"}">${g}</svg>
     ${notes.length ? `<div class="notes">${notes.join(" · ")}</div>` : ""}
     <details><summary class="muted" style="margin:6px 0 0;font-weight:400">Show as table</summary>
       <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Day</th><th class="num">Pays out</th><th class="num">Profit</th><th>Arbs</th></tr></thead>
@@ -1086,7 +1107,8 @@ window.addEventListener("resize", () => { clearTimeout(payResize);
   payResize = setTimeout(() => { if (currentTab === MINE) renderMyArbs(); }, 200); });
 
 function wirePayoutChart(el, open) {
-  const { buckets } = payoutData(open, payDays);
+  const { buckets, unit } = payoutData(open, payDays);
+  buckets.forEach(b => { b.unit = unit; });
   let tip = document.getElementById("paytip");
   if (!tip) { tip = document.createElement("div"); tip.id = "paytip"; tip.className = "paytip"; document.body.appendChild(tip); }
   const show = (b, x, yPos) => {
@@ -1094,8 +1116,7 @@ function wirePayoutChart(el, open) {
     const head = document.createElement("div");
     const key = document.createElement("span"); key.className = "key";
     const val = document.createElement("b"); val.textContent = money(b.pay);
-    head.append(key, val, document.createTextNode(" pays out " +
-      b.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })));
+    head.append(key, val, document.createTextNode(` pays out ${b.unit === "day" ? "" : "in "}${b.long}`));
     const sub = document.createElement("div"); sub.className = "muted";
     sub.textContent = `${money(b.profit)} of it profit · ${b.arbs.length} arb${b.arbs.length > 1 ? "s" : ""}`;
     tip.append(head, sub);
