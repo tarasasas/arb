@@ -1,5 +1,6 @@
 @echo off
 rem Gets the latest code, then starts the scanner and opens the dashboard at http://localhost:8791
+rem With DASHBOARD_PASSWORD in .env it also serves your phone on Wi-Fi (the window shows the address).
 rem Close this window (or press Ctrl+C) to stop it. To skip the update: start-dashboard.bat --no-update
 rem The block below is parsed in one go, so it is safe for the update to rewrite this file.
 if /i not "%~1"=="--no-update" (

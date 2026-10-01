@@ -352,8 +352,9 @@ under **Filters & settings**, and every button is big enough to tap.
    ```
    DASHBOARD_PASSWORD=pick-something-long
    ```
-2. Start with phone mode: `start-dashboard.bat --phone` (or put `DASHBOARD_PHONE=1` in `.env` to
-   always use it). The console prints the address to open, like `http://192.168.1.20:8791`.
+2. Start the dashboard as usual (`start-dashboard.bat`). With a password set, it serves your phone
+   too. The console prints the address to open, like `http://192.168.1.20:8791`.
+   (`start-dashboard.bat --local` keeps it on this computer only.)
 3. On the iPhone, on the same Wi-Fi, open that address in Safari and log in with the password.
 4. In Safari, tap **Share → Add to Home Screen**. It then opens full-screen like an app.
 

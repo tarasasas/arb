@@ -45,7 +45,9 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8791)
     ap.add_argument("--no-browser", action="store_true", help="don't open the dashboard automatically")
     ap.add_argument("--phone", action="store_true",
-                    help="also serve the dashboard on your local network for your phone (needs DASHBOARD_PASSWORD in .env)")
+                    help="also serve the dashboard on your local network for your phone (needs DASHBOARD_PASSWORD in .env); "
+                         "on by default once DASHBOARD_PASSWORD is set")
+    ap.add_argument("--local", action="store_true", help="this computer only, even if DASHBOARD_PASSWORD is set")
     args = ap.parse_args(argv)
 
     scanner = Scanner()
@@ -58,8 +60,11 @@ def main(argv=None):
 
     from .server import serve
     from . import config
-    serve(scanner, args.port, open_browser=not args.no_browser,
-          phone=args.phone or config.DASHBOARD_PHONE, password=config.DASHBOARD_PASSWORD)
+    phone = not args.local and (args.phone or config.DASHBOARD_PHONE or bool(config.DASHBOARD_PASSWORD))
+    if not phone and not args.local:
+        scanner.log("Phone access off: add DASHBOARD_PASSWORD=<at least 8 characters> to .env to open the "
+                    "dashboard on your phone (see 'On your iPhone' in the README)")
+    serve(scanner, args.port, open_browser=not args.no_browser, phone=phone, password=config.DASHBOARD_PASSWORD)
     return 0
 
 
