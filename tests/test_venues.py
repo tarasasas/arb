@@ -118,3 +118,16 @@ class FillPriceTests(unittest.TestCase):
                 return {"fill_count": "10", "average_fill_price": "0.51", "average_fee_paid": "0.0175"}
         f = venue(Http()).buy("T", "no", 10, 0.52, 0.07, expect=0.49)
         self.assertAlmostEqual(f.avg, 0.49)                      # was recorded as 0.51 before
+
+
+class KalshiTickTests(unittest.TestCase):
+    def test_no_orders_stay_on_the_yes_books_grid(self):
+        class Http:
+            def get(self, path, params=None):
+                return {"market": {"status": "active", "price_ranges": [
+                    {"start": "0", "end": "0.9", "step": "0.01"}, {"start": "0.9", "end": "1", "step": "0.001"}]}}
+        tick = venue(Http()).market_info("T")["tick"]
+        self.assertEqual(tick(0.9257), 0.01)        # a NO cost here goes out at YES 0.0743: whole cents there
+        self.assertEqual(tick(0.5), 0.01)
+        limit = venues.floor_to(0.9257, tick(0.9257))
+        self.assertAlmostEqual((1 - limit) * 100, round((1 - limit) * 100))

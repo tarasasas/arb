@@ -179,7 +179,15 @@ class Trader:
         if ex == "kalshi":
             shards = b.get("kalshi_shards")
             if shards is not None:
-                return shards.get(str(shard or 0))
+                have = shards.get(str(shard or 0))
+                if have is not None and config.KALSHI_SHARD_MODE == "even":
+                    # Kalshi's rebalancing trims a shard above its equal share every ~10s, so a reading up to
+                    # CASH_MAX_AGE old may overstate it; an order sized on that would be refused.
+                    from .shards import even_split
+                    pct = even_split().get(int(shard or 0))
+                    if pct:
+                        have = min(have, sum(float(v or 0) for v in shards.values()) * pct / 100)
+                return have
             return b.get("kalshi") if not shard else None
         return b.get("polymarket")
 
@@ -484,7 +492,7 @@ class Trader:
         fills_b, hedged, first_attempt = [], 0.0, 0
         if plan.get("together"):
             # 1. both legs at once at their planned limits
-            A, B, fa, fb = self._send_both(plan, info, record, steps, log)
+            A, B, fa, fb, refused = self._send_both(plan, info, record, steps, log)
             va, vb = self.venues[A["exchange"]], self.venues[B["exchange"]]
             if fa.qty <= 0:
                 errs = {o["exchange"]: o["error"] for o in log["orders"] if o.get("error")}
@@ -496,7 +504,8 @@ class Trader:
                 return self._result(plan, "no_fill", steps, fa, [], None, 0,
                                     "Neither order filled (the prices moved). Nothing was traded.", missed)
             fills_b, hedged, first_attempt = [fb], fb.qty, 1     # B's planned-limit try is done
-            return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record)
+            return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record,
+                                b_refused=B["exchange"] in refused)
 
         # 1. first leg (meanwhile the second site gets a connection ready for its order)
         warm = getattr(vb, "warm", None)
@@ -546,9 +555,9 @@ class Trader:
         return out
 
     def _send_both(self, plan, info, record, steps, log):
-        """Send both orders at the same moment, at together_limits. Returns (A, B, fill A, fill B) with A
-        the side that filled more (plan["first"] is set to it). A rejected order counts as no fill; an
-        order whose outcome can't be confirmed stops everything."""
+        """Send both orders at the same moment, at together_limits. Returns (A, B, fill A, fill B, sites that
+        refused their order outright) with A the side that filled more (plan["first"] is set to it). A
+        rejected order counts as no fill; an order whose outcome can't be confirmed stops everything."""
         legs = [plan["legs"]["kalshi"], plan["legs"]["polymarket"]]
         limits = plan["together_limits"] = self.together_limits(plan, info)
 
@@ -559,10 +568,12 @@ class Trader:
                 return None, e
         with LanePool(2) as pool:
             out = list(pool.map(send, legs))
-        fills, unknown = {}, []
+        fills, unknown, refused = {}, [], set()
         for leg, (fill, err) in zip(legs, out):
             name = NAMES[leg["exchange"]]
             if isinstance(err, ApiError):
+                if 400 <= err.status < 500:
+                    refused.add(leg["exchange"])
                 record("together", leg, error=str(err))
                 hint = (" (Kalshi keeps cash per exchange shard and this market's shard is short)"
                         if "shard" in str(err.detail).lower() else "")
@@ -584,16 +595,21 @@ class Trader:
         first = max(("kalshi", "polymarket"), key=lambda ex: fills[ex].qty)
         plan["first"] = first
         second = "polymarket" if first == "kalshi" else "kalshi"
-        return plan["legs"][first], plan["legs"][second], fills[first], fills[second]
+        return plan["legs"][first], plan["legs"][second], fills[first], fills[second], refused
 
-    def _finish(self, plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record):
-        # 2. second leg, sized to what actually filled, never above break-even
+    def _finish(self, plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record,
+                b_refused=False):
+        # 2. second leg, sized to what actually filled, never above break-even. b_refused: B's site refused
+        #    its order outright (a 4xx, e.g. not enough cash): the same order would be refused again, so the
+        #    first leg is closed straight away instead of after the retries and their pauses.
         target = floor_to(fa.qty, B["min_qty"])
         a_cost_per = (fa.amount + fa.fee) / fa.qty
         tick_b = info[B["exchange"]]["tick"]
         status, note = "ok", ""
         last = {"limit": B["limit"], "error": None}
         for attempt in range(first_attempt, 1 + config.SECOND_LEG_RETRIES):
+            if b_refused:
+                break
             remaining = floor_to(target - hedged, B["min_qty"])
             if remaining <= 0:
                 break
@@ -610,6 +626,7 @@ class Trader:
                 record("second", B, error=str(e))
                 steps.append(f"{NAMES[B['exchange']]}: order rejected ({e.detail})")
                 last.update(limit=limit, error=e.detail)
+                b_refused = 400 <= e.status < 500
                 fb = Fill()
             except Exception as e:      # network error: the order may or may not exist, so stop here
                 record("second", B, error=repr(e))
@@ -624,7 +641,7 @@ class Trader:
                              f"for ${fb.amount:.2f} + ${fb.fee:.2f} fee" + (f" (retry {attempt})" if attempt else ""))
             fills_b.append(fb)
             hedged += fb.qty
-            if hedged + 1e-9 < target and attempt < config.SECOND_LEG_RETRIES:
+            if hedged + 1e-9 < target and attempt < config.SECOND_LEG_RETRIES and not b_refused:
                 self._await_liquidity(B, last["limit"], since=time.time())
 
         # 3. close whatever the second leg couldn't cover at break-even, the cheaper way
@@ -633,7 +650,8 @@ class Trader:
         if excess > 1e-9:
             status = "partial"
             cash_b = (B.get("balance") or math.inf) - sum(f.amount + f.fee for f in fills_b)
-            extra, sold = self._close_out(plan, info, A, B, va, vb, excess, a_cost_per, cash_b, record, steps)
+            extra, sold = self._close_out(plan, info, A, B, va, vb, excess, a_cost_per, cash_b, record, steps,
+                                          hedge_ok=not b_refused)
             fills_b += extra
             hedged += sum(f.qty for f in extra)
         if status == "partial":          # after the close-out: looking at the book can wait, that can't
@@ -694,7 +712,7 @@ class Trader:
                 return
             time.sleep(0.02)
 
-    def _close_out(self, plan, info, A, B, va, vb, excess, a_cost_per, cash_b, record, steps):
+    def _close_out(self, plan, info, A, B, va, vb, excess, a_cost_per, cash_b, record, steps, hedge_ok=True):
         """First-leg shares the second leg couldn't hedge at break-even. Close them whichever way gets
         more back per share: sell them back into the first site's bids, or hedge them on the second
         site a little above break-even (at most CLOSE_OUT_MAX_LOSS per share). Returns (extra
@@ -719,7 +737,7 @@ class Trader:
         sell_per = ((sum(p * q for p, q in sell_fills) - total_fee(A["exchange"], sell_fills, A["fee_coef"])) / sell_q
                     if sell_q else -math.inf)
         extra, sold = [], None
-        if hedge_q and hedge_per > sell_per and hedge_cost <= cash_b:
+        if hedge_ok and hedge_q and hedge_per > sell_per and hedge_cost <= cash_b:
             try:
                 fb = self._timed_buy(plan, "close hedge", B, hedge_q, hedge_fills[-1][0],
                                      expect=sum(p * q for p, q in hedge_fills) / hedge_q)
@@ -910,6 +928,24 @@ class Trader:
                 "first_exchange": A["exchange"], "checks": plan.get("checks")}
 
     def _write(self, log, status):
+        """Append the trade to trades.jsonl. Most calls come after the orders went out, so a file that can't
+        be written (e.g. open in Excel, which locks it) must not turn a finished trade into an error: the
+        line goes to trades.pending.jsonl instead, and the log says so."""
         log["status"], log["finished"] = status, engine.now_utc().isoformat()
-        with open(config.TRADES_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log, default=str) + "\n")
+        line = json.dumps(log, default=str) + "\n"
+        try:
+            with open(config.TRADES_LOG, "a", encoding="utf-8") as f:
+                f.write(line)
+            return
+        except OSError as e:
+            error = e
+        side = config.TRADES_LOG.with_name(config.TRADES_LOG.stem + ".pending.jsonl")
+        try:
+            with open(side, "a", encoding="utf-8") as f:
+                f.write(line)
+            where = side.name
+        except OSError:
+            where = "nowhere: that failed too, so it's only in this log line: " + line[:2000]
+        note = getattr(self.scanner, "log", None)
+        if note:
+            note(f"Couldn't write {config.TRADES_LOG.name} ({error}); this trade was saved to {where}")

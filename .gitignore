@@ -6,6 +6,7 @@
 
 # Trade log (your account activity)
 trades.jsonl
+trades.pending.jsonl
 paper_trades.jsonl
 
 # Python

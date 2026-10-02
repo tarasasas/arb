@@ -327,6 +327,27 @@ class AutoTradeIntegrationTests(unittest.TestCase):
         self.assertNotIn("Kalshi first", decided[0][2])           # no longer stale by then
         self.assertEqual(a.history[0]["order"], decided[0][2])     # the history shows the order actually used
 
+    def test_rows_not_rechecked_lately_are_left_alone(self):
+        s, a = self.make([row(game="stale", profit=0.9), row(game="fresh", profit=0.3)])
+        s.state["opportunities"][0]["detected_ts"] = time.time() - 45      # kept from an earlier pass
+        s.state["opportunities"][1]["legs"] = [{"exchange": "Kalshi", "market_id": "K2", "side": "yes"},
+                                               {"exchange": "Polymarket", "market_id": "P2", "side": "no"}]
+        s.state["opportunities"][1]["detected_ts"] = time.time() - 0.5
+        self.assertEqual(a.pick(s.state["opportunities"])["game"], "fresh")
+
+    def test_daily_spend_and_net_survive_a_restart(self):
+        import tempfile as tf
+        d = Path(tf.mkdtemp())
+        s, _ = self.make([row()])
+        a = autotrade.AutoTrader(s, run_async=False, stats_path=d / "exec_stats.json")
+        a.spend[a._today()], a.net[a._today()] = 60.0, -4.5
+        a._save_day()
+        b = autotrade.AutoTrader(s, run_async=False, stats_path=d / "exec_stats.json")    # after a restart
+        self.assertEqual((b.spent_today(), b.net[b._today()]), (60.0, -4.5))
+        (d / "auto_trade_day.json").write_text('{"date": "2000-01-01", "spend": 99, "net": -9}')
+        c = autotrade.AutoTrader(s, run_async=False, stats_path=d / "exec_stats.json")
+        self.assertEqual(c.spent_today(), 0)                       # another day's totals don't count
+
     def test_real_results_feed_the_throttle(self):
         miss = {"status": "partial", "hedged_pairs": 0, "net": -0.3, "unhedged_shares": 0, "slip": 0.03,
                 "order_mode": "thinner_first", "steps": [], "missed": [{"exchange": "Kalshi", "why": "moved", "gap": 0.03}],

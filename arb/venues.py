@@ -64,13 +64,14 @@ class KalshiVenue:
         m = self.client.http.get(f"/markets/{ticker}")["market"]
         ranges = [(float(r["start"]), float(r["end"]), float(r["step"])) for r in m.get("price_ranges") or []]
 
-        def tick(price):
+        def step_at(price):
             for start, end, step in ranges:
                 if start - 1e-9 <= price <= end + 1e-9:
                     return step
             return 0.01
 
-        return {"open": m.get("status") == "active", "tick": tick,
+        # Orders are priced on the YES book, so a NO cost c goes out as 1 - c: use a step valid at both.
+        return {"open": m.get("status") == "active", "tick": lambda p: max(step_at(p), step_at(1 - p)),
                 "min_qty": 0.01 if m.get("fractional_trading_enabled") else 1.0,
                 "shard": int(m.get("exchange_index") or 0)}
 

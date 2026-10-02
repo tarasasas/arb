@@ -184,6 +184,66 @@ class ExpectedPriceTests(unittest.TestCase):
             leg = plan["legs"][ex]
             self.assertAlmostEqual(expect, leg["amount"] / plan["size"])
 
+
+@mock.patch.object(trader_mod.config, "TRADES_LOG", new_callable=lambda: __import__("pathlib").Path(__import__("tempfile").gettempdir()) / "arb_test_trades.jsonl")
+@mock.patch.object(trader_mod.time, "sleep", lambda _s: None)
+class AuditFixTests(unittest.TestCase):
+    class Refusing(FakeVenue):
+        def buy(self, *a, **kw):
+            self.orders.append(("refused",))
+            raise trader_mod.ApiError(400, "insufficient balance")
+
+    def test_a_refused_second_leg_is_closed_out_at_once(self, *_):
+        k = self.Refusing("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.55, 100)])
+        with mock.patch.object(trader_mod.config, "TRADE_ORDER", "polymarket_first"):
+            t = make(k, p)
+            res = t.execute(t.prepare(LEGS)["id"])
+        self.assertEqual(len(k.orders), 1)                        # not retried, no closing hedge there either
+        self.assertEqual(res["status"], "partial")
+        self.assertEqual([o[2] for o in p.orders if o[0] == "sell"], [20])
+
+    def test_a_refused_order_sent_with_the_other_is_not_retried(self, *_):
+        k = self.Refusing("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)], yes=[(0.48, 500)])
+        with mock.patch.object(trader_mod.config, "TRADE_ORDER", "together"):
+            t = make(k, p)
+            t.execute(t.prepare(LEGS)["id"])
+        self.assertEqual(len(k.orders), 1)
+
+    def test_a_trade_log_that_cant_be_written_doesnt_lose_the_trade(self, log_path):
+        import builtins
+        k, p = FakeVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        t.scanner.log = lambda m: t.scanner.__dict__.setdefault("logs", []).append(m)
+        plan = t.prepare(LEGS)
+        side = log_path.with_name(log_path.stem + ".pending.jsonl")
+        side.unlink(missing_ok=True)
+        real_open = builtins.open
+
+        def locked(path, *a, **kw):
+            if str(path) == str(log_path):
+                raise PermissionError(13, "being used by another process")
+            return real_open(path, *a, **kw)
+        with mock.patch("builtins.open", locked):
+            res = t.execute(plan["id"])                           # no exception: the orders are done
+        self.assertEqual(res["status"], "ok")
+        self.assertIn('"status": "ok"', side.read_text())
+        self.assertIn("trades.pending.jsonl", t.scanner.logs[-1])
+        side.unlink()
+
+    def test_even_split_counts_no_more_than_a_shards_share_of_cached_cash(self, *_):
+        from datetime import timedelta
+        sc = FakeScanner()
+        t0 = (trader_mod.engine.now_utc() - timedelta(seconds=5)).isoformat()
+        sc.state = {"balances": {"kalshi": 66.49, "kalshi_shards": {"0": 49.99, "2": 0.01, "3": 16.49}, "time": t0}}
+        t = Trader(sc, {})
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "even"):
+            self.assertAlmostEqual(t._cached_cash("kalshi", 0), 66.49 * 0.34, places=4)   # Kalshi trims it to this
+            self.assertAlmostEqual(t._cached_cash("kalshi", 3), 16.49)                      # already below its share
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "manual"):
+            self.assertAlmostEqual(t._cached_cash("kalshi", 0), 49.99)
+
 class ShardTests(unittest.TestCase):
     def test_empty_shard_explains_what_to_do(self):
         class ShardVenue(FakeVenue):

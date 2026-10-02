@@ -135,6 +135,9 @@ class AutoTrader:
     def __init__(self, scanner, run_async=True, stats_path=None):
         self.scanner, self.run_async = scanner, run_async
         self.stats = execpolicy.ExecStats(stats_path)   # results per market type: buffers, pauses, leg order
+        # Today's spend and net, kept on disk: the daily limit and the daily loss stop must survive a restart
+        # (start-dashboard.bat restarts the app every time).
+        self.day_path = stats_path.with_name("auto_trade_day.json") if stats_path else None
         self.on, self.busy, self.halted = False, False, None
         self.lock = threading.Lock()
         self.spend = {}                 # local date -> dollars used by Auto-trade
@@ -143,10 +146,32 @@ class AutoTrader:
         self.game_pause = {}            # game -> time until which it's skipped (after a miss)
         self.history = deque(maxlen=20)
         self.misses = {}                # site -> misses in a row (reset by a trade where both legs filled)
+        self._load_day()
 
     @staticmethod
     def _today():
         return datetime.now().strftime("%Y-%m-%d")
+
+    def _load_day(self):
+        try:
+            d = json.loads(self.day_path.read_text(encoding="utf-8")) if self.day_path else {}
+        except (OSError, ValueError):
+            return
+        if d.get("date") == self._today():
+            self.spend[d["date"]], self.net[d["date"]] = float(d.get("spend") or 0), float(d.get("net") or 0)
+
+    def _save_day(self):
+        if not self.day_path:
+            return
+        day = self._today()
+        try:
+            self.day_path.parent.mkdir(exist_ok=True)
+            tmp = self.day_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"date": day, "spend": round(self.spend.get(day, 0.0), 4),
+                                       "net": round(self.net.get(day, 0.0), 4)}), encoding="utf-8")
+            tmp.replace(self.day_path)
+        except OSError:
+            pass
 
     def spent_today(self):
         return round(self.spend.get(self._today(), 0.0), 2)
@@ -188,7 +213,9 @@ class AutoTrader:
     def pick(self, rows, now=None):
         """The most profitable fast row worth trading that wasn't tried in the last cooldown."""
         now = now or time.time()
+        wall = time.time()
         ok = [r for r in rows if (r.get("fast") or {}).get("ok")
+              and wall - (r.get("detected_ts") or wall) <= config.AUTO_TRADE_MAX_ROW_AGE
               and (r.get("profit") or 0) >= config.AUTO_TRADE_MIN_PROFIT
               and (r.get("roi") or 0) >= config.AUTO_TRADE_MIN_ROI
               and (config.AUTO_TRADE_LIVE_GAMES or not in_play(r))
@@ -250,6 +277,7 @@ class AutoTrader:
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used
                 self.net[self._today()] = self.net.get(self._today(), 0.0) + res["net"]
+                self._save_day()
             entry.update({"status": res["status"], "pairs": res["hedged_pairs"], "spent": used, "net": res["net"],
                           "unhedged": res["unhedged_shares"], "ms": (res.get("timeline") or {}).get("stages")})
             if res["status"] in ("partial", "no_fill"):
