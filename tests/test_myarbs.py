@@ -46,6 +46,12 @@ class MyArbsTests(unittest.TestCase):
             {"exchange": "polymarket", "side": "yes", "shares": 12.04, "paid": 1.89}]})
         self.assertEqual((s["pairs"], s["unhedged"]), (12, []))
         self.assertEqual(s["leftover"], [{"exchange": "polymarket", "side": "yes", "shares": 0.04}])
+        # 9 Kalshi YES against 8.8 Polymarket NO: 0.2 Kalshi share left over
+        s = myarbs.summarize({"payout": 1.0, "legs": [
+            {"exchange": "kalshi", "side": "yes", "shares": 9, "paid": 8.44},
+            {"exchange": "polymarket", "side": "no", "shares": 8.8, "paid": 0.40}]})
+        self.assertEqual((s["pairs"], s["unhedged"], s["leftover"]),
+                         (8.8, [], [{"exchange": "kalshi", "side": "yes", "shares": 0.2}]))
 
     def test_save_edit_delete_persist(self):
         a = self.store.save({"game": "BTC", "legs": legs()})

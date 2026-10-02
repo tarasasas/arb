@@ -1410,6 +1410,18 @@ function renderUnpaired(open) {
     <div class="unp">${card("kalshi", "Kalshi")}${card("polymarket", "Polymarket")}</div>`;
 }
 
+// Under one share extra on one side (Polymarket trades fractions of a share, Kalshi doesn't): the fix is
+// always on Polymarket, buying the missing fraction or selling the extra one.
+function leftoverHtml(a, u) {
+  const leg = a.legs.find(l => l.exchange === u.exchange) || {}, pm = a.legs.find(l => l.exchange === "polymarket") || {};
+  const stake = leg.shares ? leg.paid / leg.shares * u.shares : null, n = compact(u.shares);
+  const fix = u.exchange === "kalshi"
+    ? `buy ${n} more ${String(pm.side || "").toUpperCase()} on Polymarket to hedge it`
+    : `sell those ${n} on Polymarket, or leave them`;
+  return `<div class="muted" style="white-space:normal">${n} ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"}
+    not paired (a fraction of a share${stake != null ? `, ${money(stake)} at stake` : ""}): ${fix}.</div>`;
+}
+
 function renderMyArbs() {
   const el = document.getElementById("myarbs"); if (!el) return;
   const open = mySorted(myArbs.filter(isOpen)), paidOut = myArbs.filter(a => a.paid_out),
@@ -1427,9 +1439,7 @@ function renderMyArbs() {
       <td class="c-legs">${a.legs.map(legCell).join("")}
         ${a.unhedged.length ? `<div class="warn" style="white-space:normal">${WARN_ICON}${a.unhedged.map(u =>
           `${compact(u.shares)} ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"} not hedged`).join("; ")}</div>` : ""}
-        ${(a.leftover || []).length ? `<div class="muted" style="white-space:normal">${a.leftover.map(u =>
-          `+${compact(u.shares)} extra ${u.side.toUpperCase()} on ${u.exchange === "kalshi" ? "Kalshi" : "Polymarket"}`).join("; ")}:
-          less than one share, so it can't be hedged (under $1 at stake)</div>` : ""}</td>
+        ${(a.leftover || []).map(u => leftoverHtml(a, u)).join("")}</td>
       <td class="num" data-l="Paid">${money(a.paid)}</td><td class="num" data-l="Pays">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
       <td class="num profit" data-l="Profit">${money(a.profit)}</td><td class="num" data-l="ROI">${pct(a.roi)}</td>
       <td class="num c-worth" data-l="Worth now">${a.worth_now == null ? "–" : money(a.worth_now)}</td>

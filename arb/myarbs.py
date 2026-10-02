@@ -28,8 +28,8 @@ def summarize(arb):
     pairs = min(leg["shares"] for leg in legs) if legs else 0
     paid = sum(leg["paid"] for leg in legs)
     guaranteed = arb.get("payout", 1.0) * pairs
-    # Extra shares on one side. Less than one share (a Polymarket buy by dollar amount gets e.g. 12.04)
-    # can't be hedged, since Kalshi trades whole contracts, and risks under $1: listed as leftover, not unhedged.
+    # Extra shares on one side. Less than one share (Polymarket fills fractions: a buy by dollar amount gets
+    # e.g. 12.04 or 8.8) risks under $1 and is evened up on Polymarket: listed as leftover, not unhedged.
     extra = [{"exchange": leg["exchange"], "side": leg["side"], "shares": round(leg["shares"] - pairs, 4)}
              for leg in legs if leg["shares"] - pairs > 1e-6]
     unhedged = [x for x in extra if x["shares"] >= 1 - 1e-6]
