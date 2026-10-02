@@ -164,6 +164,7 @@
     #myarbs td.c-mkt, #myarbs td.c-when, #myarbs td.c-placed, #myarbs td.c-legs, #myarbs td.c-acts, #myarbs td.empty { grid-column: 1 / -1; }
     #myarbs td.c-when, #myarbs td.c-placed { font-size: 12.5px; color: var(--text-muted); }
     #myarbs td.c-when::before { content: "pays out "; } #myarbs td.c-placed::before { content: "placed "; }
+    #myarbs td.c-paid { grid-column: 1 / -1; font-size: 12.5px; color: var(--text-muted); } #myarbs td.c-paid::before { content: "paid out "; }
     #myarbs td.c-legs { margin: 8px 0; padding-top: 8px; border-top: 1px solid var(--border); }
     #myarbs td.num { text-align: left; } #myarbs td.num::before { content: attr(data-l); display: block; font-size: 11px;
       color: var(--text-muted); font-weight: 400; }
@@ -1137,8 +1138,51 @@ let myArbs = [], myUnpaired = [], mySync = {};
 async function loadMyArbs() {
   try { const d = await (await fetch("/api/myarbs")).json();
     myArbs = d.arbs || []; myUnpaired = d.unpaired || []; mySync = d.sync || {}; renderMyArbs();
-    document.getElementById("v-pos").textContent = myArbs.filter(a => !a.settled).length || ""; } catch (e) {}
+    document.getElementById("v-pos").textContent = myArbs.filter(isOpen).length || ""; } catch (e) {}
 }
+// Money still out: trading, or the markets are over and the payout hasn't arrived. (Older servers: !settled.)
+const isOpen = a => a.phase ? a.phase === "active" || a.phase === "awaiting" : !a.settled;
+const realProfit = a => a.paid_out ? a.paid_out.profit : a.profit;
+const realCost = a => a.paid_out ? a.paid_out.cost : a.paid;
+
+// ---- Paid out: arbs whose markets have both paid, with what they really paid ------------------------
+function paidOutHtml(paid) {
+  if (!paid.length) return "";
+  const list = [...paid].sort((x, y) => Date.parse(y.paid_out.time) - Date.parse(x.paid_out.time));
+  const sum = (f, l = list) => l.reduce((s, a) => s + (f(a) || 0), 0);
+  const monthAgo = Date.now() - 30 * 864e5, recent = list.filter(a => Date.parse(a.paid_out.time) >= monthAgo);
+  const ratio = (p, c) => c > 0 ? pct(p / c) : "–";
+  const legRes = (a, l) => {
+    const won = l.paid_out > 0.004, ex = l.exchange === "kalshi" ? "Kalshi" : "Polymarket";
+    return `<div><span class="ex ${l.exchange === "kalshi" ? "kalshi" : "poly"}">${ex.toUpperCase()}</span>
+      <b>${sideName(l)}</b> · ${compact(l.shares)} shares · result ${esc((l.result || "?").toUpperCase())}
+      <span class="state ${won ? "settled" : ""}">${won ? "paid " + money(l.paid_out) : "paid $0"}</span></div>`;
+  };
+  const rows = list.map(a => { const po = a.paid_out, roi = po.cost > 0 ? po.profit / po.cost : 0;
+    return `<tr>
+      <td class="c-mkt"><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span></td>
+      <td class="c-placed" style="white-space:nowrap">${esc(localTime(a.placed || a.created))}</td>
+      <td class="c-paid" style="white-space:nowrap">${esc(localTime(po.time))}</td>
+      <td class="c-legs">${po.legs.map(l => legRes(a, l)).join("")}</td>
+      <td class="num" data-l="Cost">${money(po.cost)}</td><td class="num" data-l="Paid out">${money(po.amount)}</td>
+      <td class="num ${po.profit >= 0 ? "profit" : ""}" data-l="Profit" style="${po.profit < 0 ? "color:var(--critical)" : ""}">${
+        po.profit < 0 ? "−" : ""}${money(Math.abs(po.profit))}</td><td class="num" data-l="ROI">${pct(roi)}</td>
+      <td class="c-acts"><button data-mine="del" data-id="${esc(a.id)}">Remove</button></td></tr>`; }).join("");
+  return `<h2 style="font-size:15px">Paid out <span class="muted" style="font-weight:400;font-size:13px">arbs that have finished, with what both sites actually paid</span></h2>
+    <div class="sumgrid" style="max-width:none">
+      <div class="sumcard"><div class="label">Paid out</div><div class="big">${money(sum(a => a.paid_out.amount))}</div>
+        <div class="sub">${list.length} arb${list.length === 1 ? "" : "s"} finished</div></div>
+      <div class="sumcard"><div class="label">Profit made</div><div class="big profit">${money(sum(a => a.paid_out.profit))}
+        <span style="font-size:.55em">${ratio(sum(a => a.paid_out.profit), sum(a => a.paid_out.cost))}</span></div>
+        <div class="sub">on ${money(sum(a => a.paid_out.cost))} put in, fees included</div></div>
+      <div class="sumcard"><div class="label">Last 30 days</div><div class="big profit">${money(sum(a => a.paid_out.profit, recent))}</div>
+        <div class="sub">${recent.length} arb${recent.length === 1 ? "" : "s"} paid ${money(sum(a => a.paid_out.amount, recent))}</div></div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Market</th><th>Placed</th><th>Paid out</th><th>Results</th>
+      <th class="num">Cost</th><th class="num">Paid out</th><th class="num">Profit</th><th class="num">ROI</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
 function syncLine() {
   const s = mySync;
   if (s.status === "ok") return `Live position check: ${s.positions} open position${s.positions === 1 ? "" : "s"} on your accounts,
@@ -1367,14 +1411,16 @@ function renderUnpaired(open) {
 
 function renderMyArbs() {
   const el = document.getElementById("myarbs"); if (!el) return;
-  const open = mySorted(myArbs.filter(a => !a.settled)), done = mySorted(myArbs.filter(a => a.settled));
+  const open = mySorted(myArbs.filter(isOpen)), paidOut = myArbs.filter(a => a.paid_out),
+        done = mySorted(myArbs.filter(a => !isOpen(a) && !a.paid_out));     // sold out early (or older servers)
   const tot = (k, list = open) => list.reduce((s, a) => s + (a[k] || 0), 0);
   const ratio = (p, c) => c > 0 ? pct(p / c) : "–";
   const rows = list => list.map(a => `<tr>
       <td class="c-mkt"><b>${esc(a.game)}</b> <span class="muted">${esc(a.tab || "")}</span>
         <div class="muted">${a.source === "make_trade" ? "via Make trade"
           : a.source === "account" ? `from your accounts${a.edited ? " (edited)" : ""}` : "added by hand"}</div>
-        ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}${a.settled ? "" : verdictHtml(a)}</td>
+        ${a.note ? `<div class="muted">${esc(a.note)}</div>` : ""}${a.phase === "awaiting"
+          ? `<div class="muted" style="margin-top:4px">Both markets are over: waiting for the payout</div>` : isOpen(a) ? verdictHtml(a) : ""}</td>
       <td class="c-placed" style="white-space:nowrap">${esc(localTime(a.placed || a.created))}</td>
       <td class="c-when" style="white-space:nowrap">${esc(localTime(a.closes))}</td>
       <td class="c-legs">${a.legs.map(legCell).join("")}
@@ -1384,7 +1430,7 @@ function renderMyArbs() {
       <td class="num profit" data-l="Profit">${money(a.profit)}</td><td class="num" data-l="ROI">${pct(a.roi)}</td>
       <td class="num c-worth" data-l="Worth now">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
       <td class="c-acts"><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
-          <button data-mine="del" data-id="${esc(a.id)}">${a.settled ? "Remove" : "Delete"}</button></td></tr>`).join("");
+          <button data-mine="del" data-id="${esc(a.id)}">${isOpen(a) ? "Delete" : "Remove"}</button></td></tr>`).join("");
   const head = `<thead><tr>${myTh("game", "Market")}${myTh("placed", "Placed", "", "When you placed it (your first Kalshi fill)")}${
     myTh("closes", "Pays out", "", "Sort by when it pays out")}${
     myTh("unhedged", "Your orders", "", "Sort by shares not hedged")}${myTh("paid", "Paid", "num")}${
@@ -1393,15 +1439,20 @@ function renderMyArbs() {
   el.innerHTML = `
     <div class="sumgrid" style="max-width:none">
       <div class="sumcard"><div class="label">Active arbs</div><div class="big">${open.length}</div>
-        <div class="sub">${done.length} settled${(() => { const bad = open.filter(x => arbVerdict(x).ok === false).length;
+        <div class="sub">${paidOut.length} paid out${(() => { const bad = open.filter(x => arbVerdict(x).ok === false).length;
           return bad ? ` · <span style="color:var(--critical)">${bad} not an arb at your cost</span>` : ""; })()}</div></div>
       <div class="sumcard"><div class="label">Money in active arbs</div><div class="big">${money(tot("paid"))}</div>
         <div class="sub">pays back ${money(tot("guaranteed"))} whatever happens</div></div>
       <div class="sumcard"><div class="label">Locked profit</div><div class="big profit">${money(tot("profit"))}
         <span style="font-size:.55em">${ratio(tot("profit"), tot("paid"))}</span></div>
         <div class="sub">profit ÷ money in, active arbs, fees included</div></div>
-      <div class="sumcard"><div class="label">All arbs, incl. settled</div><div class="big profit">${ratio(tot("profit", myArbs), tot("paid", myArbs))}</div>
-        <div class="sub">${money(tot("profit", myArbs))} profit on ${money(tot("paid", myArbs))} spent</div></div>
+      ${(() => { // active + paid out; arbs you sold early are left out: what you sold them for isn't recorded
+        const all = myArbs.filter(a => isOpen(a) || a.paid_out), p = all.reduce((s, a) => s + (realProfit(a) || 0), 0),
+              c = all.reduce((s, a) => s + (realCost(a) || 0), 0);
+        return `<div class="sumcard"><div class="label">All arbs, incl. paid out</div><div class="big profit"
+          style="${p < 0 ? "color:var(--critical)" : ""}">${ratio(p, c)}</div>
+          <div class="sub">${p < 0 ? "−" : ""}${money(Math.abs(p))} profit on ${money(c)} spent${done.length
+            ? ` · ${done.length} sold early not counted (sale price not recorded)` : ""}</div></div>`; })()}
     </div>
     ${payoutChartHtml(open)}
     <div class="toolrow"><button data-mine="sync">Sync now</button>
@@ -1409,7 +1460,8 @@ function renderMyArbs() {
       <span class="muted">${syncLine()}</span></div>
     <div class="table-wrap"><table>${head}<tbody>${rows(open) ||
       `<tr><td colspan="10" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
-    ${done.length ? `<h2 style="font-size:15px">Settled or closed</h2><div class="table-wrap"><table>${head}<tbody>${rows(done)}</tbody></table></div>` : ""}
+    ${paidOutHtml(paidOut)}
+    ${done.length ? `<h2 style="font-size:15px">Closed early <span class="muted" style="font-weight:400;font-size:13px">you sold out before the markets settled</span></h2><div class="table-wrap"><table>${head}<tbody>${rows(done)}</tbody></table></div>` : ""}
     <p class="caveat">Locked profit counts only shares held on both sites; extra shares on one side count as $0 (they're listed below).</p>`;
   wirePayoutChart(el, open);
   renderUnpaired(open);

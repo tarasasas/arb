@@ -374,3 +374,77 @@ class PlacedTimeTests(unittest.TestCase):
         self.assertEqual(mine.fill_placed_times(first), 0)                    # not looked up again
         self.assertEqual(calls, ["K"])
 
+
+
+class PaidOutTests(unittest.TestCase):
+    """Arbs whose markets have both paid out: what they really paid, saved for good."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "my_arbs.json"
+        self.store = myarbs.MyArbs(self.path)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    @staticmethod
+    def sites(k_status="finalized", k_result="yes", k_value="1.0000", pm_long="1", pm_status="MARKET_STATUS_RESOLVED"):
+        class K:
+            def markets_by_ticker(self, t):
+                return {"K1": {"status": k_status, "result": k_result, "settlement_value_dollars": k_value,
+                               "settlement_ts": "2026-10-01T05:09:36Z"}}
+
+        class P:
+            def markets_by_slug(self, s):
+                return {"p1": {"active": False, "closed": True, "status": pm_status,
+                               "marketSides": [{"long": True, "price": pm_long}, {"long": False, "price": "0"}]}}
+        return K(), P()
+
+    def test_paid_out_with_what_each_leg_really_paid(self):
+        self.store.save({"game": "SD vs CHC", "legs": legs()})            # 100 Kalshi YES + 100 Polymarket NO, $98
+        a = self.store.snapshot(*self.sites())[0]                          # YES happened: Kalshi pays, Polymarket NO doesn't
+        self.assertEqual(a["phase"], "paid")
+        po = a["paid_out"]
+        self.assertEqual((po["amount"], po["cost"], po["profit"], po["time"]), (100.0, 98.0, 2.0, "2026-10-01T05:09:36Z"))
+        self.assertEqual([(l["exchange"], l["result"], l["paid_out"]) for l in po["legs"]],
+                         [("kalshi", "yes", 100.0), ("polymarket", "yes", 0.0)])
+
+    def test_extra_unhedged_shares_count_at_their_real_result(self):
+        self.store.save({"game": "SD vs CHC", "legs": legs(ks=120, kp=15.6)})
+        po = self.store.snapshot(*self.sites())[0]["paid_out"]
+        self.assertEqual((po["amount"], po["profit"]), (120.0, 19.4))      # the 20 extra YES won too
+
+    def test_kept_after_the_markets_drop_off_the_sites(self):
+        self.store.save({"game": "SD vs CHC", "legs": legs()})
+        self.store.snapshot(*self.sites())
+
+        class Gone:
+            def markets_by_ticker(self, t):
+                return {}
+
+            def markets_by_slug(self, s):
+                return {}
+        again = myarbs.MyArbs(self.path)
+        a = again.snapshot(Gone(), Gone())[0]
+        self.assertEqual((a["phase"], a["paid_out"]["amount"]), ("paid", 100.0))
+
+    def test_waits_until_both_sides_have_paid(self):
+        self.store.save({"game": "SD vs CHC", "legs": legs()})
+        a = self.store.snapshot(*self.sites(k_status="determined"))[0]    # result known, not paid yet
+        self.assertEqual(a["phase"], "awaiting")
+        self.assertNotIn("paid_out", a)
+        self.store._live_time = 0
+        a = self.store.snapshot(*self.sites(pm_status="MARKET_STATUS_OPEN"))[0]
+        self.assertNotIn("paid_out", a)
+
+    def test_void_result_pays_what_the_site_paid(self):
+        self.store.save({"game": "Rained out", "legs": legs()})
+        po = self.store.snapshot(*self.sites(k_value="0.5000", pm_long="0.5"))[0]["paid_out"]
+        self.assertEqual(po["amount"], 100.0)                              # 100 x 0.50 + 100 x 0.50
+
+    def test_sold_early_is_not_a_payout(self):
+        a = self.store.save({"game": "SD vs CHC", "legs": legs()})
+        self.store.items[0]["closed"] = {"time": "2026-10-01T00:00:00Z", "why": "you sold 100 Kalshi YES"}
+        row = self.store.snapshot(*self.sites())[0]
+        self.assertEqual(row["phase"], "sold")
+        self.assertNotIn("paid_out", row)

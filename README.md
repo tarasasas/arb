@@ -295,7 +295,7 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   - Pairing your positions uses every matched market, whatever Focus is set to.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
-  cost cut pro rata. An arb with a leg sold out moves to **Settled or closed**, with a note saying what
+  cost cut pro rata. An arb with a leg sold out moves to **Closed early**, with a note saying what
   you sold, and the shares you still hold show under **Only on one site**. Only legs whose market is
   still open are changed: when a market settles its position disappears too, and that isn't a sale.
 - **Payouts by day:** a chart at the top shows how much your active arbs pay out on each calendar day
@@ -304,6 +304,13 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   markets closes. Hover over (or tab to) a day to see its arbs and how much of it is profit. The note
   under the chart covers arbs past their close date that are still waiting to settle, and payouts beyond
   the range. **Show as table** lists the same numbers.
+- **Paid out:** once both markets of an arb have paid out (Kalshi finalized, Polymarket resolved), the
+  arb moves to the **Paid out** section with what it really paid. Each leg's payout comes from its
+  market's result, including any extra shares held on one side, and the time comes from Kalshi's
+  settlement. Cards show the total paid out, the profit made and its return on the money put in, and the
+  last 30 days. The payout is saved in `my_arbs.json`, so it stays even after the sites stop listing the
+  markets. An arb whose markets are over but hasn't paid yet stays with the active ones, marked
+  "waiting for the payout".
 - **Make trade** adds each trade that hedged at least one pair, with the shares and costs that filled.
 - **Track this arb** on any opportunity opens a form filled in with the dashboard's sizing. Change
   it to what actually filled on each site (shares, and the total paid including fees), then save.

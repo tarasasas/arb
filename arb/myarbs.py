@@ -39,25 +39,47 @@ def summarize(arb):
 
 
 def kalshi_status(m):
-    """Status and, once settled, the result of a Kalshi market; plus what selling now would get."""
+    """Status and, once settled, the result of a Kalshi market; plus what selling now would get.
+    paid: the market has paid out (finalized); pays_yes: what one YES share paid ($1 or $0, or a
+    fraction for a void or scalar result); paid_at: when Kalshi settled it."""
     if not m:
         return {"state": "not found"}
     status = m.get("status") or ""
     result = (m.get("result") or "").lower()
     state = "settled" if result in ("yes", "no") else "open" if status in ("active", "open") else "closed"
     from .kalshi import settle_time
-    return {"state": state, "result": result or None, "settles": settle_time(m),
-            "bid": {"yes": _num(m.get("yes_bid_dollars")), "no": _num(m.get("no_bid_dollars"))}}
+    out = {"state": state, "result": result or None, "settles": settle_time(m),
+           "bid": {"yes": _num(m.get("yes_bid_dollars")), "no": _num(m.get("no_bid_dollars"))}}
+    if status in ("finalized", "settled") and result:
+        value = _num(m.get("settlement_value_dollars"))
+        out.update(paid=True, pays_yes=value if value is not None else (1.0 if result == "yes" else 0.0),
+                   paid_at=m.get("settlement_ts") or None)
+    return out
 
 
 def polymarket_status(m):
+    """As kalshi_status. A resolved Polymarket market prices its winning side at 1: the long (YES) side's
+    price is what one YES share paid."""
     if not m:
         return {"state": "not found"}
     bid, ask = _num(m.get("bestBidQuote")), _num(m.get("bestAskQuote"))
     state = "open" if m.get("active") and not m.get("closed") else "closed"
     # Selling YES gets the bid; closing a NO (buying YES back) is worth 1 - ask.
-    return {"state": state, "result": None, "settles": m.get("endDate") or m.get("gameStartTime"),
-            "bid": {"yes": bid, "no": round(1 - ask, 4) if ask is not None else None}}
+    out = {"state": state, "result": None, "settles": m.get("endDate") or m.get("gameStartTime"),
+           "bid": {"yes": bid, "no": round(1 - ask, 4) if ask is not None else None}}
+    if m.get("status") == "MARKET_STATUS_RESOLVED":
+        long = next((s for s in m.get("marketSides") or [] if s.get("long")), {})
+        pays_yes = _num(long.get("price"))
+        if pays_yes is not None:
+            out.update(state="settled", result="yes" if pays_yes >= 0.5 else "no", paid=True, pays_yes=pays_yes,
+                       paid_at=None)
+    return out
+
+
+def leg_payout(leg, st):
+    """Dollars a settled leg paid: its shares times what one share of its side paid."""
+    yes = st["pays_yes"]
+    return leg["shares"] * (yes if leg["side"] == "yes" else 1 - yes)
 
 
 def pair_key(arb):
@@ -390,6 +412,7 @@ class MyArbs:
                 live[("polymarket", s)] = polymarket_status(m)
             self._live, self._live_time = live, time.time()
             self._refresh_payout_dates()
+            self._record_payouts()
         except Exception as e:                  # keep showing the last known state
             self._live_error = repr(e)
 
@@ -404,10 +427,39 @@ class MyArbs:
                              "worth_now": round(bid * l["shares"], 2) if bid is not None else None})
             s = summarize(a)
             worth = [l["worth_now"] for l in legs]
+            settled = bool(a.get("closed") or a.get("paid_out")) or all(l["state"] in ("settled", "closed") for l in legs)
+            # active: still trading; awaiting: markets over, payout not in yet; paid: paid out; sold: you sold out early
+            phase = ("paid" if a.get("paid_out") else "sold" if a.get("closed") else "awaiting" if settled else "active")
             out.append({**a, "legs": legs, **s,
                         "worth_now": round(sum(worth), 2) if None not in worth else None,
-                        "settled": bool(a.get("closed")) or all(l["state"] in ("settled", "closed") for l in legs)})
+                        "settled": settled, "phase": phase})
         return out
+
+    def _record_payouts(self):
+        """Once both markets of an arb have paid out, save what it actually paid (from each market's
+        result) and when, so the Paid out list never depends on the sites still listing the markets.
+        Returns the arbs recorded now."""
+        done = []
+        now = datetime.now(timezone.utc).isoformat()
+        with self.lock:
+            for a in self.items:
+                if a.get("closed") or a.get("paid_out"):
+                    continue
+                sts = [self._live.get((l["exchange"], l["market_id"])) or {} for l in a["legs"]]
+                if not a["legs"] or not all(st.get("paid") for st in sts):
+                    continue
+                legs = [{"exchange": l["exchange"], "side": l["side"], "result": st.get("result"),
+                         "shares": l["shares"], "paid_out": round(leg_payout(l, st), 2)} for l, st in zip(a["legs"], sts)]
+                amount = round(sum(l["paid_out"] for l in legs), 2)
+                cost = round(sum(l["paid"] for l in a["legs"]), 2)
+                times = [st.get("paid_at") for st in sts if st.get("paid_at")]
+                # Kalshi says exactly when it settled; Polymarket doesn't, and both settle on the same event.
+                a["paid_out"] = {"time": max(times) if times else now, "amount": amount,
+                                 "profit": round(amount - cost, 2), "cost": cost, "legs": legs, "recorded": now}
+                done.append(a)
+            if done:
+                self._save()
+        return done
 
     def _refresh_payout_dates(self):
         """Each tracked arb pays out when the later of its two markets settles: take that from the
