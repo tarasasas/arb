@@ -178,6 +178,8 @@ class AutoTrader:
     def _type_ok(self, row):
         """The row's market type isn't paused and the row has the edge that type needs."""
         cat = execpolicy.category(row)
+        if cat == "Crypto windows" and not config.AUTO_TRADE_CRYPTO_WINDOWS:
+            return False                       # crypto Up/Down windows: off unless you turn them on
         if self.stats.paused_why(cat):
             return False
         need, _ = self.stats.min_edge(cat)

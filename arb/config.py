@@ -96,6 +96,9 @@ AUTO_TRADE_COOLDOWN_SECS = _env_num("AUTO_TRADE_COOLDOWN_SECS", 60)  # per pair 
 # In-play games move between the two orders (and Polymarket can delay in-play orders), so the second
 # leg often misses and the first is sold back at a loss. Off unless AUTO_TRADE_LIVE_GAMES=1.
 AUTO_TRADE_LIVE_GAMES = os.environ.get("AUTO_TRADE_LIVE_GAMES", "0").strip().lower() in ("1", "true", "yes", "on")
+# Crypto Up/Down price windows (BTC, ETH, ... at a set minute): the price moves every second, so the second
+# leg often misses. Auto-trade leaves them alone unless AUTO_TRADE_CRYPTO_WINDOWS=1 (Fast trade still can).
+AUTO_TRADE_CRYPTO_WINDOWS = os.environ.get("AUTO_TRADE_CRYPTO_WINDOWS", "0").strip().lower() in ("1", "true", "yes", "on")
 AUTO_TRADE_GAME_COOLDOWN_SECS = _env_num("AUTO_TRADE_GAME_COOLDOWN_SECS", 600)   # whole game, after a miss
 AUTO_TRADE_MAX_DAILY_LOSS = _env_num("AUTO_TRADE_MAX_DAILY_LOSS", 5)             # $ net loss that stops it
 # Fail-safes. Auto-trade only sizes a trade so the second leg's book holds at least this many times the

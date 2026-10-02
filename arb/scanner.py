@@ -570,7 +570,8 @@ class Scanner:
         now = now or engine.now_utc()
         with self.lock:
             groups = self.groups
-        key = (id(groups), config.FAST_MAX_HOURS, config.AUTO_TRADE_LIVE_GAMES)
+        skip_windows = config.FAST_LANE == "auto" and not config.AUTO_TRADE_CRYPTO_WINDOWS
+        key = (id(groups), config.FAST_MAX_HOURS, config.AUTO_TRADE_LIVE_GAMES, skip_windows)
         hit = getattr(self, "_lane_cache", None)
         if hit and hit[0] == key and time.time() - hit[1] < 30:
             return hit[2]
@@ -588,6 +589,8 @@ class Scanner:
             if (g[1][0] not in ("event", "price") and not config.AUTO_TRADE_LIVE_GAMES
                     and p_close is not None and p_close <= now):
                 continue                    # in play: Auto-trade won't take it
+            if skip_windows and g[1][0] == "price":
+                continue                    # crypto Up/Down windows: Auto-trade leaves them alone
             picked.append((close, g))
         picked.sort(key=lambda t: t[0])
         out = {g: groups[g] for _, g in picked}

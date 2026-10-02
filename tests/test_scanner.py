@@ -225,6 +225,18 @@ class FastLaneTests(unittest.TestCase):
         self.assertEqual(self.s.state["near_misses"], ["from the full sweep"])   # a lane pass leaves these alone
         self.assertNotIn("hot_seconds", self.s.state)
 
+    def test_crypto_windows_stay_out_of_the_lane_while_auto_trade_skips_them(self):
+        from datetime import timedelta
+        when = (self.now + timedelta(minutes=10)).isoformat()
+        var = ("price", "btc", when)
+        cs = [Contract("kalshi", "KXBTC15M-X", "CRYPTO:BTC", var, ">", 60000, "t", close_time=when),
+              Contract("polymarket", "btc-updown", "CRYPTO:BTC", var, ">", 60000, "t", close_time=when)]
+        self.s.groups = {**self.s.groups, **scanner.engine.group_pairs(cs)}
+        self.assertNotIn("CRYPTO:BTC", self.lane_games())
+        self.s._lane_cache = None
+        with mock.patch.object(scanner.config, "AUTO_TRADE_CRYPTO_WINDOWS", True):
+            self.assertEqual(self.lane_games()[0], "CRYPTO:BTC")       # soonest first
+
     def test_active_by_mode(self):
         for mode, on, want in (("auto", False, False), ("auto", True, True), ("always", False, True), ("off", True, False)):
             self.s.autotrader.on = on

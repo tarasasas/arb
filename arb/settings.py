@@ -21,6 +21,9 @@ GROUPS = [
          "If the player doesn't play, each site settles at its own fair price, so the pair may not pay exactly $1.", True),
         ("AUTO_TRADE_LIVE_GAMES", "bool", "Games already in progress (Auto-trade and Auto maker)",
          "Live prices move between the two orders, so the second leg misses more often.", False),
+        ("AUTO_TRADE_CRYPTO_WINDOWS", "bool", "Crypto Up/Down windows (Auto-trade)",
+         "BTC, ETH and other coins' price at a set minute. The price moves every second, so the second leg often "
+         "misses. Fast trade by hand can still take them.", False),
         ("AUTO_TRADE_MIN_ROI", "percent", "Minimum return (Auto-trade)", "Of the money put in.", 0.5),
         ("AUTO_TRADE_MIN_PROFIT", "money", "Minimum profit per trade (Auto-trade)", "0 = only the minimum return counts.", 0),
     ]),

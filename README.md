@@ -231,6 +231,9 @@ require your check.
   - It skips games already in play (`AUTO_TRADE_LIVE_GAMES=1` to allow them). In play, prices move
     between the two orders and Polymarket can delay in-play orders, so the second leg often misses. The
     first leg is then closed at a small loss: those are the **partial** lines in *Last auto-trades*.
+  - It skips crypto Up/Down windows (BTC, ETH and other coins' price at a set minute;
+    `AUTO_TRADE_CRYPTO_WINDOWS=1` to allow them). The price moves every second, so the second leg often
+    misses there too. Fast trade by hand can still take them.
   - After a partial or no-fill it leaves that whole game alone for 10 minutes
     (`AUTO_TRADE_GAME_COOLDOWN_SECS`), and it turns itself off once it has lost
     `AUTO_TRADE_MAX_DAILY_LOSS` ($5) net in a day.

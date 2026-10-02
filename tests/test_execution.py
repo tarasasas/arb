@@ -279,6 +279,13 @@ class AutoTradeIntegrationTests(unittest.TestCase):
             self.assertEqual((line["category"], line["status"]), ("MLB", "ok"))
             self.assertEqual(a.stats.summary()[0]["paper_tries"], 1)
 
+    def test_crypto_windows_are_left_alone_unless_turned_on(self):
+        s, a = self.make([row(league="CRYPTO", tab="Crypto", game="BTC price at Oct 02 17:15 UTC", edge=0.05)])
+        self.assertIsNone(a.check(s.state["opportunities"]))
+        with mock.patch.object(config, "AUTO_TRADE_CRYPTO_WINDOWS", True):
+            self.assertIsNotNone(a.check(s.state["opportunities"]))
+
+    @mock.patch.object(config, "AUTO_TRADE_CRYPTO_WINDOWS", True)
     def test_paused_types_and_thin_edges_are_not_tried(self):
         s, a = self.make([row(league="CRYPTO", tab="Crypto", edge=0.01)])
         self.assertIsNone(a.check(s.state["opportunities"]))            # crypto windows need 2c
