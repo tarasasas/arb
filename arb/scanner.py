@@ -260,7 +260,7 @@ class Scanner:
             pass
         self._publish()
         if self.streams:
-            self._stream_wanted([])
+            self._apply_stream_wants()
         self.log(f"Focus: {'markets settling within ' + format(self.focus_days, 'g') + ' days' if self.focus_days else 'all markets'}"
                  f" ({len(self.contracts)} contracts scanned)")
         return {"days": self.focus_days, "contracts": len(self.contracts)}
@@ -544,22 +544,96 @@ class Scanner:
         polling, so a stream that goes quiet can't freeze prices."""
         return {(ex, mid) for ex, s in self.streams.items() for mid in s.fresh(config.STREAM_FRESH_SECS)}
 
-    def refresh_prices(self, hot=False, stream_groups=None):
+    def refresh_prices(self, hot=False, stream_groups=None, lane=False):
         """Full sweep (hot=False): every watched contract. Hot sweep: only the quantities that
         were within NEAR_MISS_EDGE of an arb on the last full sweep, so it takes ~1-2s.
-        stream_groups: re-check just these pair groups on books the live streams already hold."""
-        if hot or stream_groups is not None:
+        stream_groups: re-check just these pair groups on books the live streams already hold.
+        lane: the fast lane, every pair Auto-trade could take (see lane_groups)."""
+        if hot or stream_groups is not None or lane:
             with priority():               # near-arb and stream re-checks go ahead of background loads
-                return self._refresh_prices(hot, stream_groups)
+                return self._refresh_prices(hot, stream_groups, lane)
         return self._refresh_prices(hot, stream_groups)
 
-    def _refresh_prices(self, hot=False, stream_groups=None):
+    # ---- fast lane: what Auto-trade can take, checked on its own, faster -------------------------
+
+    def lane_active(self):
+        """FAST_LANE: "auto" runs it while Auto-trade or Auto maker is on, "always" all the time, "off" never."""
+        mode = getattr(config, "FAST_LANE", "auto")
+        if mode == "always":
+            return True
+        return mode == "auto" and bool(getattr(self.autotrader, "on", False) or getattr(self.makerbot, "on", False))
+
+    def lane_groups(self, now=None):
+        """The pair groups Auto-trade could take: paying out within FAST_MAX_HOURS, soonest first. Games
+        already under way are left out unless AUTO_TRADE_LIVE_GAMES is on (Auto-trade skips them).
+        Re-worked out at most every 30s, or when the matched markets or the hours change."""
+        now = now or engine.now_utc()
+        with self.lock:
+            groups = self.groups
+        key = (id(groups), config.FAST_MAX_HOURS, config.AUTO_TRADE_LIVE_GAMES)
+        hit = getattr(self, "_lane_cache", None)
+        if hit and hit[0] == key and time.time() - hit[1] < 30:
+            return hit[2]
+        cutoff = now + timedelta(hours=config.FAST_MAX_HOURS)
+        picked = []
+        for g, by_ex in groups.items():
+            def first(ex):
+                ts = [t for t in (engine._parse_time(c.close_time) for c in by_ex[ex] if c.close_time) if t]
+                return min(ts) if ts else None
+            k_close, p_close = first("kalshi"), first("polymarket")
+            # Same date fast_check uses: non-sports pairs wait for the later site, sports for Kalshi's.
+            close = (max(k_close, p_close) if k_close and p_close else None) if g[1][0] == "event" else k_close
+            if close is None or close > cutoff:
+                continue
+            if (g[1][0] not in ("event", "price") and not config.AUTO_TRADE_LIVE_GAMES
+                    and p_close is not None and p_close <= now):
+                continue                    # in play: Auto-trade won't take it
+            picked.append((close, g))
+        picked.sort(key=lambda t: t[0])
+        out = {g: groups[g] for _, g in picked}
+        self._lane_cache = (key, time.time(), out)
+        return out
+
+    def _lane_loop(self, stop_event):
+        """While the lane is active, re-check its pairs every FAST_LANE_PAUSE_SECS (streamed markets from
+        memory, the rest polled), so Auto-trade sees a new arb in about a second, not at the next full sweep."""
+        was = False
+        while not (stop_event and stop_event.is_set()):
+            active = self.lane_active() and bool(self.groups)
+            if active != was:               # streams: lane markets first while it runs
+                was = active
+                self._apply_stream_wants()
+                self.log(f"Fast lane {'on' if active else 'off'}" + (
+                    f": {len(self.lane_groups())} pairs paying out within {config.FAST_MAX_HOURS:g}h, re-checked "
+                    f"about every {config.FAST_LANE_PAUSE_SECS:g}s and first on the live streams" if active else ""))
+            if not active:
+                with self.lock:
+                    self.state["lane"] = {"active": False}
+                time.sleep(1)
+                continue
+            try:
+                self.refresh_prices(lane=True)
+            except Exception as e:
+                self.log(f"Fast lane error: {e!r}")
+                time.sleep(2)
+                continue
+            time.sleep(config.FAST_LANE_PAUSE_SECS)
+
+    def _refresh_prices(self, hot=False, stream_groups=None, lane=False):
         t0 = time.time()
         t0_wall = t0                       # polled prices: the pass's start is the tick
         complete = bool(getattr(self, "catalog_time", 0) and getattr(self, "suggest_time", 0))   # covers every matched market
         with self.lock:
             contracts, source, groups = self.contracts, self.source, self.groups
             hot_keys = self.hot_groups
+        if lane:
+            groups = self.lane_groups()
+            contracts = [c for g in groups.values() for lst in g.values() for c in lst]
+            hot = True                      # a partial pass: keeps the rows it didn't re-check
+            if not contracts:
+                with self.lock:
+                    self.state["lane"] = {"active": True, "pairs": 0, "markets": 0, "seconds": 0}
+                return
         # Full sweeps poll every market (a backstop for the streams); near-arb passes skip markets
         # with a fresh streamed book.
         streamed = self._streamed() if (hot or stream_groups is not None) else set()
@@ -569,7 +643,7 @@ class Scanner:
             hot = True
             if not contracts:
                 return
-        elif hot:
+        elif hot and not lane:
             # Only the markets that appear in near-arb pairs, grouped as before.
             groups = {g: {ex: [c for c in groups[g][ex] if (ex, c.market_id) in hot_keys[g]] for ex in groups[g]}
                       for g in hot_keys if g in groups}
@@ -585,7 +659,7 @@ class Scanner:
         if stream_groups is None and (kms or pms):
             # Full sweeps read Kalshi's best prices from the market list (half the requests); the pairs
             # that need depth get their order books below. Near-arb passes fetch the books directly.
-            kalshi_read = self.kalshi.refresh_books if hot else self.kalshi.refresh_tops
+            kalshi_read = self.kalshi.refresh_books if hot and not lane else self.kalshi.refresh_tops
             with LanePool(2) as pool:
                 jobs = [pool.submit(kalshi_read, kms), pool.submit(self.pm.refresh_quotes, pms)]
                 failed_k, failed_p = (j.result() or set() for j in jobs)
@@ -679,7 +753,7 @@ class Scanner:
             if len(near) < config.MAX_NEAR_MISSES and _cand_key(cand) not in unchecked:
                 near.append(engine.to_row(cand, None, now))
 
-        maker = self._maker_rows(cands, source, now) if stream_groups is None else None
+        maker = self._maker_rows(cands, source, now) if stream_groups is None and not lane else None
 
         # A pass only replaces the rows it actually re-checked. The hot pass covers a few markets and
         # fetches at most 15 books, so without this the table dropped from ~50 rows to 15 between sweeps.
@@ -705,7 +779,13 @@ class Scanner:
             self.state.update({"opportunities": opportunities, "last_prices": now.isoformat(), "status": "running",
                                "hot_count": sum(len(v) for v in self.hot_groups.values()),
                                "streams": {ex: s.status() for ex, s in self.streams.items()}})
-            if stream_groups is None:
+            if lane:
+                last, self._lane_t0 = getattr(self, "_lane_t0", None), t0
+                self.state["lane"] = {"active": True, "pairs": len(groups), "seconds": secs,
+                                      "every": round(t0 - last, 1) if last and t0 - last < 60 else None,
+                                      "markets": len({(c.exchange, c.market_id) for c in contracts}),
+                                      "polled": len(kms) + len(pms), "hours": config.FAST_MAX_HOURS}
+            elif stream_groups is None:
                 self.state.update({"near_misses": near, "hot_seconds" if hot else "scan_seconds": secs,
                                    "maker": maker})
             if not hot:
@@ -757,12 +837,29 @@ class Scanner:
 
     def _stream_wanted(self, cands):
         """Stream the near-arb markets (closest first) plus every non-sports and crypto pair."""
+        self._stream_pairs = [(c["k"].market_id, c["p"].market_id) for c in cands]
+        self._apply_stream_wants()
+
+    def _apply_stream_wants(self):
+        """While the fast lane runs, its markets go first (near-arb ones, then the rest, soonest payout
+        first), so the STREAM_MAX_MARKETS slots go to what Auto-trade can take."""
         if not self.streams:
             return
+        pairs = getattr(self, "_stream_pairs", [])
         wanted = {"kalshi": [], "polymarket": []}
-        for c in cands:
-            wanted["kalshi"].append(c["k"].market_id)
-            wanted["polymarket"].append(c["p"].market_id)
+        if self.lane_active():
+            lane = self.lane_groups()
+            ids = {(c.exchange, c.market_id) for g in lane.values() for lst in g.values() for c in lst}
+            for k, p in pairs:
+                if ("kalshi", k) in ids or ("polymarket", p) in ids:
+                    wanted["kalshi"].append(k)
+                    wanted["polymarket"].append(p)
+            for g in lane.values():
+                for ex, lst in g.items():
+                    wanted[ex] += [c.market_id for c in lst]
+        for k, p in pairs:
+            wanted["kalshi"].append(k)
+            wanted["polymarket"].append(p)
         for c in self.pairs_cat[0] + self.crypto_cat[0]:
             wanted[c.exchange].append(c.market_id)
         if getattr(self, "focus_days", 0):          # focused: stream every scanned market that fits
@@ -925,6 +1022,7 @@ class Scanner:
             self._stream_hot()
             threading.Thread(target=self._stream_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._loop, args=(stop_event, False), daemon=True).start()
+        threading.Thread(target=self._lane_loop, args=(stop_event,), daemon=True).start()
         self._loop(stop_event, True)
 
     def live_depth(self, exchange, market_id, side):

@@ -879,6 +879,9 @@ function renderAuto(s) {
   el.innerHTML = `<b>⚡ Auto-trade</b>
     <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
+    ${s.lane?.active ? `<span class="muted" title="The pairs Auto-trade could take get their own price check and go first on the live streams (Settings: Fast lane)">Fast lane:
+      ${compact(s.lane.pairs)} pairs paying out within ${s.lane.hours ?? a.fast_max_hours}h, checked every
+      ${s.lane.every != null ? s.lane.every.toFixed(1) : s.lane.seconds.toFixed(1)}s</span>` : ""}
     <button type="button" class="settings-link" style="margin:0">⚙ Settings</button>
     <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with one-way-rules, different-source or contradicting-price warnings ·
       ${a.allow_player_props ? "player props included" : "no player props"} ·

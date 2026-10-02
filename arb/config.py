@@ -108,6 +108,13 @@ AUTO_TRADE_MAX_MISSES = int(_env_num("AUTO_TRADE_MAX_MISSES", 3))
 AUTO_TRADE_ORDER = os.environ.get("AUTO_TRADE_ORDER", "").strip().lower() or "thinner_first"
 if AUTO_TRADE_ORDER not in ("polymarket_first", "together", "thinner_first"):
     AUTO_TRADE_ORDER = "thinner_first"
+# Fast lane: the pairs Auto-trade could take (paying out within FAST_MAX_HOURS) get their own price check
+# every FAST_LANE_PAUSE_SECS and go first on the live streams, instead of waiting for the full sweep.
+# auto = while Auto-trade or Auto maker is on; always; off.
+FAST_LANE = os.environ.get("FAST_LANE", "").strip().lower() or "auto"
+if FAST_LANE not in ("auto", "always", "off"):
+    FAST_LANE = "auto"
+FAST_LANE_PAUSE_SECS = _env_num("FAST_LANE_PAUSE_SECS", 0.5)
 # Unhedged first-leg shares may be hedged up to this far ($/share) above break-even when that loses less
 # than selling them back. 0 = always sell back.
 CLOSE_OUT_MAX_LOSS = _env_num("CLOSE_OUT_MAX_LOSS", 0.05)

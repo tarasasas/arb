@@ -177,6 +177,81 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class FastLaneTests(unittest.TestCase):
+    """The pairs Auto-trade could take get their own, faster pass (and the first stream slots)."""
+    tearDown = HotPassTests.tearDown
+
+    def setUp(self):
+        HotPassTests.setUp(self)                             # the same two games, each with an arb
+        from datetime import timedelta
+        self.now = scanner.engine.now_utc()
+        iso = lambda h: (self.now + timedelta(hours=h)).isoformat()
+        times = {"A": (iso(3), iso(1)), "B": (iso(72), iso(70))}       # (Kalshi pays out, Polymarket game start)
+        for c in self.s.contracts:
+            g = c.game_key[-1]
+            c.close_time = times[g][0] if c.exchange == "kalshi" else times[g][1]
+        self.s.groups = scanner.engine.group_pairs(self.s.contracts)
+
+    def lane_games(self):
+        return [g[0] for g in self.s.lane_groups()]
+
+    def test_only_pairs_paying_out_within_the_hours_soonest_first(self):
+        self.assertEqual(self.lane_games(), ["T:A"])
+        self.s._lane_cache = None
+        with mock.patch.object(scanner.config, "FAST_MAX_HOURS", 100):
+            self.assertEqual(self.lane_games(), ["T:A", "T:B"])
+
+    def test_games_under_way_are_left_out_unless_live_games_are_on(self):
+        from datetime import timedelta
+        for c in self.s.contracts:
+            if c.exchange == "polymarket" and c.game_key == "T:A":
+                c.close_time = (self.now - timedelta(minutes=10)).isoformat()
+        self.assertEqual(self.lane_games(), [])
+        self.s._lane_cache = None
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LIVE_GAMES", True):
+            self.assertEqual(self.lane_games(), ["T:A"])
+
+    def test_lane_pass_polls_only_its_markets_and_hands_rows_to_auto_trade(self):
+        self.s.refresh_prices(hot=False)                     # full sweep: both rows
+        tops, books, seen = [], [], []
+        self.s.kalshi.refresh_tops = lambda ms: tops.extend(m.ticker for m in ms)
+        self.s.kalshi.refresh_books = lambda ms: books.extend(m.ticker for m in ms)
+        self.s.autotrader.check = lambda rows: seen.append(sorted(r["game"] for r in rows))
+        self.s.state["near_misses"] = ["from the full sweep"]
+        self.s.refresh_prices(lane=True)
+        self.assertEqual((tops, books), (["kA"], ["kA"]))    # list price for the lane, depth for its arb
+        self.assertEqual(seen, [["A", "B"]])                  # B's row kept from the full sweep
+        self.assertEqual((self.s.state["lane"]["pairs"], self.s.state["lane"]["markets"]), (1, 2))
+        self.assertEqual(self.s.state["near_misses"], ["from the full sweep"])   # a lane pass leaves these alone
+        self.assertNotIn("hot_seconds", self.s.state)
+
+    def test_active_by_mode(self):
+        for mode, on, want in (("auto", False, False), ("auto", True, True), ("always", False, True), ("off", True, False)):
+            self.s.autotrader.on = on
+            with mock.patch.object(scanner.config, "FAST_LANE", mode):
+                self.assertEqual(self.s.lane_active(), want, (mode, on))
+
+    def test_lane_markets_get_the_stream_slots_first(self):
+        got = {}
+
+        class S:
+            def __init__(self, ex):
+                self.ex = ex
+
+            def want(self, ids):
+                got[self.ex] = ids
+        self.s.streams = {"kalshi": S("kalshi"), "polymarket": S("polymarket")}
+        self.s.crypto_cat = ([], {})
+        self.s._stream_pairs = [("kB", "pB"), ("kA", "pA")]   # B is closer to an arb
+        with mock.patch.object(scanner.config, "STREAM_MAX_MARKETS", 1):
+            self.s.autotrader.on = False
+            self.s._apply_stream_wants()
+            self.assertEqual(got["kalshi"], ["kB"])
+            self.s.autotrader.on = True
+            self.s._apply_stream_wants()
+            self.assertEqual((got["kalshi"], got["polymarket"]), (["kA"], ["pA"]))
+
+
 class StartupTests(unittest.TestCase):
     def test_trading_status_is_published_at_start(self):
         s = scanner.Scanner.__new__(scanner.Scanner)

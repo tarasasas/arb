@@ -116,6 +116,11 @@ Three kinds of pair are never scanned automatically, because they are always fak
 - prices 25 or more points apart;
 - rules that name different data providers.
 
+Questions about different time windows aren't paired at all: "How low will BTC get in October?" is
+not "How low will Bitcoin get this year?" (a dip in November loses both legs). The window comes from
+the wording ("this week", "in October", "this year", "in 2026"), because both sites' end dates are too
+loose to compare (Polymarket's run ~2 weeks late, Kalshi's up to a year).
+
 These wait for you in the review list instead. To go back to approving only confident
 matches, raise `AUTO_MIN_EVENT_SCORE` and `AUTO_MIN_OUTCOME_SCORE` in `arb/config.py`
 (0.5 and 0.3 were the old values).
@@ -237,6 +242,15 @@ require your check.
     the order's limit), and it turns itself off after 3 misses in a row on one site
     (`AUTO_TRADE_MAX_MISSES`). `trade-report.bat` shows the same `MISSED` lines.
   - Every trade goes to My arbs and `trades.jsonl`.
+
+**Fast lane.** A full sweep of every market takes 30-90 seconds, too slow for arbs that last
+seconds. While Auto-trade or Auto maker is on, the pairs Auto-trade could take (paying out within
+`FAST_MAX_HOURS`, games in progress left out unless `AUTO_TRADE_LIVE_GAMES=1`) get their own price
+check about every half second (`FAST_LANE_PAUSE_SECS`), and their markets get the first live-stream
+slots. That's a tenth or less of all markets (about 600 pairs on a typical day), so with an
+Advanced-tier Kalshi key a pass takes a second or two. The Auto-trade bar shows "Fast lane: N pairs
+paying out within 24h, checked every Xs". `FAST_LANE=always` runs it all the time (for Fast trade by
+hand too), `off` never; also in ⚙ Settings.
 
 **⚙ Settings** (top right, and next to the Auto-trade switch) changes all of these from the dashboard:
 what Auto-trade and Fast trade may take (auto-matched pairs, too-good-to-be-true rows, player props,
@@ -461,6 +475,12 @@ reading the order every 0.5s; with the stream it reads it on each push and every
 while still checking Kalshi's price every 0.5s). Buying power comes from the stream as well, so a trade
 doesn't have to download it. If this stream is down, everything falls back to polling as before. The
 window says "Polymarket order stream on" once it's connected.
+
+**Polymarket's public gateway caches.** Its CDN keeps every reply (order books, quotes, market lists)
+for 30 seconds per URL and ignores no-cache headers, so reading the same book twice within 30 seconds
+returned the same old copy: arbs that were already gone, and liquidity that wasn't there. Every
+read now carries a parameter no other request has, so it always comes from the exchange. (Kalshi's
+API doesn't cache these.)
 
 If a stream goes quiet (no message for 90 seconds) it reconnects by itself. Every full sweep still
 polls every market as a backstop, and a streamed market is only trusted without polling while it has

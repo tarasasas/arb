@@ -23,6 +23,12 @@ GROUPS = [
         ("AUTO_TRADE_MIN_ROI", "percent", "Minimum return (Auto-trade)", "Of the money put in.", 0.5),
         ("AUTO_TRADE_MIN_PROFIT", "money", "Minimum profit per trade (Auto-trade)", "0 = only the minimum return counts.", 0),
     ]),
+    ("Speed", [
+        ("FAST_LANE", "choice:auto,always,off", "Fast lane",
+         "The pairs Auto-trade could take (paying out within the hours above) get their own price check about every "
+         "half second and go first on the live streams, instead of waiting for the full sweep. auto: while Auto-trade "
+         "or Auto maker is on. always: also for Fast trade by hand. off: everything waits for the normal scan.", "auto"),
+    ]),
     ("Auto-trade limits", [
         ("AUTO_TRADE_MAX_TRADE", "money", "Per trade", "Both legs together.", 25),
         ("AUTO_TRADE_DAILY_LIMIT", "money", "Per day", "Money Auto-trade may put in each day.", 100),
