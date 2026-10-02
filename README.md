@@ -226,10 +226,18 @@ require your check.
   - It only trades when the return at live prices is at least `AUTO_TRADE_MIN_ROI` (0.5%), at the size
     it can actually take (capped per trade). `AUTO_TRADE_MIN_PROFIT` adds an optional dollar floor (off).
   - It never spends more than `AUTO_TRADE_MAX_TRADE` per trade or `AUTO_TRADE_DAILY_LIMIT` per day.
-  - It waits `AUTO_TRADE_COOLDOWN_SECS` before trying the same pair again.
-  - It **turns itself off** (and alerts your phone, if alerts are set up) if a trade leaves shares
-    unhedged or an order can't be confirmed. A Kalshi order whose answer was lost (a timeout or dropped
-    connection) is first looked up by its client order ID, so that alone no longer stops it.
+    Today's spend and net are kept in `cache/auto_trade_day.json`, so the daily limit and the daily loss
+    stop hold across restarts.
+  - It waits `AUTO_TRADE_COOLDOWN_SECS` before trying the same pair again, and only takes rows the
+    scanner checked in the last `AUTO_TRADE_MAX_ROW_AGE` seconds (5).
+  - It **turns itself off** (and alerts your phone, if alerts are set up) if a trade leaves a whole share
+    or more unhedged (`AUTO_TRADE_STOP_UNHEDGED`; a smaller leftover is a fraction no site lets you sell)
+    or an order can't be confirmed. An order whose answer was lost (a timeout or dropped connection) is
+    looked up first: on Kalshi by its client order ID, on Polymarket among the orders your private stream
+    reports since, matched on market, intent, quantity, price and time in force. Only an exact single
+    match counts, so a lost answer alone no longer stops it.
+  - If `trades.jsonl` can't be written (Excel locks a file it has open), the trade goes to
+    `trades.pending.jsonl` instead and the log says so.
   - It skips games already in play (`AUTO_TRADE_LIVE_GAMES=1` to allow them). In play, prices move
     between the two orders and Polymarket can delay in-play orders, so the second leg often misses. The
     first leg is then closed at a small loss: those are the **partial** lines in *Last auto-trades*.

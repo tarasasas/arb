@@ -115,6 +115,9 @@ AUTO_TRADE_COOLDOWN_SECS = _env_num("AUTO_TRADE_COOLDOWN_SECS", 60)  # per pair 
 # Rows kept from an earlier price pass (not re-checked, e.g. out of book downloads) carry old prices: trying
 # one costs the pair its cooldown when the arb turns out gone. Auto-trade takes only rows checked this recently.
 AUTO_TRADE_MAX_ROW_AGE = _env_num("AUTO_TRADE_MAX_ROW_AGE", 5)
+# Unhedged shares that stop Auto-trade: anything less is a fraction of a share no site lets you sell (e.g. 0.3
+# of a whole Kalshi contract after a fractional Polymarket fill), worth under $1. It still shows in the history.
+AUTO_TRADE_STOP_UNHEDGED = _env_num("AUTO_TRADE_STOP_UNHEDGED", 1)
 # In-play games move between the two orders (and Polymarket can delay in-play orders), so the second
 # leg often misses and the first is sold back at a loss. Off unless AUTO_TRADE_LIVE_GAMES=1.
 AUTO_TRADE_LIVE_GAMES = os.environ.get("AUTO_TRADE_LIVE_GAMES", "0").strip().lower() in ("1", "true", "yes", "on")

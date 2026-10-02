@@ -297,7 +297,7 @@ class AutoTrader:
             if self.net.get(self._today(), 0.0) <= -config.AUTO_TRADE_MAX_DAILY_LOSS:
                 self._halt(f"net loss today is ${-self.net[self._today()]:.2f} (limit ${config.AUTO_TRADE_MAX_DAILY_LOSS:g}): "
                            f"check what's happening before turning it back on", notify=False)
-            if res["status"] == "unknown" or res["unhedged_shares"] > 0:
+            if res["status"] == "unknown" or res["unhedged_shares"] >= config.AUTO_TRADE_STOP_UNHEDGED:
                 self._halt(f"last trade left {res['unhedged_shares']:g} shares unhedged or unconfirmed: check "
                            f"both accounts, then turn Auto-trade back on", notify=False)
             if res["hedged_pairs"] > 0 or self.halted:

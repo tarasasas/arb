@@ -326,6 +326,7 @@ class PolymarketPrivateStream(_Stream):
         super().__init__(url, POLYMARKET_PRIVATE_WS_PATH, signer, {}, lambda *a: None, log, connect)
         self.cond = threading.Condition()
         self.versions = {}                  # order id -> updates seen
+        self.first_at = {}                  # order id -> when this stream first mentioned it
         self.buying_power, self.balance_at = None, 0.0
         self._announced = False
 
@@ -345,11 +346,19 @@ class PolymarketPrivateStream(_Stream):
         if not order_id:
             return
         with self.cond:
+            if order_id not in self.versions:
+                self.first_at[order_id] = time.time()
             self.versions[order_id] = self.versions.get(order_id, 0) + 1
             if len(self.versions) > 5000:   # forget the oldest orders
                 for k in list(self.versions)[:1000]:
                     del self.versions[k]
+                    self.first_at.pop(k, None)
             self.cond.notify_all()
+
+    def orders_since(self, t):
+        """Ids of orders this stream first mentioned at or after time t (oldest first)."""
+        with self.cond:
+            return [oid for oid, at in self.first_at.items() if at >= t]
 
     def version(self, order_id):
         with self.cond:

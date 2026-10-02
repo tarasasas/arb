@@ -131,3 +131,64 @@ class KalshiTickTests(unittest.TestCase):
         self.assertEqual(tick(0.5), 0.01)
         limit = venues.floor_to(0.9257, tick(0.9257))
         self.assertAlmostEqual((1 - limit) * 100, round((1 - limit) * 100))
+
+
+class PolymarketRecoveryTests(unittest.TestCase):
+    """A create-order request whose answer was lost: find the order through the private stream, never guess."""
+
+    def setUp(self):
+        from arb import streams
+        self.s = streams.PolymarketPrivateStream(lambda m, p: {}, lambda m: None, connect=lambda u, h: None)
+        self.s.connected = True
+        self.v = venues.PolymarketVenue.__new__(venues.PolymarketVenue)
+        self.v.private, self.v._seen = self.s, {}
+        self.orders = {}
+
+        def post(path, body):
+            for oid, o in self.appear.items():                    # the exchange took it; the answer is lost
+                self.s._note(oid)
+                self.orders[oid] = o
+            raise ConnectionResetError("connection dropped")
+
+        def get(path, params=None):
+            return {"order": self.orders[path.rsplit("/", 1)[1]]}
+        self.v.http = mock.Mock(post=post, get=get)
+
+    @staticmethod
+    def order(slug="pm-a", intent="ORDER_INTENT_BUY_SHORT", qty=20, price="0.5", tif="TIME_IN_FORCE_IMMEDIATE_OR_CANCEL"):
+        return {"marketSlug": slug, "intent": intent, "quantity": qty, "price": {"value": price}, "tif": tif,
+                "state": "ORDER_STATE_FILLED", "cumQuantity": str(qty), "avgPx": {"value": price},
+                "commissionNotionalTotalCollected": {"value": "0.35"}}
+
+    def test_the_lost_order_is_found_and_its_fill_used(self):
+        self.appear = {"o-other": self.order(slug="pm-b"), "o-maker": self.order(tif="TIME_IN_FORCE_GOOD_TILL_DATE"),
+                       "o-ours": self.order()}
+        f = self.v.buy("pm-a", "no", 20, 0.5, 0.0695)
+        self.assertEqual((f.order_id, f.qty), ("o-ours", 20.0))
+        self.assertAlmostEqual(f.amount + f.fee, 10.35)
+
+    def test_not_found_stays_unknown(self):
+        self.appear = {"o-other": self.order(slug="pm-b")}
+        with mock.patch.object(venues.PolymarketVenue, "RECOVER_SECS", 0.2):
+            with self.assertRaises(ConnectionResetError):
+                self.v.buy("pm-a", "no", 20, 0.5, 0.0695)
+
+    def test_two_matches_stay_unknown(self):
+        self.appear = {"o-1": self.order(), "o-2": self.order()}
+        with self.assertRaises(ConnectionResetError):
+            self.v.buy("pm-a", "no", 20, 0.5, 0.0695)
+
+    def test_without_the_stream_stays_unknown(self):
+        self.appear = {"o-ours": self.order()}
+        self.s.connected = False
+        with self.assertRaises(ConnectionResetError):
+            self.v.buy("pm-a", "no", 20, 0.5, 0.0695)
+
+    def test_orders_from_before_the_request_are_ignored(self):
+        self.s._note("o-old")
+        self.s.first_at["o-old"] = time.time() - 60
+        self.orders["o-old"] = self.order()
+        self.appear = {}
+        with mock.patch.object(venues.PolymarketVenue, "RECOVER_SECS", 0.2):
+            with self.assertRaises(ConnectionResetError):
+                self.v.buy("pm-a", "no", 20, 0.5, 0.0695)

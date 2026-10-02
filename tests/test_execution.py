@@ -335,6 +335,19 @@ class AutoTradeIntegrationTests(unittest.TestCase):
         s.state["opportunities"][1]["detected_ts"] = time.time() - 0.5
         self.assertEqual(a.pick(s.state["opportunities"])["game"], "fresh")
 
+    def test_a_fraction_of_a_share_left_over_doesnt_stop_auto_trade(self):
+        def run(unhedged):
+            t = FakeTrader()
+            t.execute = lambda plan_id: {"status": "partial", "hedged_pairs": 40, "net": 0.3, "unhedged_shares": unhedged,
+                                         "slip": None, "order_mode": "thinner_first", "steps": [], "missed": [],
+                                         "legs_filled": {}, "plan": {"payout": 1.0}}
+            s, a = self.make([row()], t)
+            with mock.patch.object(config, "AUTO_TRADE_DRY_RUN", False):
+                a.check(s.state["opportunities"])
+            return a
+        self.assertIsNone(run(0.3).halted)                         # unsellable fraction: keeps going
+        self.assertIn("unhedged", run(1.0).halted)                 # a whole share or more: stops
+
     def test_daily_spend_and_net_survive_a_restart(self):
         import tempfile as tf
         d = Path(tf.mkdtemp())

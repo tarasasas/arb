@@ -260,9 +260,57 @@ class PolymarketVenue:
                 "quantity": round(qty, 2), "tif": "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL", "intent": intent,
                 "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_MANUAL",
                 "synchronousExecution": True, "maxBlockTime": "5"}
-        r = self.http.post("/v1/orders", body)
+        sent = time.time()
+        try:
+            r = self.http.post("/v1/orders", body)
+        except ApiError:
+            raise                           # Polymarket answered: refused, nothing traded
+        except Exception:
+            # The answer was lost (timeout, dropped connection), so the order may or may not exist. Polymarket
+            # has no client order id, so look for it among the orders the private stream has seen since.
+            oid = self._recover(body, sent)
+            if oid is None:
+                raise
+            r = {"id": oid, "executions": [], "recovered": True}
         order = self._final_order(r)
         return body, r, order
+
+    RECOVER_SECS = 3.0                      # how long to look for a lost order on the private stream
+
+    @staticmethod
+    def _same_order(o, body):
+        """Is this order (GET /v1/order/{id}) the one `body` asked for: same market, intent, time in force,
+        quantity and price?"""
+        try:
+            return (o.get("marketSlug") == body["marketSlug"] and o.get("intent") == body["intent"]
+                    and o.get("tif") == body["tif"]
+                    and abs(float(o.get("quantity")) - float(body["quantity"])) < 1e-6
+                    and abs(float((o.get("price") or {}).get("value")) - float(body["price"]["value"])) < 1e-6)
+        except (TypeError, ValueError, KeyError):
+            return False
+
+    def _recover(self, body, sent):
+        """The id of the order a lost create-order request made, or None if it can't be told for sure: the
+        private stream must show exactly one new order matching it. Never guesses that it doesn't exist."""
+        s = self.private
+        if not (s and s.connected and hasattr(s, "orders_since")):
+            return None
+        deadline, checked, found = time.monotonic() + self.RECOVER_SECS, set(), []
+        while True:
+            for oid in s.orders_since(sent - 1.0)[:50]:
+                if oid in checked:
+                    continue
+                try:
+                    with priority():
+                        d = self.http.get(f"/v1/order/{oid}")
+                except Exception:
+                    continue                # look again next round
+                checked.add(oid)
+                if self._same_order(d.get("order", d), body):
+                    found.append(oid)
+            if found or time.monotonic() >= deadline:
+                return found[0] if len(found) == 1 else None
+            time.sleep(0.1)
 
     TERMINAL = {"ORDER_STATE_FILLED", "ORDER_STATE_CANCELED", "ORDER_STATE_REJECTED",
                 "ORDER_STATE_EXPIRED", "ORDER_STATE_REPLACED"}
