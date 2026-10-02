@@ -635,14 +635,19 @@ Every trade records a timeline in milliseconds, and the result screen and **Last
 What keeps it short:
 - **Streamed ticks:** a price change is re-checked the moment it arrives (no polling interval).
 - **Checks without downloads:** in the common case the pre-trade checks download nothing. They use the
-  stream's book if it updated within the last second, the market's details cached for a minute, and the
-  scanner's cash reading (refreshed every 15 seconds, and downloaded fresh after any trade).
-- **Pacing:** trades' requests may burst without waiting for the steady pace, and orders never wait for
-  a slot.
+  live feed's book while the feed is alive (it heard from the exchange in the last 5 seconds) and has the
+  book from the last 30 seconds: a book that hasn't changed is still current on a live feed. They also use
+  the market's details cached for a minute and the scanner's cash reading (refreshed every 15 seconds, and
+  downloaded fresh after any trade). Whatever must be downloaded loads at the same time.
+- **Trades first:** a trade's own requests go ahead of every other request, the fast lane's included,
+  and may burst without waiting for the steady pace; orders never wait for a slot.
+- **Auto-trade mode:** while Auto-trade is on, only the markets it can take are refreshed (see Fast lane).
+- **Leg order decided last:** Auto-trade's "smart" order (which site goes first) is decided once the books
+  are read, not when the arb was spotted, so "the stale site first" is still true when the orders go out.
 - **Kept-alive connections:** connections to both sites stay open, which saves a TLS handshake per request.
 - **Polymarket order confirmation:** checked after 50 ms, then backing off (it was every 250 ms).
-- **Kalshi shard cash:** kept topped up in the background, one trade's worth on every shard with a current
-  opportunity, so a trade doesn't wait for a transfer.
+- **Kalshi shard cash:** every shard is kept at an equal share (see Kalshi exchange shards), so a trade never
+  waits for a transfer.
 - **Polymarket goes first** (see Make trade), so a slow Polymarket miss trades nothing.
 
 The floor is the two exchanges' own response times over your internet connection. Run

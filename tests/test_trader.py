@@ -513,7 +513,7 @@ class ParallelChecksTests(unittest.TestCase):
 
 
 class FastPathTests(unittest.TestCase):
-    def make_scanner(self, book_age=0.1, cash_age=5):
+    def make_scanner(self, book_age=0.1, cash_age=5, feed_quiet=0.0):
         import threading
         from datetime import timedelta
         from types import SimpleNamespace
@@ -522,7 +522,7 @@ class FastPathTests(unittest.TestCase):
         sc.lock = threading.Lock()
         sc.source = {("kalshi", "K"): SimpleNamespace(levels={"yes": [(0.40, 500)], "no": []}),
                      ("polymarket", "P"): SimpleNamespace(levels={"yes": [], "no": [(0.50, 500)]})}
-        sc.streams = {ex: SimpleNamespace(connected=True, updated_at={mid: now - book_age})
+        sc.streams = {ex: SimpleNamespace(connected=True, updated_at={mid: now - book_age}, last_msg=now - feed_quiet)
                       for ex, mid in (("kalshi", "K"), ("polymarket", "P"))}
         t = (trader_mod.engine.now_utc() - timedelta(seconds=cash_age)).isoformat()
         sc.state = {"balances": {"kalshi": 500.0, "polymarket": 500.0, "kalshi_shards": {"0": 500.0}, "time": t}}
@@ -556,9 +556,53 @@ class FastPathTests(unittest.TestCase):
         t.prepare(LEGS)
         self.assertEqual((k.calls, p.calls), ([], []))                      # nothing downloaded at all
 
+    def test_a_quiet_book_on_a_live_feed_needs_no_download(self):
+        k, p = self.Counting("kalshi", yes=[(0.40, 500)]), self.Counting("polymarket", no=[(0.50, 500)])
+        t = Trader(self.make_scanner(book_age=10), {"kalshi": k, "polymarket": p})
+        plan = t.prepare(LEGS)                                  # the book hasn't changed for 10s: still current
+        self.assertNotIn("levels", k.calls + p.calls)
+        self.assertEqual(plan["checks"]["polymarket_book"], "stream")
+
+    def test_a_silent_feed_is_not_trusted(self):
+        k, p = self.Counting("kalshi", yes=[(0.40, 500)]), self.Counting("polymarket", no=[(0.50, 500)])
+        t = Trader(self.make_scanner(feed_quiet=30), {"kalshi": k, "polymarket": p})
+        plan = t.prepare(LEGS)                                  # nothing from the exchange for 30s: download
+        self.assertIn("levels", k.calls)
+        self.assertEqual(plan["checks"]["kalshi_book"], "download")
+
+    def test_market_details_and_book_load_at_the_same_time(self):
+        import threading
+        barrier = threading.Barrier(2, timeout=2)               # each waits for the other: deadlocks if sequential
+
+        class Both(FakeVenue):
+            def levels(self, mid):
+                barrier.wait()
+                return super().levels(mid)
+
+            def market_info(self, mid):
+                barrier.wait()
+                return super().market_info(mid)
+        k = Both("kalshi", yes=[(0.40, 500)])
+        p = FakeVenue("polymarket", no=[(0.50, 500)])
+        t = Trader(self.make_scanner(book_age=60), {"kalshi": k, "polymarket": p})
+        self.assertEqual(t.prepare(LEGS)["size"], 107)
+
+    def test_order_is_chosen_after_the_books_are_read(self):
+        calls = []
+        k, p = self.Counting("kalshi", yes=[(0.40, 500)]), self.Counting("polymarket", no=[(0.50, 500)])
+        t = Trader(self.make_scanner(book_age=60), {"kalshi": k, "polymarket": p})
+
+        def choose():
+            calls.append(sorted(k.calls + p.calls))                # what had been read by then
+            return "thinner_first", "kalshi", "Polymarket just moved: Kalshi first"
+        plan = t.prepare(LEGS, choose=choose)
+        self.assertIn("levels", calls[0])
+        self.assertEqual((plan["first"], plan["order_mode"], plan["order_why"]),
+                         ("kalshi", "thinner_first", "Polymarket just moved: Kalshi first"))
+
     def test_stale_stream_or_cash_downloads(self):
         k, p = self.Counting("kalshi", yes=[(0.40, 500)]), self.Counting("polymarket", no=[(0.50, 500)])
-        sc = self.make_scanner(book_age=5, cash_age=60)
+        sc = self.make_scanner(book_age=60, cash_age=60)
         t = Trader(sc, {"kalshi": k, "polymarket": p})
         plan = t.prepare(LEGS)
         self.assertIn("levels", k.calls)

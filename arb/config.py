@@ -288,7 +288,12 @@ BALANCES_REFRESH_SECS = 15     # your cash on each site, used to size opportunit
 STREAM_MAX_MARKETS = 2000      # per exchange: near-arb markets and non-sports/crypto pairs streamed live
 STREAM_EVAL_SECS = 0.1         # how often streamed price changes are re-checked for arbs
 FOCUS_FILE = PROJECT_ROOT / "cache" / "focus.json"   # the dashboard's Focus setting, kept across restarts
-LIVE_BOOK_MAX_AGE = 1.0      # a trade uses the stream's book (no download) if it updated this recently
+# A trade uses the live feed's book (no download) while the feed is alive: it heard from the exchange within
+# LIVE_FEED_ALIVE_SECS and has this market's book from LIVE_BOOK_MAX_AGE or less ago. A book that hasn't
+# changed is still current on a live feed: Kalshi's numbers every update and resyncs on a gap, Polymarket's
+# sends the whole book each time, and a feed that drops clears its books.
+LIVE_BOOK_MAX_AGE = 30.0
+LIVE_FEED_ALIVE_SECS = 5.0
 MARKET_INFO_TTL = 60.0       # a trade reuses a market's details (tick, min size, shard) this long
 CASH_MAX_AGE = 20.0          # a trade uses the scanner's cash reading if it's this fresh
 STREAM_FRESH_SECS = 60         # a streamed market is trusted (not polled) only if updated this recently

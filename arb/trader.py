@@ -143,14 +143,19 @@ class Trader:
         return info, "download"
 
     def _live_book(self, ex, mid):
-        """The stream's book for this market if it updated within LIVE_BOOK_MAX_AGE, else None."""
+        """The live feed's book for this market, or None: the feed must be connected and alive (heard from the
+        exchange within LIVE_FEED_ALIVE_SECS) and hold this market's book from LIVE_BOOK_MAX_AGE or less ago.
+        A quiet book on a live feed is current (see config), so a trade needn't download it."""
         stream = (getattr(self.scanner, "streams", None) or {}).get(ex)
         source = getattr(self.scanner, "source", None) or {}
         m = source.get((ex, mid))
         if not stream or m is None or not getattr(stream, "connected", False):
             return None
+        now = time.time()
+        if now - (getattr(stream, "last_msg", 0) or 0) > config.LIVE_FEED_ALIVE_SECS:
+            return None
         t = getattr(stream, "updated_at", {}).get(mid)
-        if not t or time.time() - t > config.LIVE_BOOK_MAX_AGE or not getattr(m, "levels", None):
+        if not t or now - t > config.LIVE_BOOK_MAX_AGE or not getattr(m, "levels", None):
             return None
         return {"yes": list(m.levels.get("yes") or []), "no": list(m.levels.get("no") or [])}
 
@@ -181,23 +186,25 @@ class Trader:
     # ---- planning ----------------------------------------------------------------------
 
     def prepare(self, legs, max_invest=None, timeline=None, hedge_depth=1.0, order=None, first=None, dry=False,
-                book_share=None):
+                book_share=None, choose=None):
         """hedge_depth > 1: shrink the size until the second leg's book holds that many times the shares
         at or below break-even, so a small move between the two orders can't leave the first leg unhedged.
         order: how the two orders go out (ORDER_MODES); TRADE_ORDER if not given. first: which site goes
         first in a one-after-the-other order (else the thinner book). dry: a paper trade (simulate()): no
         cash limits, nothing moved between Kalshi shards. book_share: take at most this share of the shares
-        each book shows at the prices paid."""
+        each book shows at the prices paid. choose: a callable returning (order mode, first site, why), called
+        once the books are read, so the order is decided on the latest timing (Auto-trade's "smart" order)."""
         tl = dict(timeline or {})
         tl.setdefault("decided", time.time())      # Make trade: the click is the decision
         with trading():                    # ahead of every other request, the fast lane's included
             plan = self._prepare(legs, max_invest, hedge_depth, order if order in ORDER_MODES else config.TRADE_ORDER,
-                                 first=first, dry=dry, book_share=book_share)
+                                 first=first, dry=dry, book_share=book_share, choose=choose)
         tl["checks_done"] = time.time()
         plan["timeline"] = tl
         return plan
 
-    def _prepare(self, legs, max_invest=None, hedge_depth=1.0, mode=None, first=None, dry=False, book_share=None):
+    def _prepare(self, legs, max_invest=None, hedge_depth=1.0, mode=None, first=None, dry=False, book_share=None,
+                 choose=None):
         if not self.venues:
             raise TradeError("Trading needs both API keys. Add POLYMARKET_KEY_ID and POLYMARKET_SECRET_KEY to .env.")
         by_ex = {l["exchange"]: l for l in legs}
@@ -214,7 +221,7 @@ class Trader:
             raise TradeError("This pair doesn't guarantee a payout.")
 
         # Every check on both sites at once (prices move while we look): market info, order book and
-        # cash per site; Kalshi's cash depends on the market's shard, so it follows its market info.
+        # cash per site, all at once; only Kalshi's cash waits for the market info (it needs the shard).
         info, levels, balance = {}, {}, {}
 
         # In the common case none of this downloads anything: the stream's book, cached market details
@@ -223,11 +230,11 @@ class Trader:
 
         def read(ex):
             v, mid = self.venues[ex], contracts[ex].market_id
-            info[ex], checks[f"{ex}_info"] = self._market_info(ex, v, mid)
-            shard = info[ex].get("shard") if ex == "kalshi" else None
             with LanePool(2) as pool:
                 live = self._live_book(ex, mid)
-                book = None if live is not None else pool.submit(v.levels, mid)
+                book = None if live is not None else pool.submit(v.levels, mid)     # while the info loads
+                info[ex], checks[f"{ex}_info"] = self._market_info(ex, v, mid)
+                shard = info[ex].get("shard") if ex == "kalshi" else None
                 cached = self._cached_cash(ex, shard)
                 cash = None if cached is not None else pool.submit(v.balance, shard)
                 levels[ex] = (live if live is not None else book.result())[sides[ex]]
@@ -240,6 +247,13 @@ class Trader:
         with LanePool(2) as pool:
             for job in [pool.submit(read, ex) for ex in EXCHANGES]:
                 job.result()
+        order_why = None
+        if choose:
+            # Which site goes first is decided now, not when the arb was spotted: "the stale site first,
+            # before it reprices" is only true if it still hasn't repriced once the books are read.
+            mode, first, order_why = choose()
+            if mode not in ORDER_MODES:
+                mode = config.TRADE_ORDER
         for ex in EXCHANGES:
             if not info[ex]["open"]:
                 raise TradeError(f"The {NAMES[ex]} market isn't open for trading.")
@@ -416,6 +430,7 @@ class Trader:
         plan["checks"] = checks
         plan["together"] = mode == "together"
         plan["order_mode"] = mode
+        plan["order_why"] = order_why
         plan["dry"] = dry
         plan["expected_profit"] = payout * n - plan["capital"]
         plan["cap"] = cap
@@ -891,6 +906,7 @@ class Trader:
                 "unhedged_exchange": NAMES[A["exchange"]] if unhedged > 1e-9 else None,
                 "unhedged_side": A["side"] if unhedged > 1e-9 else None, "payout": plan["payout"],
                 "slip": round(max(slips), 4) if slips else None, "order_mode": plan.get("order_mode"),
+                "order_why": plan.get("order_why"),
                 "first_exchange": A["exchange"], "checks": plan.get("checks")}
 
     def _write(self, log, status):

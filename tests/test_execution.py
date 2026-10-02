@@ -308,6 +308,25 @@ class AutoTradeIntegrationTests(unittest.TestCase):
         self.assertEqual((order, kw.get("first")), ("thinner_first", "kalshi"))
         self.assertIn("Kalshi first", a.history[0]["order"])
 
+    def test_order_is_decided_again_once_the_books_are_read(self):
+        now = time.time()
+        s, a = self.make([row()])
+        s.streams = {"kalshi": Stream({"K": now - 30}), "polymarket": Stream({"P": now - 0.1})}
+        decided = []
+
+        class Choosing(FakeTrader):
+            def prepare(self, legs, cap, timeline=None, hedge_depth=1.0, order=None, **kw):
+                s.streams["kalshi"].updated_at["K"] = time.time()  # Kalshi repriced while the books were read
+                decided.append(kw["choose"]())
+                self.sim = {**self.sim, "order_why": decided[-1][2]}
+                return super().prepare(legs, cap, timeline, hedge_depth, order, **kw)
+        s.trader = Choosing()
+        with mock.patch.object(config, "AUTO_TRADE_DRY_RUN", True), \
+                mock.patch.object(config, "PAPER_LOG", Path(tempfile.gettempdir()) / "arb_test_paper.jsonl"):
+            a.check(s.state["opportunities"])
+        self.assertNotIn("Kalshi first", decided[0][2])           # no longer stale by then
+        self.assertEqual(a.history[0]["order"], decided[0][2])     # the history shows the order actually used
+
     def test_real_results_feed_the_throttle(self):
         miss = {"status": "partial", "hedged_pairs": 0, "net": -0.3, "unhedged_shares": 0, "slip": 0.03,
                 "order_mode": "thinner_first", "steps": [], "missed": [{"exchange": "Kalshi", "why": "moved", "gap": 0.03}],

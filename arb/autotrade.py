@@ -90,7 +90,8 @@ def current_row(scanner, legs):
 
 
 def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.0, min_roi=0.0, cap=None,
-               decided=None, hedge_depth=1.0, order=None, first=None, dry=False, book_share=None, min_edge=0.0):
+               decided=None, hedge_depth=1.0, order=None, first=None, dry=False, book_share=None, min_edge=0.0,
+               choose=None):
     """Plan and place a trade in one step, for an arb the scanner currently lists as fast.
     dry: a paper trade (nothing is sent; see Trader.simulate). min_edge: profit per pair the plan needs."""
     decided = decided or time.time()
@@ -102,7 +103,7 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
         raise TradeError(f"{label} isn't allowed for this arb ({fast.get('why', 'not checked')}). Use Make trade.")
     cap = min(x for x in (cap or config.FAST_MAX_TRADE, max_invest) if x)
     trader = scanner.trader
-    extra = {k: v for k, v in (("first", first), ("dry", dry), ("book_share", book_share)) if v}
+    extra = {k: v for k, v in (("first", first), ("dry", dry), ("book_share", book_share), ("choose", choose)) if v}
     plan = trader.prepare(legs, cap, timeline={"tick": row.get("tick_ts"), "detected": row.get("detected_ts"),
                                                "decided": decided}, hedge_depth=hedge_depth, order=order, **extra)
     roi = plan["expected_profit"] / plan["capital"] if plan["capital"] else 0
@@ -238,7 +239,9 @@ class AutoTrader:
             res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap, decided=decided,
                              min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI,
                              hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH, order=mode, first=first, dry=dry,
-                             book_share=config.AUTO_TRADE_BOOK_SHARE, min_edge=need)
+                             book_share=config.AUTO_TRADE_BOOK_SHARE, min_edge=need,
+                             choose=lambda: execpolicy.choose_order(self.scanner, row, self.stats, cat))
+            entry["order"] = res.get("order_why") or why     # decided again once the books were read
             if dry:
                 self._paper(row, cat, res, entry)
                 return
