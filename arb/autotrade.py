@@ -5,7 +5,7 @@ break-even, unhedged shares closed the cheaper way), just without stopping to sh
 Auto-trade sends its orders per AUTO_TRADE_ORDER (default thinner_first: the thinner book first, then
 the other site for exactly what filled).
 Only rows the scanner marks "fast" qualify (engine.fast_check): crypto pairs matched by contract terms
-or anything settling within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
+or anything whose result is known within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
 
 Auto-trade is off every time the scanner starts; you turn it on in the dashboard. It places one trade
 at a time, at most AUTO_TRADE_MAX_TRADE each and AUTO_TRADE_DAILY_LIMIT per day, and turns itself

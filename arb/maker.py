@@ -108,9 +108,9 @@ class MakerBot:
                 continue
             if r.get("suspicious") or (not config.AUTO_TRADE_LIVE_GAMES and in_play(r)):
                 continue
-            closes = engine._parse_time(r.get("closes")) if r.get("closes") else None
-            if not closes or (closes - engine.now_utc()).total_seconds() > hours:
-                continue                       # same rule as Auto-trade: settles within FAST_MAX_HOURS
+            decided = engine.decided_at(r)
+            if not decided or (decided - engine.now_utc()).total_seconds() > hours:
+                continue                       # same rule as Auto-trade: result known within FAST_MAX_HOURS
             pid = pair_id(r["legs"])
             if pid in self.active or now - self.tried.get(pid, 0) < config.MAKER_AUTO_COOLDOWN_SECS:
                 continue

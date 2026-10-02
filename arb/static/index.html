@@ -832,7 +832,7 @@ function renderMaker(s) {
     <span>${m.on ? `<span style="color:var(--good)">●</span> ON` : "OFF"}${m.active?.length ? ` · ${m.active.length} resting` : ""}</span>
     ${m.filled_today > 0 ? `<span>Today: <b class="profit">${money(m.net_today)}</b> on ${money(m.filled_today)} filled</span>` : ""}
     <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Rests a post-only Polymarket order for the
-      best Maker mode row settling within ${m.fast_max_hours}h · up to ${money(m.max_order)} per order, ${m.max_orders} at once,
+      best Maker mode row decided within ${m.fast_max_hours}h · up to ${money(m.max_order)} per order, ${m.max_orders} at once,
       ${money(m.max_resting)} resting in total, ${money(m.daily_limit)} filled per day · each order lasts ${m.ttl}s (Polymarket expires it
       even if this app stops) · every fill is bought on Kalshi right away at no more than the hedge limit · cancels when Kalshi
       moves past the hedge limit or the row disappears · turns off after ${m.max_misses} orders in a row leave shares to sell back.</div></details>
@@ -893,10 +893,10 @@ function renderAuto(s) {
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
     ${a.dry_run ? `<span class="badge-paper" title="Paper trading (Settings): everything but the orders; fills checked against the real books">PAPER TRADING: no real orders</span>` : ""}
     ${s.lane?.active ? `<span class="muted" title="The pairs Auto-trade could take get their own price check and go first on the live streams (Settings: Fast lane)">Fast lane:
-      ${compact(s.lane.pairs)} pairs paying out within ${s.lane.hours ?? a.fast_max_hours}h, checked every
+      ${compact(s.lane.pairs)} pairs decided within ${s.lane.hours ?? a.fast_max_hours}h, checked every
       ${s.lane.every != null ? s.lane.every.toFixed(1) : s.lane.seconds.toFixed(1)}s</span>` : ""}
     <button type="button" class="settings-link" style="margin:0">⚙ Settings</button>
-    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with one-way-rules, different-source or contradicting-price warnings ·
+    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs whose result is known within ${a.fast_max_hours}h (even if paid out later)${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with one-way-rules, different-source or contradicting-price warnings ·
       ${a.allow_player_props ? "player props included" : "no player props"} ·
       ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit (too-good-to-be-true rows included)" : ", never rows flagged too good to be true"} ·
       ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade${a.min_profit > 0 ? ` · profit ≥ ${money(a.min_profit)}` : ""} ·
@@ -930,7 +930,7 @@ function renderAuto(s) {
         `it checks the real books when each order would have landed and records what would have filled. Turn paper ` +
         `trading off in ⚙ Settings to trade for real.`)) return;
     if (!a.on && !a.dry_run && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
-        `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for arbs settling within ${a.fast_max_hours}h` +
+        `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for arbs decided within ${a.fast_max_hours}h` +
         `${a.allow_auto_matched ? ", including auto-matched pairs you haven't checked (a wrong match can lose on both sides)" : ""}. ` +
         `It turns itself off if a trade leaves shares unhedged. Change what it may take in ⚙ Settings.`)) return;
     try { state.autotrade = await post("/api/autotrade", { on: !a.on }); renderAuto(state); }

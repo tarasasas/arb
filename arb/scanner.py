@@ -649,7 +649,7 @@ class Scanner:
         return mode == "auto" and bool(getattr(self.autotrader, "on", False) or getattr(self.makerbot, "on", False))
 
     def lane_groups(self, now=None):
-        """The pair groups Auto-trade could take: paying out within FAST_MAX_HOURS, soonest first. Games
+        """The pair groups Auto-trade could take: result known within FAST_MAX_HOURS, soonest first. Games
         already under way are left out unless AUTO_TRADE_LIVE_GAMES is on (Auto-trade skips them).
         Re-worked out at most every 30s, or when the matched markets or the hours change."""
         now = now or engine.now_utc()
@@ -667,8 +667,9 @@ class Scanner:
                 ts = [t for t in (engine._parse_time(c.close_time) for c in by_ex[ex] if c.close_time) if t]
                 return min(ts) if ts else None
             k_close, p_close = first("kalshi"), first("polymarket")
-            # Same date fast_check uses: non-sports pairs wait for the later site, sports for Kalshi's.
-            close = (max(k_close, p_close) if k_close and p_close else None) if g[1][0] == "event" else k_close
+            # Same date fast_check uses: when the result is known. Non-sports: the earlier site (Polymarket's
+            # end date often runs weeks past the event); sports: Kalshi's.
+            close = min((t for t in (k_close, p_close) if t), default=None) if g[1][0] == "event" else k_close
             if close is None or close > cutoff:
                 continue
             if (g[1][0] not in ("event", "price") and not config.AUTO_TRADE_LIVE_GAMES
@@ -692,7 +693,7 @@ class Scanner:
                 was = active
                 self._apply_stream_wants()
                 self.log(f"Fast lane {'on' if active else 'off'}" + (
-                    f": {len(self.lane_groups())} pairs paying out within {config.FAST_MAX_HOURS:g}h, re-checked "
+                    f": {len(self.lane_groups())} pairs decided within {config.FAST_MAX_HOURS:g}h, re-checked "
                     f"about every {config.FAST_LANE_PAUSE_SECS:g}s and first on the live streams" if active else ""))
             if not active:
                 with self.lock:

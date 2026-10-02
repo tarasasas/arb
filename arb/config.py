@@ -94,8 +94,9 @@ DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "").strip()
 DASHBOARD_PHONE = os.environ.get("DASHBOARD_PHONE", "").strip().lower() in ("1", "true", "yes", "on")
 
 # ---- Fast trade (one click, no confirm) and Auto-trade (no click), for time-sensitive arbs ------
-# Only rows that need no checking by you qualify: crypto (paired by contract terms) or anything
-# settling within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
+# Only rows that need no checking by you qualify: crypto (paired by contract terms) or anything whose
+# result is known within FAST_MAX_HOURS (even if paid out later), never auto-matched pairs or rows with
+# rule warnings.
 FAST_MAX_HOURS = _env_num("FAST_MAX_HOURS", 24)
 # Also allow pairs the matcher paired by wording (not verified by you). Set to 0 to require your check.
 FAST_ALLOW_AUTO_MATCHED = os.environ.get("FAST_ALLOW_AUTO_MATCHED", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -159,7 +160,7 @@ AUTO_TRADE_BOOK_SHARE = _env_num("AUTO_TRADE_BOOK_SHARE", 50) / 100
 # Paper trading: Auto-trade does everything but send the orders, then checks the real books at the moments
 # they would have landed to see what would have filled. Results go to paper_trades.jsonl.
 AUTO_TRADE_DRY_RUN = _env_on("AUTO_TRADE_DRY_RUN", False)
-# Fast lane: the pairs Auto-trade could take (paying out within FAST_MAX_HOURS) get their own price check
+# Fast lane: the pairs Auto-trade could take (result known within FAST_MAX_HOURS) get their own price check
 # every FAST_LANE_PAUSE_SECS and go first on the live streams, instead of waiting for the full sweep.
 # auto = while Auto-trade or Auto maker is on; always; off.
 FAST_LANE = os.environ.get("FAST_LANE", "").strip().lower() or "auto"

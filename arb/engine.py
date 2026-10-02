@@ -505,9 +505,12 @@ def explain_suspicious(cand, now):
 def to_row(cand, sizing, now):
     k, p = cand["k"], cand["p"]
     too_good = cand["edge"] > SUSPICIOUS_EDGE
-    # Money is tied up until the later of the two settles.
+    # Money is tied up until the later of the two settles. The result is known once the earlier one does:
+    # Polymarket's end date often runs weeks past the event, so a non-sports pair decided tonight can pay
+    # out much later. Fast trade and Auto-trade go by when it's decided.
     closes = [t for t in (_parse_time(k.close_time), _parse_time(p.close_time)) if t]
     close = max(closes) if k.var[0] == "event" and closes else (closes[0] if closes else None)
+    decided = min(closes) if k.var[0] == "event" and closes else close
     row = {
         "game": k.game_label or k.game_key.split(":", 1)[1], "league": k.game_key.split(":", 1)[0],
         "quantity": describe_var(k.var, k.note), "payout": cand["payout"], "edge_per_contract": round(cand["edge"], 4),
@@ -519,6 +522,7 @@ def to_row(cand, sizing, now):
         "trade_until": k.trade_until or p.trade_until or None,
         "not_simple": not_simple_reasons(cand),
         "suspicious": too_good, "closes": close.isoformat() if close else None,
+        "decided": decided.isoformat() if decided else None,
         "checked": now.isoformat(),
         "depth": cand.get("depth"),
         "fee_coef": {"kalshi": k.fee_coef, "polymarket": p.fee_coef},
@@ -551,7 +555,8 @@ FAST_BLOCKING = ("ONE-WAY RULES", "DIFFERENT SETTLEMENT SOURCES", "PRICES CONTRA
 def fast_check(row, now):
     """Can this row be traded without a confirm step (Fast trade / Auto-trade)? Pairs matched by
     contract terms, by the sports matcher, approved by you, or (FAST_ALLOW_AUTO_MATCHED) auto-matched by
-    wording, that settle within FAST_MAX_HOURS (crypto included). Never rows that look
+    wording, whose result is known within FAST_MAX_HOURS (crypto included; the payout itself may come
+    later, see to_row). Never rows that look
     too good to be true or carry rule warnings. {"ok": bool, "why": str}."""
     if row.get("suspicious") and not config.FAST_ALLOW_TOO_GOOD:
         return {"ok": False, "why": "too good to be true: check it first"}
@@ -564,11 +569,17 @@ def fast_check(row, now):
     w = next((w for w in row.get("warnings") or [] if w.startswith(blocking)), None)
     if w:
         return {"ok": False, "why": w.split(":")[0].split(" (")[0].lower()}
-    close = _parse_time(row["closes"]) if row.get("closes") else None
-    hours = (close - now).total_seconds() / 3600 if close else None
+    when = decided_at(row)
+    hours = (when - now).total_seconds() / 3600 if when else None
     if hours is not None and hours <= config.FAST_MAX_HOURS:
-        return {"ok": True, "why": f"settles within {config.FAST_MAX_HOURS:g}h" + ("; auto-matched, not verified" if auto else "")}
-    return {"ok": False, "why": f"settles in more than {config.FAST_MAX_HOURS:g}h: use Make trade"}
+        return {"ok": True, "why": f"result within {config.FAST_MAX_HOURS:g}h" + ("; auto-matched, not verified" if auto else "")}
+    return {"ok": False, "why": f"result known in more than {config.FAST_MAX_HOURS:g}h: use Make trade"}
+
+
+def decided_at(row):
+    """When a row's result is known (its "decided" date; rows from before that field: when it settles)."""
+    s = row.get("decided") or row.get("closes")
+    return _parse_time(s) if s else None
 
 
 def now_utc():

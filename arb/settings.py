@@ -11,8 +11,9 @@ from . import config
 # percent and cents are stored in config as fractions / dollars (shown x100).
 GROUPS = [
     ("What Auto-trade and Fast trade may take", [
-        ("FAST_MAX_HOURS", "number", "Only arbs that pay out within (hours)",
-         "Arbs settling later always need Make trade with its confirm step.", 24),
+        ("FAST_MAX_HOURS", "number", "Only arbs whose result is known within (hours)",
+         "When the game ends or the event happens, even if a site pays out later (Polymarket's end dates often "
+         "run weeks past the event). Arbs decided later always need Make trade with its confirm step.", 24),
         ("FAST_ALLOW_AUTO_MATCHED", "bool", "Pairs matched by wording you haven't checked",
          "Non-sports pairs the matcher paired automatically. A wrong match can lose on both sides.", True),
         ("FAST_ALLOW_TOO_GOOD", "bool", "Rows flagged too good to be true",

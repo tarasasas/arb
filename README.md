@@ -209,8 +209,10 @@ Some arbs last only seconds, so these skip the confirm screen. Auto-trade runs t
 
 ⚡ Fast trade sends its orders per `TRADE_ORDER` (below), with the same steps 3 and 4.
 
-**Which rows qualify:** anything settling within `FAST_MAX_HOURS` (24 hours by default), crypto
-included. That includes pairs auto-matched by wording that you haven't checked
+**Which rows qualify:** anything whose result is known within `FAST_MAX_HOURS` (24 hours by
+default), crypto included. That's when the game ends or the event happens, even if a site pays out
+later: for a non-sports pair it's the earlier of the two sites' dates, because Polymarket's end dates
+often run weeks past the event. That includes pairs auto-matched by wording that you haven't checked
 (`FAST_ALLOW_AUTO_MATCHED`), and rows flagged too good to be true, so any return of at least
 `AUTO_TRADE_MIN_ROI` qualifies, with no upper limit (`FAST_ALLOW_TOO_GOOD`). Live prices are always
 re-checked before ordering. Rows with a one-way-rules, different-settlement-source or prices-contradict
@@ -277,13 +279,20 @@ require your check.
   Paper fills assume the shown shares were really there, so real fills can only be the same or worse.
 
 **Fast lane.** A full sweep of every market takes 30-90 seconds, too slow for arbs that last
-seconds. While Auto-trade or Auto maker is on, the pairs Auto-trade could take (paying out within
+seconds. While Auto-trade or Auto maker is on, the pairs Auto-trade could take (result known within
 `FAST_MAX_HOURS`, games in progress left out unless `AUTO_TRADE_LIVE_GAMES=1`) get their own price
 check about every half second (`FAST_LANE_PAUSE_SECS`), and their markets get the first live-stream
 slots. That's a tenth or less of all markets (about 600 pairs on a typical day), so with an
 Advanced-tier Kalshi key a pass takes a second or two. The Auto-trade bar shows "Fast lane: N pairs
-paying out within 24h, checked every Xs". `FAST_LANE=always` runs it all the time (for Fast trade by
+decided within 24h, checked every Xs". `FAST_LANE=always` runs it all the time (for Fast trade by
 hand too), `off` never; also in ⚙ Settings.
+
+**Auto-trade mode.** While Auto-trade is on, only the markets it can take are refreshed: the full
+sweep, near-arb re-checks, live-feed re-checks of other markets, non-sports suggestions and the My
+positions check pause, so the fast lane and Auto-trade's own checks get the whole request budget.
+Market lists, your cash and Kalshi shards keep refreshing. The header says "Auto-trade mode". Turn it
+off under ⚙ Settings (`AUTO_TRADE_FOCUS=0`) to keep everything refreshing. A trade's own requests
+always go ahead of every other request.
 
 **⚙ Settings** (top right, and next to the Auto-trade switch) changes all of these from the dashboard:
 what Auto-trade and Fast trade may take (auto-matched pairs, too-good-to-be-true rows, player props,

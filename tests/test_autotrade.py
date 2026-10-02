@@ -32,6 +32,22 @@ class FastCheckTests(unittest.TestCase):
         self.assertFalse(self.check(closes=(NOW + timedelta(days=5)).isoformat())["ok"])
         self.assertFalse(self.check()["ok"])
 
+    def test_goes_by_when_the_result_is_known_not_the_payout(self):
+        later = (NOW + timedelta(days=15)).isoformat()             # Polymarket's end date, weeks past the event
+        self.assertTrue(self.check(decided=(NOW + timedelta(hours=6)).isoformat(), closes=later)["ok"])
+        self.assertFalse(self.check(decided=(NOW + timedelta(days=3)).isoformat(), closes=later)["ok"])
+
+    def test_row_dates_for_a_non_sports_pair(self):
+        from arb.model import NO, YES, Contract
+        iso = lambda h: (NOW + timedelta(hours=h)).isoformat()
+        k = Contract("kalshi", "KX", "E:x", ("event", "x"), ">", 0.5, "Wins?", close_time=iso(6))
+        p = Contract("polymarket", "pm", "E:x", ("event", "x"), ">", 0.5, "Wins?", close_time=iso(24 * 15))
+        k.ask, p.ask = {YES: 0.40, NO: 0.62}, {YES: 0.58, NO: 0.50}
+        row = engine.to_row({"k": k, "p": p, "sk": YES, "sp": NO, "payout": 1.0, "edge": 0.05, "ak": 0.40, "ap": 0.50},
+                            None, NOW)
+        self.assertEqual(row["decided"], iso(6))                   # the earlier site: the result is known then
+        self.assertEqual(row["closes"], iso(24 * 15))              # money is tied up until the later one pays
+
     def test_rule_warnings_always_block(self):
         for w in ("ONE-WAY RULES: x", "DIFFERENT SETTLEMENT SOURCES (a vs b). x", "PRICES CONTRADICT THIS MATCH: x"):
             self.assertFalse(self.check(tab="Crypto", closes=SOON, warnings=[w])["ok"], w)
