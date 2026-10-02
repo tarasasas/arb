@@ -291,6 +291,11 @@ SUGGEST_REFRESH_SECS = 1800    # rebuild non-sports match suggestions
 CRYPTO_REFRESH_SECS = 20       # look for new 15-minute crypto Up/Down windows
 POSITIONS_REFRESH_SECS = 60    # live position check for My arbs (needs your API keys)
 BALANCES_REFRESH_SECS = 15     # your cash on each site, used to size opportunities you can afford
+# While Auto-trade or Auto maker is on (the fast lane runs), cash is read this often instead. It goes over
+# the same connections the orders use, so one of them always carries traffic from the last few seconds and
+# an order never waits for a new connection's TCP + TLS handshake (an order only reuses a connection used
+# within RateLimitedClient.POST_IDLE_MAX, 15s). Trades also find the cash reading fresh more often.
+BALANCES_REFRESH_AUTO_SECS = 6
 STREAM_MAX_MARKETS = 2000      # per exchange: near-arb markets and non-sports/crypto pairs streamed live
 STREAM_EVAL_SECS = 0.1         # how often streamed price changes are re-checked for arbs
 FOCUS_FILE = PROJECT_ROOT / "cache" / "focus.json"   # the dashboard's Focus setting, kept across restarts
@@ -301,6 +306,12 @@ FOCUS_FILE = PROJECT_ROOT / "cache" / "focus.json"   # the dashboard's Focus set
 LIVE_BOOK_MAX_AGE = 30.0
 LIVE_FEED_ALIVE_SECS = 5.0
 MARKET_INFO_TTL = 60.0       # a trade reuses a market's details (tick, min size, shard) this long
+# Market details for the pairs closest to an arb that Auto-trade could take are loaded in the background
+# (at most this many pairs, within this edge per pair of breaking even), and loaded again once older than
+# INFO_PREFETCH_AGE, so a trade on one of them finds them cached and its checks download nothing.
+INFO_PREFETCH_PAIRS = 10
+INFO_PREFETCH_EDGE = -0.01
+INFO_PREFETCH_AGE = 40.0
 CASH_MAX_AGE = 20.0          # a trade uses the scanner's cash reading if it's this fresh
 STREAM_FRESH_SECS = 60         # a streamed market is trusted (not polled) only if updated this recently
 STREAM_QUIET_SECS = 90         # a stream with no message at all for this long is reconnected

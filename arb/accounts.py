@@ -6,7 +6,7 @@ Polymarket US: GET /v1/portfolio/positions (netPosition > 0 is YES; < 0 is a sho
 """
 
 from . import config
-from .http import RateLimitedClient
+from .http import LanePool, RateLimitedClient
 from .model import as_list, best_match, guaranteed_payout
 
 
@@ -155,10 +155,12 @@ def pair_positions(kpos, ppos, lookup):
 class Accounts:
     """Signed read access to both accounts, built from the keys in .env (either may be missing)."""
 
-    def __init__(self, kalshi_client):
+    def __init__(self, kalshi_client, pm_http=None):
+        """pm_http: the client Polymarket orders go out on (same host and key), if trading is set up. Sharing
+        it gives that host one request budget, and these reads keep its connections warm for the orders."""
         self.kalshi_http = kalshi_client.http if kalshi_client.http.signer else None
-        self.pm_http = None
-        if config.POLYMARKET_KEY_ID and config.POLYMARKET_SECRET_KEY:
+        self.pm_http = pm_http
+        if self.pm_http is None and config.POLYMARKET_KEY_ID and config.POLYMARKET_SECRET_KEY:
             try:
                 from .polymarket_auth import load_signer
                 self.pm_http = RateLimitedClient(config.POLYMARKET_TRADE_BASE, 5.0,
@@ -176,19 +178,21 @@ class Accounts:
         Kalshi: balance (balance_dollars, or balance in cents). Polymarket: buying power, which is
         what a Buy No (1 - price per share) or a Buy Yes draws on."""
         out = {}
-        if self.kalshi_http:
-            d = self.kalshi_http.get("/portfolio/balance")
-            dollars = _f(d.get("balance_dollars"))
-            out["kalshi"] = dollars if dollars is not None else (_f(d.get("balance")) or 0) / 100
-            # Kalshi splits cash by exchange shard; an order only uses its market's shard's cash.
-            shards = {str(b.get("exchange_index", 0)): _f(b.get("balance")) or 0.0
-                      for b in d.get("balance_breakdown") or []}
-            if shards:
-                out["kalshi_shards"] = shards
-        if self.pm_http:
-            bals = self.pm_http.get("/v1/account/balances").get("balances") or []
-            usd = next((b for b in bals if b.get("currency") in (None, "", "USD")), bals[0] if bals else {})
-            out["polymarket"] = _f(usd.get("buyingPower")) or 0.0
+        with LanePool(1) as pool:          # both sites at once
+            pm = pool.submit(self.pm_http.get, "/v1/account/balances") if self.pm_http else None
+            if self.kalshi_http:
+                d = self.kalshi_http.get("/portfolio/balance")
+                dollars = _f(d.get("balance_dollars"))
+                out["kalshi"] = dollars if dollars is not None else (_f(d.get("balance")) or 0) / 100
+                # Kalshi splits cash by exchange shard; an order only uses its market's shard's cash.
+                shards = {str(b.get("exchange_index", 0)): _f(b.get("balance")) or 0.0
+                          for b in d.get("balance_breakdown") or []}
+                if shards:
+                    out["kalshi_shards"] = shards
+            if pm:
+                bals = pm.result().get("balances") or []
+                usd = next((b for b in bals if b.get("currency") in (None, "", "USD")), bals[0] if bals else {})
+                out["polymarket"] = _f(usd.get("buyingPower")) or 0.0
         return out
 
     def positions(self):

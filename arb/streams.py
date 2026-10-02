@@ -92,6 +92,7 @@ class _Stream(threading.Thread):
         self.ws, self.connected, self.last_msg, self.updates = None, False, 0.0, 0
         self.seen = set()                   # markets with a live book since the last (re)connect
         self.updated_at = {}                # market id -> time of its last streamed book
+        self.waiters = {}                   # market id -> Event set on its next book (a trade waiting on it)
         self.reconnects = 0
         self.error = None
 
@@ -203,6 +204,9 @@ class _Stream(threading.Thread):
         if top is not None and self.tops.get(market_id) != top:
             self.tops[market_id] = top
             self.top_changed_at[market_id] = now
+        ev = self.waiters.get(market_id)
+        if ev is not None:
+            ev.set()
         self.on_update(self.exchange, market_id)
 
     def _on_connect(self):

@@ -16,6 +16,7 @@ import json
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from . import config, execpolicy
@@ -146,6 +147,8 @@ class AutoTrader:
         self.game_pause = {}            # game -> time until which it's skipped (after a miss)
         self.history = deque(maxlen=20)
         self.misses = {}                # site -> misses in a row (reset by a trade where both legs filled)
+        # One trade at a time, on a thread that's already running: no thread to start once an arb is picked.
+        self._worker = ThreadPoolExecutor(1, thread_name_prefix="auto-trade") if run_async else None
         self._load_day()
 
     @staticmethod
@@ -183,6 +186,8 @@ class AutoTrader:
             self.on, self.halted = bool(on), None
             if on:
                 self.misses = {}
+        if on:
+            getattr(self.scanner.trader, "warm", lambda: None)()    # order connections open before the first arb
         self.scanner.log(f"Auto-trade turned {'on' if on else 'off'}" + (
             f": up to ${config.AUTO_TRADE_MAX_TRADE:g} per trade, ${config.AUTO_TRADE_DAILY_LIMIT:g} per day, "
             f"profit at least ${config.AUTO_TRADE_MIN_PROFIT:g}" if on else ""))
@@ -248,8 +253,8 @@ class AutoTrader:
             self.busy = True
             self.tried[pair_id(row["legs"])] = time.time()
         args = (row, min(config.AUTO_TRADE_MAX_TRADE, room), time.time())
-        if self.run_async:
-            threading.Thread(target=self._run, args=args, daemon=True).start()
+        if self._worker:
+            self._worker.submit(self._run, *args)
         else:
             self._run(*args)
         return row

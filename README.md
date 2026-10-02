@@ -645,14 +645,33 @@ What keeps it short:
 - **Checks without downloads:** in the common case the pre-trade checks download nothing. They use the
   live feed's book while the feed is alive (it heard from the exchange in the last 5 seconds) and has the
   book from the last 30 seconds: a book that hasn't changed is still current on a live feed. They also use
-  the market's details cached for a minute and the scanner's cash reading (refreshed every 15 seconds, and
-  downloaded fresh after any trade). Whatever must be downloaded loads at the same time.
+  the market's details cached for a minute and the scanner's cash reading (refreshed every 15 seconds, every
+  6 while Auto-trade or Auto maker is on, and downloaded fresh after any trade).
+- **Market details loaded ahead:** while Auto-trade or Auto maker is on, the details (tick size, minimum
+  size, Kalshi shard, open or not) of the 10 pairs it could take that are closest to an arb (within 1¢) are
+  loaded in the background and kept under a minute old, so when one turns into an arb its checks find them
+  already there instead of waiting a round trip.
+- **One round trip at most:** whatever the checks must download (book, details and cash on both sites) goes
+  out at once. Kalshi cash no longer waits for the market's details to learn its shard: the market list
+  already says which.
 - **Trades first:** a trade's own requests go ahead of every other request, the fast lane's included,
   and may burst without waiting for the steady pace; orders never wait for a slot.
 - **Auto-trade mode:** while Auto-trade is on, only the markets it can take are refreshed (see Fast lane).
 - **Leg order decided last:** Auto-trade's "smart" order (which site goes first) is decided once the books
   are read, not when the arb was spotted, so "the stale site first" is still true when the orders go out.
-- **Kept-alive connections:** connections to both sites stay open, which saves a TLS handshake per request.
+- **Kept-alive connections:** connections to both sites stay open, which saves a TCP + TLS handshake per
+  request. An order only reuses a connection used in the last 15 seconds, so while Auto-trade or Auto maker
+  is on, the cash reads every 6 seconds go over the same connections the orders use and keep one ready
+  (Polymarket's orders and cash reads share one client). Turning Auto-trade on, or starting a trade's
+  checks, opens one at once if there's none. A connection the exchange has closed is noticed before reuse
+  (a closed connection has its close waiting to be read), so an order never goes out on one and loses its
+  answer.
+- **No threads started on the way to an order:** a trade's downloads, both-at-once orders and Auto-trade
+  itself run on threads that are already waiting (about 70 µs to hand over, against 140-320 µs to start).
+- **Second-leg retries wake on the feed:** a retry waiting for its book to refill goes the moment the live
+  feed delivers that market's book, not at the next 20 ms check.
+- **Closing out on live books:** shares left unhedged are sold back (or hedged) on the live feeds' books
+  when they're alive, without a download first; so is the "best price there now" a miss reports.
 - **Polymarket order confirmation:** checked after 50 ms, then backing off (it was every 250 ms).
 - **Kalshi shard cash:** every shard is kept at an equal share (see Kalshi exchange shards), so a trade never
   waits for a transfer.

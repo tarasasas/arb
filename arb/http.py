@@ -4,6 +4,7 @@ import gzip
 import http.client
 import io
 import json
+import select
 import ssl
 import threading
 import time
@@ -101,7 +102,7 @@ class RateLimitedClient:
         # Kept-alive connections: a new HTTPS connection costs a TCP + TLS handshake on every call.
         u = urllib.parse.urlparse(self.base_url)
         self._host, self._port, self._https = u.hostname, u.port or (443 if u.scheme == "https" else 80), u.scheme == "https"
-        self._pool, self._pool_lock = [], threading.Lock()
+        self._pool, self._pool_lock, self._warming = [], threading.Lock(), False
         self._ssl = ssl.create_default_context() if self._https else None
         proxy = urllib.request.getproxies().get(u.scheme)
         bypass = urllib.request.proxy_bypass(self._host) if proxy else True
@@ -130,12 +131,29 @@ class RateLimitedClient:
             return http.client.HTTPSConnection(self._host, self._port, timeout=self.timeout, context=self._ssl)
         return http.client.HTTPConnection(self._host, self._port, timeout=self.timeout)
 
+    @staticmethod
+    def _alive(conn):
+        """False if the server has closed this idle connection (or sent something nobody asked for): an
+        idle HTTP connection has nothing to read until the next request, so a readable socket means its
+        close is waiting there. Checking costs microseconds; sending on a closed one costs a retry, or,
+        for an order, an answer that never comes."""
+        sock = conn.sock
+        if sock is None:
+            return False
+        try:
+            if getattr(sock, "pending", None) and sock.pending():      # TLS data already decrypted
+                return False
+            readable, _, _ = select.select([sock], [], [], 0)
+        except (OSError, ValueError):
+            return False
+        return not readable
+
     def _take(self, max_idle):
         now = time.monotonic()
         with self._pool_lock:
             while self._pool:
                 conn, used = self._pool.pop()              # most recently used first
-                if now - used <= max_idle:
+                if now - used <= max_idle and self._alive(conn):
                     return conn, True
                 conn.close()
         return self._new_conn(), False
@@ -177,16 +195,27 @@ class RateLimitedClient:
             return resp.status, resp.reason, resp.headers, data
         raise ConnectionError("unreachable")
 
+    WARM_MARGIN = 3.0       # warm() opens a new connection when the freshest is about to be too old for an order
+
     def warm(self):
-        """Have a connection ready for the next order, so it skips the TCP + TLS handshake."""
-        conn, reused = self._take(self.POST_IDLE_MAX)
-        if not reused:
+        """Have a connection ready for the next order, so it skips the TCP + TLS handshake. Nothing to do
+        when the pool already holds one an order may use for the next few seconds (its idle clock is left
+        alone: only real traffic resets it)."""
+        now = time.monotonic()
+        with self._pool_lock:
+            if self._warming or any(now - used <= self.POST_IDLE_MAX - self.WARM_MARGIN for _, used in self._pool):
+                return                     # (one at a time: a site that's down can't tie up a thread per call)
+            self._warming = True
+        try:
+            conn = self._new_conn()
             try:
                 conn.connect()
             except (OSError, http.client.HTTPException):
                 conn.close()
                 return
-        self._give(conn)
+            self._give(conn)
+        finally:
+            self._warming = False
 
     def _http_error(self, url, status, reason, headers, data):
         return urllib.error.HTTPError(url, status, reason, headers, io.BytesIO(data))

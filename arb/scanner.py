@@ -405,11 +405,16 @@ class Scanner:
             self.log(f"Crypto: {len(contracts)} price markets across {len(groups)} settlement time(s) on both sites")
             self._publish()
 
+    def _make_accounts(self):
+        """Signed reads of both accounts. Polymarket's go over the client its orders use (same host and key)."""
+        from . import accounts
+        pv = ((getattr(self, "trader", None) and self.trader.venues) or {}).get("polymarket")
+        return accounts.Accounts(self.kalshi, pm_http=getattr(pv, "http", None))
+
     def sync_positions(self):
         """Live position check: read both accounts, pair positions into arbs in My arbs."""
-        from . import accounts
         if self.accounts is None:
-            self.accounts = accounts.Accounts(self.kalshi)
+            self.accounts = self._make_accounts()
         acc = self.accounts
         if len(acc.missing) == 2:
             self.my_arbs.sync_state = {"status": "off", "error": "Add your Kalshi and Polymarket API keys to .env"}
@@ -447,9 +452,8 @@ class Scanner:
 
     def refresh_balances(self):
         """Read your cash on both sites (needs the API keys) for sizing opportunities to it."""
-        from . import accounts
         if self.accounts is None:
-            self.accounts = accounts.Accounts(self.kalshi)
+            self.accounts = self._make_accounts()
         if len(self.accounts.missing) == 2:
             return
         try:
@@ -463,8 +467,14 @@ class Scanner:
         with self.lock:
             self.state["balances"] = info
 
+    def balances_every(self):
+        """Seconds between cash reads: more often while Auto-trade or Auto maker is on, which also keeps the
+        connections orders go out on warm (see BALANCES_REFRESH_AUTO_SECS)."""
+        return config.BALANCES_REFRESH_AUTO_SECS if self.lane_active() else config.BALANCES_REFRESH_SECS
+
     def _balances_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
+            started = time.time()
             self.refresh_balances()
             try:
                 self.keep_shard_split()
@@ -475,7 +485,9 @@ class Scanner:
                 self.prefund_shards()
             except Exception as e:
                 self.log(f"Kalshi shards: top-up failed ({e!r})")
-            time.sleep(config.BALANCES_REFRESH_SECS)
+            # in short steps, so turning Auto-trade on switches to its pace within a second
+            while time.time() - started < self.balances_every() and not (stop_event and stop_event.is_set()):
+                time.sleep(0.5)
 
     def prefund_shards(self, now=None):
         """Keep one trade's worth of cash on every Kalshi shard that has an opportunity right now, so
@@ -756,6 +768,7 @@ class Scanner:
         matching.sync_quotes(contracts, source)
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
+        self._prefetch_trade_info(cands)
         if not hot:
             # The closest pairs only: a long hot list re-checks slowly, and arbs come from the closest.
             hot_map = {}
@@ -888,6 +901,24 @@ class Scanner:
         if not hot:
             self.log(f"Full sweep in {secs:.0f}s: {len(opportunities)} opportunities, {len(cands)} pairs within "
                      f"{abs(config.NEAR_MISS_EDGE) * 100:.0f}c of breaking even (re-checked every ~2s until next sweep)")
+
+    def _prefetch_trade_info(self, cands):
+        """While Auto-trade (or Auto maker) is on: the market details (tick, minimum size, shard, open) of the
+        pairs closest to an arb that it could take, loaded in the background (see Trader.prefetch_info). When one
+        turns into an arb, its trade's checks find them cached instead of waiting a round trip for them."""
+        trader = getattr(self, "trader", None)
+        if not (trader and trader.venues and self.lane_active()):
+            return
+        lane, ids = self.lane_groups(), []
+        for c in cands:                     # best edge first
+            if c["edge"] < config.INFO_PREFETCH_EDGE:
+                break
+            if (c["k"].game_key, c["k"].var) in lane:
+                ids += [("kalshi", c["k"].market_id), ("polymarket", c["p"].market_id)]
+                if len(ids) >= 2 * config.INFO_PREFETCH_PAIRS:
+                    break
+        if ids:
+            trader.prefetch_info(ids)
 
     def _maker_rows(self, cands, source, now):
         """Near-misses that become profitable with the Polymarket leg resting as a maker order."""

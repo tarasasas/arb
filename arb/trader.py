@@ -20,6 +20,7 @@ import math
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from . import config, engine
@@ -29,6 +30,13 @@ from .venues import Fill, floor_to
 
 EXCHANGES = ("kalshi", "polymarket")
 _TL_LOCK = threading.Lock()
+# A trade's downloads and its second order run on threads that already exist: starting a thread costs
+# ~0.1ms, paid before an order went out. Work handed to this pool never waits on other work in it (no
+# nesting), and its workers take the lane (trade, priority) of whoever handed them the work.
+_IO = LanePool(16, thread_name_prefix="trade-io")
+# Market details loaded ahead of a trade (see Trader.prefetch_info): plain background requests, never in
+# the priority lane, so they can't hold up a price check or a trade.
+_PREFETCH = ThreadPoolExecutor(2, thread_name_prefix="info-prefetch")
 
 
 def timeline_stages(tl):
@@ -114,6 +122,7 @@ class Trader:
         self.scanner, self.venues = scanner, venues
         self.plans, self.lock = {}, threading.Lock()
         self._info_cache = {}            # (exchange, market id) -> (time, market info)
+        self._prefetching, self._prefetch_lock = set(), threading.Lock()
 
     # ---- tick-to-trade timeline -------------------------------------------------------------
 
@@ -134,13 +143,79 @@ class Trader:
 
     # ---- fast paths for the pre-trade checks -------------------------------------------------
 
-    def _market_info(self, ex, venue, mid):
+    def _cached_info(self, ex, mid):
         hit = self._info_cache.get((ex, mid))
-        if hit and time.time() - hit[0] < config.MARKET_INFO_TTL:
-            return hit[1], "cached"
+        return hit[1] if hit and time.time() - hit[0] < config.MARKET_INFO_TTL else None
+
+    def _fetch_info(self, ex, venue, mid):
+        sent = time.time()                 # its "open" is as of the request, not the reply
         info = venue.market_info(mid)
-        self._info_cache[(ex, mid)] = (time.time(), info)
-        return info, "download"
+        self._info_cache[(ex, mid)] = (sent, info)
+        if len(self._info_cache) > 4000:   # forget the expired ones
+            cutoff = time.time() - config.MARKET_INFO_TTL
+            for key, (t, _) in list(self._info_cache.items()):
+                if t < cutoff:
+                    self._info_cache.pop(key, None)
+        return info
+
+    def prefetch_info(self, markets):
+        """Load market details in the background for markets a trade may soon need: the pairs closest to an
+        arb that Auto-trade could take (the scanner names them on every pass). When one turns into an arb, its
+        trade finds them cached and its checks download nothing. Details are refreshed once older than
+        INFO_PREFETCH_AGE, so they're never past MARKET_INFO_TTL while the pair stays near. Returns how many
+        were started."""
+        if not self.venues:
+            return 0
+        now, started = time.time(), 0
+        for ex, mid in markets:
+            hit = self._info_cache.get((ex, mid))
+            if ex not in self.venues or (hit and now - hit[0] < config.INFO_PREFETCH_AGE):
+                continue
+            with self._prefetch_lock:
+                if len(self._prefetching) >= 2 * config.INFO_PREFETCH_PAIRS:
+                    break                  # a site that's slow or down: don't let them queue up
+                if (ex, mid) in self._prefetching:
+                    continue
+                self._prefetching.add((ex, mid))
+            _PREFETCH.submit(self._prefetch_one, ex, mid)
+            started += 1
+        return started
+
+    def _prefetch_one(self, ex, mid):
+        try:
+            self._fetch_info(ex, self.venues[ex], mid)
+        except Exception:
+            pass                           # the trade downloads it itself
+        finally:
+            with self._prefetch_lock:
+                self._prefetching.discard((ex, mid))
+
+    def _shard_hint(self, mid):
+        """The Kalshi market's exchange shard from the scanner's market list (None if unknown), so its cash
+        can be read before the market details arrive."""
+        m = (getattr(self.scanner, "source", None) or {}).get(("kalshi", mid))
+        shard = getattr(m, "shard", None)
+        return shard if isinstance(shard, int) else None
+
+    def _books(self, legs):
+        """Each leg's whole book ({"yes": [...], "no": [...]}): the live feed's while it's alive (see
+        _live_book), else downloaded, the downloads all at once."""
+        out = [self._live_book(l["exchange"], l["market_id"]) for l in legs]
+        missing = [i for i, lv in enumerate(out) if lv is None]
+        jobs = {i: _IO.submit(self.venues[legs[i]["exchange"]].levels, legs[i]["market_id"]) for i in missing[1:]}
+        if missing:                        # the first one on this thread
+            i = missing[0]
+            out[i] = self.venues[legs[i]["exchange"]].levels(legs[i]["market_id"])
+        for i, job in jobs.items():
+            out[i] = job.result()
+        return out
+
+    def warm(self):
+        """Have each site's order connection ready (in the background; nothing to do when one is)."""
+        for v in (self.venues or {}).values():
+            w = getattr(v, "warm", None)
+            if w:
+                _IO.submit(self._quiet, w)
 
     def _live_book(self, ex, mid):
         """The live feed's book for this market, or None: the feed must be connected and alive (heard from the
@@ -204,12 +279,62 @@ class Trader:
         once the books are read, so the order is decided on the latest timing (Auto-trade's "smart" order)."""
         tl = dict(timeline or {})
         tl.setdefault("decided", time.time())      # Make trade: the click is the decision
+        if not dry:
+            self.warm()                    # order connections ready while the checks run
         with trading():                    # ahead of every other request, the fast lane's included
             plan = self._prepare(legs, max_invest, hedge_depth, order if order in ORDER_MODES else config.TRADE_ORDER,
                                  first=first, dry=dry, book_share=book_share, choose=choose)
         tl["checks_done"] = time.time()
         plan["timeline"] = tl
         return plan
+
+    def _read_checks(self, contracts, sides):
+        """Market details, order book and cash on both sites, every download at once (prices move while we
+        look): one round trip at most. In the common case nothing is downloaded: the live feed's book, market
+        details cached or prefetched, and the scanner's recent cash reading. Kalshi cash is held per exchange
+        shard; the market list already says which, so that cash needn't wait for the market details.
+        Returns (info, levels, balance, checks), each by exchange."""
+        info, levels, balance, checks, jobs, live, shard = {}, {}, {}, {}, {}, {}, {}
+        for ex in EXCHANGES:
+            v, mid = self.venues[ex], contracts[ex].market_id
+            live[ex] = self._live_book(ex, mid)
+            if live[ex] is None:
+                jobs[ex, "book"] = _IO.submit(v.levels, mid)
+            cached = self._cached_info(ex, mid)
+            if cached is None:
+                jobs[ex, "info"] = _IO.submit(self._fetch_info, ex, v, mid)
+            else:
+                info[ex] = cached
+            checks[f"{ex}_info"] = "cached" if cached is not None else "download"
+            shard[ex] = None
+            if ex == "kalshi":
+                shard[ex] = cached.get("shard") if cached is not None else self._shard_hint(mid)
+                if shard[ex] is None and cached is None:
+                    continue                       # shard unknown until the details arrive
+            balance[ex] = self._cached_cash(ex, shard[ex])
+            if balance[ex] is None:
+                jobs[ex, "cash"] = _IO.submit(v.balance, shard[ex])
+        for ex in EXCHANGES:
+            if (ex, "info") in jobs:
+                info[ex] = jobs[ex, "info"].result()
+        k_shard = info["kalshi"].get("shard")
+        if "kalshi" not in balance or (k_shard is not None and k_shard != shard["kalshi"]):
+            # the shard wasn't known up front (or the list's was out of date): Kalshi cash on the right one
+            jobs.pop(("kalshi", "cash"), None)
+            balance["kalshi"] = self._cached_cash("kalshi", k_shard)
+            if balance["kalshi"] is None:
+                jobs["kalshi", "cash"] = _IO.submit(self.venues["kalshi"].balance, k_shard)
+        for ex in EXCHANGES:
+            levels[ex] = (live[ex] if live[ex] is not None else jobs[ex, "book"].result())[sides[ex]]
+            if (ex, "cash") in jobs:
+                balance[ex] = jobs[ex, "cash"].result()
+            checks[f"{ex}_book"] = "stream" if live[ex] is not None else "download"
+            if live[ex] is not None:              # how long since the live feed last changed this book
+                t = getattr((getattr(self.scanner, "streams", None) or {}).get(ex), "updated_at", {}).get(
+                    contracts[ex].market_id)
+                checks[f"{ex}_book_age"] = round(time.time() - t, 2) if t else None
+            checks[f"{ex}_cash"] = "download" if (ex, "cash") in jobs else "cached"
+        return info, levels, balance, checks
 
     def _prepare(self, legs, max_invest=None, hedge_depth=1.0, mode=None, first=None, dry=False, book_share=None,
                  choose=None):
@@ -228,33 +353,7 @@ class Trader:
         if payout <= 0:
             raise TradeError("This pair doesn't guarantee a payout.")
 
-        # Every check on both sites at once (prices move while we look): market info, order book and
-        # cash per site, all at once; only Kalshi's cash waits for the market info (it needs the shard).
-        info, levels, balance = {}, {}, {}
-
-        # In the common case none of this downloads anything: the stream's book, cached market details
-        # and the scanner's recent cash reading are used, and only what's missing is fetched.
-        checks = {}
-
-        def read(ex):
-            v, mid = self.venues[ex], contracts[ex].market_id
-            with LanePool(2) as pool:
-                live = self._live_book(ex, mid)
-                book = None if live is not None else pool.submit(v.levels, mid)     # while the info loads
-                info[ex], checks[f"{ex}_info"] = self._market_info(ex, v, mid)
-                shard = info[ex].get("shard") if ex == "kalshi" else None
-                cached = self._cached_cash(ex, shard)
-                cash = None if cached is not None else pool.submit(v.balance, shard)
-                levels[ex] = (live if live is not None else book.result())[sides[ex]]
-                balance[ex] = cached if cached is not None else cash.result()
-            checks[f"{ex}_book"] = "stream" if live is not None else "download"
-            if live is not None:                  # how long since the live feed last changed this book
-                t = getattr((getattr(self.scanner, "streams", None) or {}).get(ex), "updated_at", {}).get(mid)
-                checks[f"{ex}_book_age"] = round(time.time() - t, 2) if t else None
-            checks[f"{ex}_cash"] = "cached" if cached is not None else "download"
-        with LanePool(2) as pool:
-            for job in [pool.submit(read, ex) for ex in EXCHANGES]:
-                job.result()
+        info, levels, balance, checks = self._read_checks(contracts, sides)
         order_why = None
         if choose:
             # Which site goes first is decided now, not when the arb was spotted: "the stale site first,
@@ -334,12 +433,8 @@ class Trader:
                     funding_error = f"Kalshi refused moving cash to shard {shard}: {e.detail}"
         if transfers:
             # Waiting for the transfer took seconds: size on books read now, not on the ones from before it.
-            def book(ex):
-                live = self._live_book(ex, contracts[ex].market_id)
-                return (live if live is not None else self.venues[ex].levels(contracts[ex].market_id))[sides[ex]]
-            with LanePool(2) as pool:
-                fresh = {ex: pool.submit(book, ex) for ex in EXCHANGES}
-                levels.update({ex: job.result() for ex, job in fresh.items()})
+            books = self._books([{"exchange": ex, "market_id": contracts[ex].market_id} for ex in EXCHANGES])
+            levels.update({ex: lv[sides[ex]] for ex, lv in zip(EXCHANGES, books)})
             checks["kalshi_book"] = checks["polymarket_book"] = "re-read after shard transfer"
             full = engine.size_opportunity(cand, levels["kalshi"], levels["polymarket"])
             if not full:
@@ -497,8 +592,9 @@ class Trader:
             if fa.qty <= 0:
                 errs = {o["exchange"]: o["error"] for o in log["orders"] if o.get("error")}
                 lim = plan.get("together_limits") or {}
-                missed = [self._miss(leg, plan["size"], lim.get(leg["exchange"], leg["limit"]), errs.get(leg["exchange"]))
-                          for leg in (A, B)]
+                books = self._miss_books([leg for leg in (A, B) if not errs.get(leg["exchange"])])
+                missed = [self._miss(leg, plan["size"], lim.get(leg["exchange"], leg["limit"]), errs.get(leg["exchange"]),
+                                     lv=books.get(leg["exchange"])) for leg in (A, B)]
                 log["missed"] = missed
                 self._write(log, status="no_fill")
                 return self._result(plan, "no_fill", steps, fa, [], None, 0,
@@ -507,10 +603,10 @@ class Trader:
             return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record,
                                 b_refused=B["exchange"] in refused)
 
-        # 1. first leg (meanwhile the second site gets a connection ready for its order)
+        # 1. first leg (meanwhile the second site gets a connection ready for its order, if it has none)
         warm = getattr(vb, "warm", None)
         if warm:
-            threading.Thread(target=self._quiet, args=(warm,), daemon=True).start()
+            _IO.submit(self._quiet, warm)
         try:
             fa = self._timed_buy(plan, "first", A, plan["size"], A["limit"])
         except ApiError as e:
@@ -566,8 +662,9 @@ class Trader:
                 return self._timed_buy(plan, "together", leg, plan["size"], limits[leg["exchange"]]), None
             except Exception as e:
                 return None, e
-        with LanePool(2) as pool:
-            out = list(pool.map(send, legs))
+        # Polymarket's on a waiting worker, Kalshi's on this thread: both leave at once, no thread to start first.
+        job = _IO.submit(send, legs[1])
+        out = [send(legs[0]), job.result()]
         fills, unknown, refused = {}, [], set()
         for leg, (fill, err) in zip(legs, out):
             name = NAMES[leg["exchange"]]
@@ -670,16 +767,12 @@ class Trader:
     def _recheck(self, plan, info, steps):
         """Re-size a confirmed plan on books and cash read right now: never more pairs than you
         confirmed nor more than its cap. Returns False when not even one pair is profitable."""
-        legs, levels, cash = plan["legs"], {}, {}
-
-        def read(ex):
-            leg, v = legs[ex], self.venues[ex]
-            live = self._live_book(ex, leg["market_id"])
-            levels[ex] = (live if live is not None else v.levels(leg["market_id"]))[leg["side"]]
-            cash[ex] = v.balance(info[ex].get("shard") if ex == "kalshi" else None)
-        with LanePool(2) as pool:
-            for job in [pool.submit(read, ex) for ex in EXCHANGES]:
-                job.result()
+        legs = plan["legs"]
+        cash_jobs = {ex: _IO.submit(self.venues[ex].balance, info[ex].get("shard") if ex == "kalshi" else None)
+                     for ex in EXCHANGES}            # all four reads at once
+        books = self._books([legs[ex] for ex in EXCHANGES])
+        levels = {ex: lv[legs[ex]["side"]] for ex, lv in zip(EXCHANGES, books)}
+        cash = {ex: job.result() for ex, job in cash_jobs.items()}
         coefs = {ex: legs[ex]["fee_coef"] for ex in EXCHANGES}
         step = max(legs["kalshi"]["min_qty"], legs["polymarket"]["min_qty"], 1.0)
         n = fit_size(levels, coefs, plan["payout"], plan["cap"], cash, step, max_n=plan["size"])
@@ -699,18 +792,34 @@ class Trader:
 
     def _await_liquidity(self, leg, limit, since):
         """Pause before a second-leg retry so the book can refill. With a live stream, go as soon as it
-        shows a fresh book with shares at or below the limit; at most SECOND_LEG_RETRY_PAUSE either way."""
+        shows a fresh book with shares at or below the limit (the stream wakes this the moment that market's
+        book changes); at most SECOND_LEG_RETRY_PAUSE either way."""
         deadline = time.monotonic() + config.SECOND_LEG_RETRY_PAUSE
+        mid = leg["market_id"]
         stream = (getattr(self.scanner, "streams", None) or {}).get(leg["exchange"])
-        m = (getattr(self.scanner, "source", None) or {}).get((leg["exchange"], leg["market_id"]))
+        m = (getattr(self.scanner, "source", None) or {}).get((leg["exchange"], mid))
         if not stream or m is None or not getattr(stream, "connected", False):
             time.sleep(config.SECOND_LEG_RETRY_PAUSE)
             return
-        while time.monotonic() < deadline:
-            if (getattr(stream, "updated_at", {}).get(leg["market_id"]) or 0) > since and any(
-                    p <= limit + 1e-9 for p, _ in (getattr(m, "levels", None) or {}).get(leg["side"]) or []):
-                return
-            time.sleep(0.02)
+        waiters = getattr(stream, "waiters", None)
+        ev = waiters.setdefault(mid, threading.Event()) if isinstance(waiters, dict) else None
+        try:
+            while True:
+                if ev is not None:
+                    ev.clear()             # before looking: a book arriving after the look sets it again
+                if (getattr(stream, "updated_at", {}).get(mid) or 0) > since and any(
+                        p <= limit + 1e-9 for p, _ in (getattr(m, "levels", None) or {}).get(leg["side"]) or []):
+                    return
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                if ev is not None:
+                    ev.wait(min(left, 0.05))
+                else:
+                    time.sleep(min(left, 0.02))
+        finally:
+            if ev is not None and waiters.get(mid) is ev:
+                waiters.pop(mid, None)
 
     def _close_out(self, plan, info, A, B, va, vb, excess, a_cost_per, cash_b, record, steps, hedge_ok=True):
         """First-leg shares the second leg couldn't hedge at break-even. Close them whichever way gets
@@ -718,9 +827,7 @@ class Trader:
         site a little above break-even (at most CLOSE_OUT_MAX_LOSS per share). Returns (extra
         second-leg fills, sell-back fill or None)."""
         try:
-            with LanePool(2) as pool:
-                ja, jb = pool.submit(va.levels, A["market_id"]), pool.submit(vb.levels, B["market_id"])
-                lv_a, lv_b = ja.result(), jb.result()
+            lv_a, lv_b = self._books([A, B])     # live feeds when alive: no round trip before closing out
         except Exception as e:
             record("sellback", A, error=repr(e))
             steps.append(f"Couldn't read the books to close {excess:g} unhedged shares ({e})")
@@ -869,14 +976,22 @@ class Trader:
                 steps.append(f"{NAMES[A['exchange']]}: would have sold back {sq:g} for ${sold.amount:.2f}")
         return {**self._result(plan, status, steps, fa, fills_b, sold, hedged, "", missed), "paper": True}
 
-    def _miss(self, leg, qty, limit, error=None, filled=0.0):
+    def _miss_books(self, legs):
+        """{exchange: whole book} for explaining misses, read at once; a site that can't be read is left out."""
+        try:
+            return {l["exchange"]: lv for l, lv in zip(legs, self._books(legs))}
+        except Exception:
+            return {}
+
+    def _miss(self, leg, qty, limit, error=None, filled=0.0, lv=None):
         """Why an order didn't (fully) fill, for the Auto-trade fail-safe and history: the site's
-        rejection, or the price on that book now next to the limit the order carried."""
+        rejection, or the price on that book now next to the limit the order carried. lv: that market's
+        whole book if already read (else the live feed's, or downloaded)."""
         why, gap_dollars, best = f"rejected: {error}" if error else "", None, None
         if not error:
             why = f"filled {filled:g} of {qty:g} at ≤ ${limit:.3f}"
             try:
-                lv = self.venues[leg["exchange"]].levels(leg["market_id"])[leg["side"]]
+                lv = (lv if lv is not None else self._books([leg])[0])[leg["side"]]
                 if lv:
                     best, gap_dollars = lv[0][0], max(0.0, lv[0][0] - limit)
                     gap = (lv[0][0] - limit) * 100
