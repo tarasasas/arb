@@ -217,11 +217,13 @@ class RateLimitedClient:
         """POST JSON. Orders are not idempotent, so the only retry is on 429 (the request
         was refused before reaching the exchange). Other failures raise ApiError at once."""
         url = self.base_url + path
-        data = json.dumps(body).encode()
+        data = json.dumps(body).encode() if body is not None else b""       # None: no body at all
         for attempt in range(self.max_retries):
             self._wait_turn(order=True)
             self.request_count += 1
-            headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Content-Type": "application/json"}
+            headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+            if body is not None:
+                headers["Content-Type"] = "application/json"
             if self.signer:
                 headers.update(self.signer("POST", self.base_path + path))
             status, reason, hdrs, raw = self._send("POST", url, data, headers, idempotent=False)

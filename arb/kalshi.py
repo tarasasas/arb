@@ -210,7 +210,10 @@ class KalshiClient:
         rps = refill / DEFAULT_TOKEN_COST * config.KALSHI_BUDGET_FRACTION
         self.http.set_rate(rps)
         self.workers = workers_for(rps)
-        self.auth_info = f"API key, {limits.get('usage_tier', '?')} tier, {rps:.0f} req/s"
+        grants = [g.get("level") for g in limits.get("grants") or [] if g.get("level")]
+        # Kalshi keeps usage_tier at "basic" after an upgrade; the grant and the read budget show it.
+        tier = limits.get("usage_tier", "?") + (f" + {'/'.join(grants)} grant" if grants else "")
+        self.auth_info = f"API key, {tier}, {rps:.0f} req/s"
 
     SERIES_TTL = 1800      # the full series list is 18 MB (a ~200ms pause to read): fetch it once per half hour
 
