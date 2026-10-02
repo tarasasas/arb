@@ -228,6 +228,9 @@ class Trader:
                 levels[ex] = (live if live is not None else book.result())[sides[ex]]
                 balance[ex] = cached if cached is not None else cash.result()
             checks[f"{ex}_book"] = "stream" if live is not None else "download"
+            if live is not None:                  # how long since the live feed last changed this book
+                t = getattr((getattr(self.scanner, "streams", None) or {}).get(ex), "updated_at", {}).get(mid)
+                checks[f"{ex}_book_age"] = round(time.time() - t, 2) if t else None
             checks[f"{ex}_cash"] = "cached" if cached is not None else "download"
         with LanePool(2) as pool:
             for job in [pool.submit(read, ex) for ex in EXCHANGES]:
@@ -856,7 +859,7 @@ class Trader:
                 "unhedged_exchange": NAMES[A["exchange"]] if unhedged > 1e-9 else None,
                 "unhedged_side": A["side"] if unhedged > 1e-9 else None, "payout": plan["payout"],
                 "slip": round(max(slips), 4) if slips else None, "order_mode": plan.get("order_mode"),
-                "first_exchange": A["exchange"]}
+                "first_exchange": A["exchange"], "checks": plan.get("checks")}
 
     def _write(self, log, status):
         log["status"], log["finished"] = status, engine.now_utc().isoformat()

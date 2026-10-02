@@ -33,6 +33,27 @@ def pair_id(legs):
 in_play = execpolicy.in_play      # a game that has already started (the scanner flags it in the row's warnings)
 
 
+def plan_text(res):
+    """Where each leg's planned price came from: "Planned: Kalshi NO ≤ $0.690 (live feed, 0.3s old) · ..."."""
+    legs, checks, parts = (res.get("plan") or {}).get("legs") or {}, res.get("checks") or {}, []
+    for ex, name in (("kalshi", "Kalshi"), ("polymarket", "Polymarket")):
+        leg = legs.get(ex)
+        if not leg or leg.get("limit") is None:
+            continue
+        src, age = checks.get(f"{ex}_book"), checks.get(f"{ex}_book_age")
+        how = {"stream": "live feed", "download": "downloaded just then"}.get(src, src or "?")
+        if src == "stream" and age is not None:
+            how += f", last changed {age:.1f}s before"
+        parts.append(f"{name} {leg['side'].upper()} ≤ ${leg['limit']:.3f} ({how})")
+    return ("Planned: " + " · ".join(parts)) if parts else ""
+
+
+def _sites(missed):
+    """"kalshi"/"polymarket" for each site named in a list of misses."""
+    names = {"Kalshi": "kalshi", "Polymarket": "polymarket"}
+    return [names[m["exchange"]] for m in missed or [] if m.get("exchange") in names]
+
+
 def row_info(row):
     return {"game": row.get("game"), "tab": row.get("tab"), "closes": row.get("closes")} if row else None
 
@@ -222,6 +243,7 @@ class AutoTrader:
                 self._paper(row, cat, res, entry)
                 return
             used = spent(res)
+            entry["plan"] = plan_text(res)
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used
                 self.net[self._today()] = self.net.get(self._today(), 0.0) + res["net"]
@@ -235,7 +257,8 @@ class AutoTrader:
             if missed:
                 entry["missed"] = "; ".join(f"{m['exchange']} {m['why']}" for m in missed)
             self._count_misses([m["exchange"] for m in missed], entry.get("missed"))
-            paused = self.stats.record(cat, res["status"], res["net"], res.get("slip"), res.get("order_mode") or mode)
+            paused = self.stats.record(cat, res["status"], res["net"], res.get("slip"), res.get("order_mode") or mode,
+                                       missed=_sites(missed))
             if paused:
                 entry["paused"] = f"{cat} paused for {config.AUTO_TRADE_THROTTLE_HOURS:g}h: {paused}"
                 self.scanner.log(f"Auto-trade: {entry['paused']}")
@@ -254,7 +277,7 @@ class AutoTrader:
             if getattr(e, "exchange", None) and not dry:       # an order was sent and that site refused it
                 entry.update({"status": "rejected", "missed": f"{e.exchange} {e}"})
                 self._count_misses([e.exchange], str(e))
-                self.stats.record(cat, "rejected", 0.0, None, mode)
+                self.stats.record(cat, "rejected", 0.0, None, mode, missed=_sites([{"exchange": e.exchange}]))
             if "Check that account" in str(e):
                 self._halt(str(e))
         except Exception as e:
@@ -268,10 +291,11 @@ class AutoTrader:
         """A paper trade's outcome: history, the market type's paper results, paper_trades.jsonl. Nothing
         was spent, so no limits, misses or pauses."""
         entry.update({"status": res["status"], "pairs": res["hedged_pairs"], "net": res["net"],
-                      "spent": res.get("capital"), "note": "; ".join(res.get("steps") or [])})
+                      "spent": res.get("capital"), "note": "; ".join(res.get("steps") or []), "plan": plan_text(res)})
         if res.get("missed"):
             entry["missed"] = "; ".join(f"{m['exchange']} {m['why']}" for m in res["missed"])
-        self.stats.record(cat, res["status"], res["net"], res.get("slip"), res.get("order_mode"), paper=True)
+        self.stats.record(cat, res["status"], res["net"], res.get("slip"), res.get("order_mode"), paper=True,
+                          missed=_sites(res.get("missed")))
         try:
             with open(config.PAPER_LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps({**entry, "slip": res.get("slip"), "order_mode": res.get("order_mode"),

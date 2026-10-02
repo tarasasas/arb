@@ -1,25 +1,21 @@
 """Polymarket US public market data: sports market parsing, batched quotes, order books."""
 
-import itertools
 import re
 import time
 from dataclasses import dataclass, field
 
 from . import config
-from .http import LanePool, RateLimitedClient
+from .http import LanePool, RateLimitedClient, unique_token
 
 PAGE = 500
 WORKERS = 16          # requests in flight; the rate limiter keeps the pace at POLYMARKET_RPS
-
-
-_seq = itertools.count()
 
 
 def fresh():
     """A query parameter no other request carries. The gateway's CDN (Cloudflare) keeps every reply for 30
     seconds by URL and ignores no-cache headers, so without it a book or quote read twice within 30s is
     the same old copy: arbs that are already gone, liquidity that isn't there."""
-    return ("_", f"{time.time_ns():x}{next(_seq):x}")      # the counter: Windows clocks tick in ms
+    return ("_", unique_token())
 
 SLUG_RE = re.compile(r"^(?P<prefix>aec|asc|tsc|atc|astatc)-(?P<league>[a-z0-9]+)-(?P<t1>[a-z0-9]+)-(?P<t2>[a-z0-9]+)-"
                      r"(?P<date>\d{4}-\d{2}-\d{2})(?:-(?P<rest>.+))?$")

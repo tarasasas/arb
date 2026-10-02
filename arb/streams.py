@@ -87,6 +87,7 @@ class _Stream(threading.Thread):
         self._connect = connect             # injectable for tests: connect(url, headers) -> ws
         self.wanted, self.subscribed = set(), set()
         self.first_seen = {}                        # market -> time of its first message (the snapshot)
+        self.tops, self.top_changed_at = {}, {}     # market -> best prices, and when they last changed
         self.lock, self.stop_event = threading.Lock(), threading.Event()
         self.ws, self.connected, self.last_msg, self.updates = None, False, 0.0, 0
         self.seen = set()                   # markets with a live book since the last (re)connect
@@ -148,6 +149,7 @@ class _Stream(threading.Thread):
                 self.ws = self._open()
                 self.connected, self.error, backoff = True, None, 1
                 self.subscribed, self.seen, self.updated_at, self.first_seen = set(), set(), {}, {}
+                self.tops, self.top_changed_at = {}, {}
                 self.last_msg = time.time()
                 self._on_connect()
                 self._sync_subscriptions(self.ws)
@@ -189,13 +191,18 @@ class _Stream(threading.Thread):
         return websocket.create_connection(self.url, header=[f"{k}: {v}" for k, v in headers.items()],
                                            timeout=30, enable_multithread=True)
 
-    def _updated(self, market_id):
+    def _updated(self, market_id, top=None):
+        """top: the market's best prices after this message; a change of them (not of a deeper level) is
+        recorded in top_changed_at, the stale-side signal Auto-trade uses."""
         self.updates += 1
         now = time.time()
         if market_id not in self.seen:
             self.first_seen[market_id] = now        # the snapshot after subscribing: not a price move
         self.seen.add(market_id)
         self.updated_at[market_id] = now
+        if top is not None and self.tops.get(market_id) != top:
+            self.tops[market_id] = top
+            self.top_changed_at[market_id] = now
         self.on_update(self.exchange, market_id)
 
     def _on_connect(self):
@@ -261,7 +268,7 @@ class KalshiStream(_Stream):
         m = self.markets.get(ticker)
         if m is not None:
             apply_levels(m, kalshi_levels(self.books[ticker]))
-            self._updated(ticker)
+            self._updated(ticker, (m.yes_ask, m.no_ask))
 
 
 class PolymarketStream(_Stream):
@@ -297,7 +304,7 @@ class PolymarketStream(_Stream):
         state = md.get("state")
         apply_levels(m, polymarket_levels(md), tradable=state in (None, "MARKET_STATE_OPEN"))
         m.state = state
-        self._updated(slug)
+        self._updated(slug, (m.yes_ask, m.no_ask))
 
 
 POLYMARKET_PRIVATE_WS_URL = "wss://api.polymarket.us/v1/ws/private"

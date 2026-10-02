@@ -20,6 +20,7 @@ from collections import deque
 from . import config
 
 FAST_CATEGORIES = ("Crypto windows",)
+MIN_MISSES = 3          # misses needed before "the site that misses more goes first" kicks in
 STATUSES = ("ok", "partial", "no_fill", "rejected")      # attempts that reached an exchange (or would have)
 
 
@@ -80,14 +81,15 @@ class ExecStats:
 
     # ---- results ----------------------------------------------------------------------------
 
-    def record(self, cat, status, net=0.0, slip=None, mode=None, paper=False):
-        """One attempt's outcome. Returns a pause reason if this result paused the category."""
+    def record(self, cat, status, net=0.0, slip=None, mode=None, paper=False, missed=()):
+        """One attempt's outcome. missed: the sites ("kalshi", "polymarket") whose order didn't fill.
+        Returns a pause reason if this result paused the category."""
         if status not in STATUSES:
             return None
         with self.lock:
             rs = self.results.setdefault(cat, deque(maxlen=int(config.AUTO_TRADE_STATS_KEEP)))
             rs.append({"time": self.now(), "status": status, "net": round(net or 0.0, 4),
-                       "slip": slip, "mode": mode, "paper": bool(paper)})
+                       "slip": slip, "mode": mode, "paper": bool(paper), "missed": sorted(set(missed or ()))})
             why = None if paper else self._throttle(cat)
             self._save()
             return why
@@ -153,6 +155,23 @@ class ExecStats:
               and r["status"] in ("ok", "partial")][-10:]
         return (sum(r["status"] == "partial" for r in rs) / len(rs), len(rs)) if rs else (0.0, 0)
 
+    def misses_by_site(self, cat):
+        """{"kalshi": n, "polymarket": n}: orders that didn't fill over this type's last 20 attempts (real and
+        paper); all types together when this one has fewer than MIN_MISSES."""
+        def count(rs):
+            out = {"kalshi": 0, "polymarket": 0}
+            for r in rs[-20:]:
+                for site in r.get("missed") or ():
+                    if site in out:
+                        out[site] += 1
+            return out
+        mine = count(self._recent(cat))
+        if sum(mine.values()) >= MIN_MISSES:
+            return mine, cat
+        everything = [r for c in list(self.results) for r in self._recent(c)]
+        everything.sort(key=lambda r: r["time"])
+        return count(everything), "all types"
+
     def summary(self):
         out = []
         with self.lock:
@@ -180,7 +199,10 @@ def stale_side(scanner, legs, now=None):
         s = (getattr(scanner, "streams", None) or {}).get(ex)
         if not s or not getattr(s, "connected", False) or mid not in getattr(s, "seen", ()):
             return None
-        t[ex] = getattr(s, "updated_at", {}).get(mid)
+        # when its best prices last changed (a change deeper in the book isn't a reprice); older stream
+        # objects without that fall back to the last message of any kind
+        changed = getattr(s, "top_changed_at", None)
+        t[ex] = (changed if changed is not None else getattr(s, "updated_at", {})).get(mid)
         if not t[ex]:
             return None
     if len(t) != 2:
@@ -209,6 +231,15 @@ def choose_order(scanner, row, stats, cat):
         other = "polymarket" if stale == "kalshi" else "kalshi"
         return "thinner_first", stale, (f"{NAMES[other]} just moved and {NAMES[stale]} hasn't yet: {NAMES[stale]} "
                                         f"first, before it reprices")
+    # The site whose orders keep missing goes first: a first order that misses trades nothing, while a second
+    # one that misses leaves the first leg to be sold back at a loss.
+    misses, where = stats.misses_by_site(cat)
+    worse = max(misses, key=misses.get)
+    better = "polymarket" if worse == "kalshi" else "kalshi"
+    if misses[worse] >= MIN_MISSES and misses[worse] >= 2 * misses[better]:
+        return "thinner_first", worse, (f"{NAMES[worse]} missed {misses[worse]} times recently ({where}; "
+                                        f"{NAMES[better]} {misses[better]}): {NAMES[worse]} first, so a miss there "
+                                        f"trades nothing")
     if is_fast(cat):
         return "together", None, "fast market: both orders at once"
     rate, n = stats.second_leg_misses(cat)

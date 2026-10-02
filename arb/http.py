@@ -17,6 +17,15 @@ from contextlib import contextmanager
 USER_AGENT = "kalshi-polymarket-arb-scanner/0.1"
 
 
+_seq = __import__("itertools").count()
+
+
+def unique_token():
+    """A value no other request carries (time + a counter: Windows clocks tick in ms). CDNs in front of
+    both exchanges' public data cache replies by URL, so a query parameter with this always reaches them."""
+    return f"{time.time_ns():x}{next(_seq):x}"
+
+
 class ApiError(Exception):
     def __init__(self, status, detail):
         super().__init__(f"HTTP {status}: {detail}")

@@ -327,3 +327,65 @@ class AutoTradeIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreshDataTests(unittest.TestCase):
+    def test_kalshi_list_prices_are_never_a_cached_copy(self):
+        from arb import kalshi
+        seen = []
+        c = kalshi.KalshiClient.__new__(kalshi.KalshiClient)
+        c.workers = 1
+        c.http = type("H", (), {"get": lambda _s, path, params: seen.append(params["_"]) or {"markets": []}})()
+        m = kalshi.KalshiMarket("K-1", "K", "KX", "NFL", "nfl", "football", "", "", "", "GAME", "FG", "A", ">", 0.0,
+                                "t", "", "", "", 0.07)
+        c.refresh_tops([m])
+        c.refresh_tops([m])
+        self.assertEqual(len(set(seen)), 2)
+
+
+class BestPriceChangeTests(unittest.TestCase):
+    def test_only_a_change_of_the_best_price_counts_as_a_move(self):
+        from arb import streams
+        m = type("M", (), {"levels": {}, "yes_ask": None, "no_ask": None, "quoted_at": 0.0})()
+        st = streams.KalshiStream(lambda a, b: {}, {"K1": m}, lambda e, x: None, lambda x: None, connect=lambda u, h: None)
+        st._handle({"type": "orderbook_snapshot", "sid": 7, "seq": 1, "msg": {
+            "market_ticker": "K1", "yes_dollars_fp": [["0.40", "10.00"], ["0.30", "5.00"]], "no_dollars_fp": [["0.55", "8.00"]]}})
+        first = st.top_changed_at["K1"]
+        time.sleep(0.01)
+        st._handle({"type": "orderbook_delta", "sid": 7, "seq": 2,
+                    "msg": {"market_ticker": "K1", "price_dollars": "0.30", "delta_fp": "3.00", "side": "yes"}})
+        self.assertEqual(st.top_changed_at["K1"], first)            # deeper in the book: not a reprice
+        self.assertGreater(st.updated_at["K1"], first)
+        st._handle({"type": "orderbook_delta", "sid": 7, "seq": 3,
+                    "msg": {"market_ticker": "K1", "price_dollars": "0.42", "delta_fp": "2.00", "side": "yes"}})
+        self.assertGreater(st.top_changed_at["K1"], first)          # a new best bid: buying NO now costs less
+
+
+class MissedSiteFirstTests(unittest.TestCase):
+    def test_the_site_that_keeps_missing_goes_first(self):
+        st, s = execpolicy.ExecStats(), type("S", (), {"streams": {}})()
+        with mock.patch.object(config, "AUTO_TRADE_ORDER", "smart"):
+            for _ in range(3):
+                st.record("MLB", "partial", -0.3, 0.05, "together", missed=["kalshi"])
+            st.record("MLB", "partial", -0.3, 0.05, "together", missed=["polymarket"])
+            mode, first, why = execpolicy.choose_order(s, row(), st, "MLB")
+            self.assertEqual((mode, first), ("thinner_first", "kalshi"))
+            self.assertIn("Kalshi missed 3 times", why)
+            # a type with too few misses of its own goes by every type's
+            mode, first, why = execpolicy.choose_order(s, row(league="NHL"), st, "NHL")
+            self.assertEqual((first, "all types" in why), ("kalshi", True))
+            # even in a fast market: a first leg that misses trades nothing
+            self.assertEqual(execpolicy.choose_order(s, row(), st, "MLB live")[1], "kalshi")
+
+    def test_no_clear_pattern_keeps_the_usual_order(self):
+        st, s = execpolicy.ExecStats(), type("S", (), {"streams": {}})()
+        with mock.patch.object(config, "AUTO_TRADE_ORDER", "smart"):
+            for site in ("kalshi", "polymarket", "kalshi", "polymarket"):
+                st.record("MLB", "partial", -0.3, 0.05, "together", missed=[site])
+            self.assertEqual(execpolicy.choose_order(s, row(), st, "MLB")[1], None)
+
+    def test_history_says_where_each_planned_price_came_from(self):
+        res = {"plan": {"legs": {"kalshi": {"side": "no", "limit": 0.69}, "polymarket": {"side": "yes", "limit": 0.21}}},
+               "checks": {"kalshi_book": "stream", "kalshi_book_age": 0.3, "polymarket_book": "download"}}
+        self.assertEqual(autotrade.plan_text(res), "Planned: Kalshi NO ≤ $0.690 (live feed, last changed 0.3s before) · "
+                                                   "Polymarket YES ≤ $0.210 (downloaded just then)")

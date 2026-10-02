@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import config
-from .http import LanePool, RateLimitedClient
+from .http import LanePool, RateLimitedClient, unique_token
 from .kalshi_auth import load_signer
 
 DEFAULT_TOKEN_COST = 10   # all market-data GETs; see GET /account/endpoint_costs
@@ -424,7 +424,9 @@ class KalshiClient:
         def fetch(chunk):
             sent = time.time()
             try:
-                return chunk, sent, self.http.get("/markets", {"tickers": ",".join(chunk), "limit": 1000})
+                # The market list allows 15s of CDN caching (cache-control max-age=15): ask for a fresh copy.
+                return chunk, sent, self.http.get("/markets", {"tickers": ",".join(chunk), "limit": 1000,
+                                                               "_": unique_token()})
             except Exception:
                 return chunk, sent, None
 

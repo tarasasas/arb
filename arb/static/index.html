@@ -878,6 +878,7 @@ function renderAuto(s) {
     h.ms && h.ms["total (tick to done)"] != null ? ` · <span class="muted">${h.ms["total (tick to done)"]} ms tick to done</span>` : ""}${
     h.missed ? `<br><span style="color:var(--critical)">Missed: ${esc(h.missed)}</span>` : ""}${
     h.order ? `<br><span class="muted">Order: ${esc(h.order)}</span>` : ""}${
+    h.plan ? `<br><span class="muted">${esc(h.plan)}</span>` : ""}${
     h.paused ? `<br><span style="color:var(--critical)">${esc(h.paused)}</span>` : ""}${
     h.note ? ` <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("");
   const types = (a.stats || []).map(t => `<tr><td>${esc(t.category)}${t.fast ? ' <span class="muted">fast</span>' : ""}</td>

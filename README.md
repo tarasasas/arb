@@ -249,10 +249,17 @@ require your check.
 **How Auto-trade keeps failed trades down** (all in ⚙ Settings → How Auto-trade trades):
 
 - **Stale side first** (leg order `smart`, the default). A cross-site arb usually exists because one site
-  hasn't repriced yet, and it's about to. When the live streams show one site just moved (within 2s) and
-  the other hasn't changed for 3s more, the stale one goes first, before it reprices. Fast markets
+  hasn't repriced yet, and it's about to. When the live streams show one site's best price just moved
+  (within 2s) and the other's hasn't for 3s more, the stale one goes first, before it reprices. Changes
+  deeper in a book, and the first book after subscribing, don't count as moves.
+- **The site that keeps missing goes first.** A first order that misses trades nothing; a second one that
+  misses leaves the first leg to be sold back at a loss. So once one site has missed at least 3 times and
+  twice as often as the other (over that market type's last 20 tries, or all types' while it has fewer),
+  that site's order goes first. Fast markets
   (crypto windows, games in progress), and market types whose second legs keep missing, send both orders at
-  once instead; anything else sends the thinner book first. Each trade's history line says which and why.
+  once instead; anything else sends the thinner book first. Each trade's history line says which and why,
+  and where both planned prices came from ("Kalshi NO ≤ $0.690 (live feed, last changed 0.3s before)"),
+  so a miss shows whether the quote it relied on was old.
 - **More edge where prices move fast.** Crypto windows and games in progress need `AUTO_TRADE_FAST_EDGE`
   (2¢) a pair. Every market type also learns its own buffer: the typical (75th percentile) price move its
   trades met while the orders went out (`AUTO_TRADE_LEARN_BUFFER`).
@@ -510,8 +517,9 @@ window says "Polymarket order stream on" once it's connected.
 **Polymarket's public gateway caches.** Its CDN keeps every reply (order books, quotes, market lists)
 for 30 seconds per URL and ignores no-cache headers, so reading the same book twice within 30 seconds
 returned the same old copy: arbs that were already gone, and liquidity that wasn't there. Every
-read now carries a parameter no other request has, so it always comes from the exchange. (Kalshi's
-API doesn't cache these.)
+read now carries a parameter no other request has, so it always comes from the exchange. Kalshi's
+market list (the prices full sweeps and the fast lane read) allows 15 seconds of caching too, so it gets
+the same treatment; its order books aren't cached.
 
 If a stream goes quiet (no message for 90 seconds) it reconnects by itself. Every full sweep still
 polls every market as a backstop, and a streamed market is only trusted without polling while it has
