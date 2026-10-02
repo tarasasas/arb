@@ -1215,7 +1215,8 @@ function legCell(l) {
   return `<div><span class="ex ${l.exchange === "kalshi" ? "kalshi" : "poly"}">${l.exchange === "kalshi" ? "KALSHI" : "POLYMARKET"}</span>
     <b>${sideName(l)}</b> · ${compact(l.shares)} shares · paid ${money(l.paid)}${l.cost_from === "account"
       ? ` <span class="muted" title="Your account's cost for these shares, fees included${l.paid_recorded != null
-        ? `; recorded at the time as ${money(l.paid_recorded)}` : ""}">(real cost${l.paid_recorded != null && Math.abs(l.paid_recorded - l.paid) >= 0.01
+        ? `; recorded at the time as ${money(l.paid_recorded)}` : ""}">(real cost${l.fees > 0
+        ? `: ${money(l.paid - l.fees)} + ${money(l.fees)} fees` : ""}${l.paid_recorded != null && Math.abs(l.paid_recorded - l.paid) >= 0.01
         ? `, was ${money(l.paid_recorded)}` : ""})</span>` : ""} ${st}
     <div class="muted" style="font-size:12px">${esc(l.title)}${l.settles ? ` · settles ${esc(localTime(l.settles))}` : ""}</div></div>`;
 }

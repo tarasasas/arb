@@ -29,9 +29,10 @@ def kalshi_positions(http):
             qty = _f(p.get("position_fp") if p.get("position_fp") is not None else p.get("position"))
             if not qty:
                 continue
-            cost = (_f(p.get("market_exposure_dollars")) or 0) + (_f(p.get("fees_paid_dollars")) or 0)
+            fees = _f(p.get("fees_paid_dollars")) or 0      # Kalshi's app shows "Cost" without these
+            cost = (_f(p.get("market_exposure_dollars")) or 0) + fees
             out[p["ticker"]] = {"side": "yes" if qty > 0 else "no", "shares": abs(qty), "paid": round(cost, 2),
-                                "title": p["ticker"]}
+                                "fees": round(fees, 2), "title": p["ticker"]}
         cursor = d.get("cursor")
         if not cursor or not rows:
             return out

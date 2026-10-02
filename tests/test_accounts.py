@@ -38,7 +38,8 @@ def contract(ex, mid, key="MACRO:gas"):
 class ParseTests(unittest.TestCase):
     def test_kalshi_positions(self):
         k = accounts.kalshi_positions(FakeHTTP([KALSHI]))
-        self.assertEqual(k["KXGAS-5.20"], {"side": "yes", "shares": 100, "paid": 20.08, "title": "KXGAS-5.20"})
+        self.assertEqual(k["KXGAS-5.20"], {"side": "yes", "shares": 100, "paid": 20.08, "fees": 1.08,
+                                             "title": "KXGAS-5.20"})
         self.assertEqual((k["KXNOBEL-X"]["side"], k["KXNOBEL-X"]["shares"]), ("no", 40))
         self.assertNotIn("KXFLAT", k)                                    # closed out: nothing held
 

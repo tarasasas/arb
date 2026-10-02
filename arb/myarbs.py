@@ -290,6 +290,10 @@ class MyArbs:
                             or pos.get("paid") is None or pos.get("paid_estimated")):
                         continue
                     real = round(pos["paid"] / pos["shares"] * leg["shares"], 2)
+                    if pos.get("fees") is not None:
+                        fees = round(pos["fees"] / pos["shares"] * leg["shares"], 2)    # part of `real`
+                        if leg.get("fees") != fees:
+                            leg["fees"], dirty = fees, True
                     if abs(real - leg["paid"]) >= 0.01:
                         leg.setdefault("paid_recorded", leg["paid"])     # what was recorded at the time
                         leg["paid"] = real

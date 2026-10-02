@@ -243,6 +243,12 @@ class CostBasisTests(unittest.TestCase):
         again = m.MyArbs(self.path)                                            # saved
         self.assertEqual(again.items[0]["legs"][0]["paid"], 9.60)
 
+    def test_kalshi_fees_are_kept_alongside_the_cost(self):
+        # Kalshi's app: Cost $9.25 for 10 shares; the account also charged $0.15 in fees
+        self.m.update_cost_basis({"K": {"side": "yes", "shares": 20, "paid": 18.80, "fees": 0.30}}, {})
+        k = self.m.items[0]["legs"][0]
+        self.assertEqual((k["paid"], k["fees"]), (18.80, 0.30))
+
     def test_estimated_wrong_side_or_unread_are_left_alone(self):
         self.m.update_cost_basis({"K": {"side": "no", "shares": 20, "paid": 1.0}},
                                  {"p": {"side": "no", "shares": 20, "paid": 1.0, "paid_estimated": True}})
