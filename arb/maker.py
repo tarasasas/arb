@@ -213,18 +213,27 @@ class MakerBot:
         hedged = k_paid = k_fee = 0.0     # Kalshi side
         why, deadline, errors, hedge_misses = None, rec["posted"] + config.MAKER_AUTO_TTL_SECS, 0, 0
         after_cancel = None               # reads left once cancelled, waiting for the final state
+        news, last_read, o = True, 0.0, None
         while True:
-            try:
-                o = pv.order(oid)
-                errors = 0
-            except Exception as e:
-                errors += 1
-                if errors >= 5:
-                    why = why or f"couldn't read the order ({e!r})"
-                    self._halt(f"couldn't read Polymarket order {oid}: cancel it on polymarket.us if it's still open")
-                    break
-                self.sleep(config.MAKER_AUTO_POLL_SECS)
-                continue
+            # Read the order when there's news. With Polymarket's private stream a fill is pushed (news), so
+            # the order is read at once, and otherwise only every MAKER_STREAM_BACKSTOP_SECS; without the
+            # stream, every pass. Kalshi's price is still checked every pass.
+            streaming = getattr(pv, "streaming", lambda: False)()
+            known = (o is not None and streaming and not news and after_cancel is None
+                     and self.clock() - last_read < config.MAKER_STREAM_BACKSTOP_SECS)
+            if not known:
+                try:
+                    o = pv.order(oid)
+                    last_read = self.clock()
+                    errors = 0
+                except Exception as e:
+                    errors += 1
+                    if errors >= 5:
+                        why = why or f"couldn't read the order ({e!r})"
+                        self._halt(f"couldn't read Polymarket order {oid}: cancel it on polymarket.us if it's still open")
+                        break
+                    self.sleep(config.MAKER_AUTO_POLL_SECS)
+                    continue
             filled, p_paid, p_fee = pv.maker_fills(o, cost, None)
             # Hedge whatever filled and isn't hedged yet, at the limit for what those shares really cost.
             todo = floor_to(filled - hedged, kinfo.get("min_qty") or 1)
@@ -251,7 +260,7 @@ class MakerBot:
                 break
             if after_cancel is not None:
                 after_cancel -= 1
-                self.sleep(config.MAKER_AUTO_POLL_SECS)
+                news = self._pause(pv, oid)
                 continue
             # Reasons to stop resting.
             why = why or rec.get("_stop") or (None if self.on else "Auto maker was turned off")
@@ -271,7 +280,7 @@ class MakerBot:
                     log["orders"].append({"kind": "cancel", "error": repr(e)})
                 after_cancel = 6         # keep reading until it's final: fills before the cancel get hedged
                 continue
-            self.sleep(config.MAKER_AUTO_POLL_SECS)
+            news = self._pause(pv, oid)
 
         # Sell back Polymarket shares that couldn't be hedged.
         sold_qty = sold_net = 0.0
@@ -321,6 +330,16 @@ class MakerBot:
                 "note": f"{size} rested at ${cost:.3f}; ended: {why or 'filled'}"}
 
     # ---- helpers ---------------------------------------------------------------------------
+
+    def _pause(self, pv, oid):
+        """Wait MAKER_AUTO_POLL_SECS, ending early if Polymarket pushes news about the order.
+        Returns whether there's news (always True without the stream: read the order every pass)."""
+        wait = getattr(pv, "wait_order", None)
+        got = wait(oid, config.MAKER_AUTO_POLL_SECS) if wait else None
+        if got is None:
+            self.sleep(config.MAKER_AUTO_POLL_SECS)
+            return True
+        return got
 
     def _still_listed(self, pid):
         with self.scanner.lock:

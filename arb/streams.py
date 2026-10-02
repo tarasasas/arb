@@ -155,7 +155,8 @@ class _Stream(threading.Thread):
                         raw = self.ws.recv()
                     except Exception as e:
                         if type(e).__name__ in ("WebSocketTimeoutException", "TimeoutError", "timeout"):
-                            raw = None if time.time() - self.last_msg > config.STREAM_QUIET_SECS else "{}"
+                            quiet = getattr(self, "quiet_secs", None) or config.STREAM_QUIET_SECS
+                            raw = None if time.time() - self.last_msg > quiet else "{}"
                         else:
                             raise
                     if raw is None or raw == "":
@@ -293,6 +294,103 @@ class PolymarketStream(_Stream):
         apply_levels(m, polymarket_levels(md), tradable=state in (None, "MARKET_STATE_OPEN"))
         m.state = state
         self._updated(slug)
+
+
+POLYMARKET_PRIVATE_WS_URL = "wss://api.polymarket.us/v1/ws/private"
+POLYMARKET_PRIVATE_WS_PATH = "/v1/ws/private"
+
+
+class PolymarketPrivateStream(_Stream):
+    """Your own Polymarket orders and buying power, pushed (wss://api.polymarket.us/v1/ws/private), so
+    the app stops polling them, as Polymarket's rate-limit guide asks.
+
+    Orders: every snapshot or execution for an order bumps that order's counter and wakes anyone waiting
+    on it; the order itself is then read once over REST (GET /v1/order/{id}), whose fields (filled
+    quantity, average price, fees) the fill accounting already uses. Buying power: taken from the
+    balance snapshot and every balance change; a change without it clears it, so the app downloads it."""
+    exchange = "polymarket-private"
+    quiet_secs = 300                        # no orders for a while is normal: reconnect only after 5 quiet minutes
+
+    def __init__(self, signer, log, connect=None, url=POLYMARKET_PRIVATE_WS_URL):
+        super().__init__(url, POLYMARKET_PRIVATE_WS_PATH, signer, {}, lambda *a: None, log, connect)
+        self.cond = threading.Condition()
+        self.versions = {}                  # order id -> updates seen
+        self.buying_power, self.balance_at = None, 0.0
+        self._announced = False
+
+    def _on_connect(self):
+        self.buying_power, self._subscribed = None, False
+
+    def _sync_subscriptions(self, ws):
+        if getattr(self, "_subscribed", False):
+            return
+        ws.send(json.dumps({"subscribe": {"requestId": "orders", "subscriptionType": "SUBSCRIPTION_TYPE_ORDER",
+                                          "marketSlugs": []}}))          # empty: every market
+        ws.send(json.dumps({"subscribe": {"requestId": "balance",
+                                          "subscriptionType": "SUBSCRIPTION_TYPE_ACCOUNT_BALANCE"}}))
+        self._subscribed = True
+
+    def _note(self, order_id):
+        if not order_id:
+            return
+        with self.cond:
+            self.versions[order_id] = self.versions.get(order_id, 0) + 1
+            if len(self.versions) > 5000:   # forget the oldest orders
+                for k in list(self.versions)[:1000]:
+                    del self.versions[k]
+            self.cond.notify_all()
+
+    def version(self, order_id):
+        with self.cond:
+            return self.versions.get(order_id, 0)
+
+    def wait(self, order_id, seen, timeout):
+        """Wait up to `timeout` for an update to order_id newer than `seen`. Returns its update count."""
+        end = time.monotonic() + timeout
+        with self.cond:
+            while self.versions.get(order_id, 0) <= seen:
+                left = end - time.monotonic()
+                if left <= 0:
+                    break
+                self.cond.wait(left)
+            return self.versions.get(order_id, 0)
+
+    @staticmethod
+    def _usd(balances):
+        return next((b for b in balances or [] if b.get("currency") in (None, "", "USD")), None)
+
+    def _handle(self, d):
+        if "heartbeat" in d:
+            return
+        if d.get("error"):
+            self.error = f"Polymarket private stream: {d['error']}"
+            return
+        snap = d.get("orderSubscriptionSnapshot")
+        if snap:
+            for o in snap.get("orders") or []:
+                self._note(o.get("id"))
+            if not self._announced:
+                self._announced = True
+                self.log("Polymarket order stream on: fills and buying power now arrive live instead of being polled")
+        upd = d.get("orderSubscriptionUpdate")
+        if upd:
+            ex = upd.get("execution") or {}
+            self._note((ex.get("order") or {}).get("id") or ex.get("orderId"))
+        bsnap = d.get("accountBalancesSnapshot")
+        if bsnap:
+            usd = self._usd(bsnap.get("balances"))
+            self._set_power((usd or {}).get("buyingPower"))
+        bupd = d.get("accountBalancesUpdate")
+        if bupd:
+            after = (bupd.get("balanceChange") or {}).get("afterBalance") or {}
+            self._set_power(after.get("buyingPower") if after.get("currency") in (None, "", "USD") else None)
+        self.updates += 1
+
+    def _set_power(self, v):
+        try:
+            self.buying_power, self.balance_at = float(v.get("value") if isinstance(v, dict) else v), time.time()
+        except (TypeError, ValueError, AttributeError):
+            self.buying_power = None        # unreadable: the app downloads it instead
 
 
 def build(kalshi_client, on_update, log, kalshi_markets, pm_markets):

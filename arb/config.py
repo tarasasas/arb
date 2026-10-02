@@ -206,3 +206,4 @@ HOT_MAX_PAIRS = 400            # near-arb pairs re-checked between full sweeps (
 GIL_SWITCH_SECS = 0.001        # a busy thread hands over to the others (stream re-checks, trades) this often
 GC_FULL_EVERY_SECS = 1800      # full garbage collection at most this often (it pauses everything; see gctune)
 GC_GEN2_THRESHOLD = 1000       # Python's automatic full collections: every this many middle ones (default 10)
+MAKER_STREAM_BACKSTOP_SECS = 2.0   # with Polymarket's order stream, a resting order is still read this often

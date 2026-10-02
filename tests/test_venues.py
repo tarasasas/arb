@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest import mock
 
@@ -58,3 +59,43 @@ class KalshiRecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PolymarketStreamVenueTests(unittest.TestCase):
+    def venue(self, stream):
+        v = venues.PolymarketVenue.__new__(venues.PolymarketVenue)
+        v.private, v._seen = stream, {}
+        return v
+
+    def test_buying_power_from_the_stream_skips_the_download(self):
+        class S:
+            connected, buying_power = True, 512.25
+        v = self.venue(S())
+        v.http = mock.Mock()
+        self.assertEqual(v.balance(), 512.25)
+        v.http.get.assert_not_called()
+
+    def test_order_confirmation_waits_on_the_stream_not_a_poll(self):
+        from arb import streams
+        s = streams.PolymarketPrivateStream(lambda m, p: {}, lambda m: None, connect=lambda u, h: None)
+        s.connected = True
+        v = self.venue(s)
+        reads = []
+
+        def get(path, params=None):            # the order fills when the stream says so
+            reads.append(path)
+            return {"order": {"id": "o-1", "state": "ORDER_STATE_FILLED" if s.version("o-1") else "ORDER_STATE_NEW",
+                              "cumQuantity": "5"}}
+        v.http = mock.Mock(get=get)
+        import threading
+        threading.Timer(0.2, lambda: s._handle({"orderSubscriptionUpdate": {"execution": {"order": {"id": "o-1"}}}})).start()
+        t = time.monotonic()
+        with mock.patch.object(venues.time, "sleep", side_effect=AssertionError("polled")):
+            o = v._final_order({"id": "o-1", "executions": [{"order": {"id": "o-1", "state": "ORDER_STATE_NEW"}}]})
+        self.assertEqual(o["state"], "ORDER_STATE_FILLED")
+        self.assertEqual(len(reads), 1)                   # read once, right when the fill was pushed
+        self.assertLess(time.monotonic() - t, 0.6)        # not at the 1s backstop
+
+    def test_without_the_stream_it_polls_as_before(self):
+        v = self.venue(None)
+        self.assertIsNone(v.wait_order("o-1", 1.0))

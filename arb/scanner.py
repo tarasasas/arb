@@ -913,6 +913,11 @@ class Scanner:
             time.sleep(1)               # first catalog load
         from . import streams
         self.streams = streams.build(self.kalshi, self.on_stream_update, self.log, {}, {})
+        pv = (self.trader.venues or {}).get("polymarket")
+        if pv is not None and streams.available():   # your orders and buying power, pushed instead of polled
+            self.private_stream = streams.PolymarketPrivateStream(pv.http.signer, self.log)
+            self.private_stream.start()
+            pv.private = self.private_stream
         if self.streams:
             self._publish()             # hand the streams the market objects
             self._stream_hot()

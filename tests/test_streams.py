@@ -216,3 +216,52 @@ class FreshnessTests(unittest.TestCase):
         st2.want([f"new-{i}" for i in range(100)])
         self.assertEqual(len(closed), 1)                      # a few stale ones: just add the new
         self.assertEqual(len(st2.subscribed), 150)
+
+
+class PolymarketPrivateStreamTests(unittest.TestCase):
+    """Messages as in docs.polymarket.us/api-reference/websocket/private."""
+
+    def start(self, messages):
+        ws, logs = FakeWS(messages), []
+        s = streams.PolymarketPrivateStream(lambda method, path: {"X-PM-Access-Key": "id"}, logs.append,
+                                            connect=lambda url, headers: ws)
+        s.start()
+        return s, ws, logs
+
+    def test_subscribes_to_all_orders_and_balance_once(self):
+        s, ws, _ = self.start([])
+        self.assertTrue(run_until(lambda: len(ws.sent) == 2))
+        subs = [x["subscribe"] for x in ws.sent]
+        self.assertEqual([(x["subscriptionType"], x.get("marketSlugs")) for x in subs],
+                         [("SUBSCRIPTION_TYPE_ORDER", []), ("SUBSCRIPTION_TYPE_ACCOUNT_BALANCE", None)])
+        s.stop()
+
+    def test_order_updates_wake_waiters_and_balance_is_tracked(self):
+        s, ws, logs = self.start([
+            {"requestId": "orders", "subscriptionType": "SUBSCRIPTION_TYPE_ORDER",
+             "orderSubscriptionSnapshot": {"orders": [{"id": "o-1", "state": "ORDER_STATE_PENDING_NEW"}], "eof": True}},
+            {"requestId": "balance", "subscriptionType": "SUBSCRIPTION_TYPE_ACCOUNT_BALANCE",
+             "accountBalancesSnapshot": {"balances": [{"currentBalance": 1000.0, "currency": "USD", "buyingPower": 850.0}]}},
+            {"heartbeat": {}},
+        ])
+        self.assertTrue(run_until(lambda: s.buying_power == 850.0 and s.version("o-1") == 1))
+        self.assertTrue(any("order stream on" in m for m in logs))
+        got = []
+        t = threading.Thread(target=lambda: got.append(s.wait("o-1", 1, 3.0)))
+        t.start()
+        time.sleep(0.1)
+        s._handle({"orderSubscriptionUpdate": {"execution": {"id": "exec-456", "order": {"id": "o-1"},
+                                                             "lastShares": "0.25", "type": "EXECUTION_TYPE_PARTIAL_FILL"}}})
+        t.join(1)
+        self.assertEqual(got, [2])                                       # woken by the fill, not the timeout
+        s._handle({"accountBalancesUpdate": {"balanceChange": {"afterBalance": {"currency": "USD", "buyingPower": 820.5}}}})
+        self.assertEqual(s.buying_power, 820.5)
+        s._handle({"accountBalancesUpdate": {"balanceChange": {"afterBalance": {"currency": "USD"}}}})
+        self.assertIsNone(s.buying_power)                                # unreadable: download it instead
+        s.stop()
+
+    def test_wait_times_out_without_news(self):
+        s = streams.PolymarketPrivateStream(lambda m, p: {}, lambda m: None, connect=lambda u, h: None)
+        t = time.monotonic()
+        self.assertEqual(s.wait("o-9", 0, 0.1), 0)
+        self.assertGreaterEqual(time.monotonic() - t, 0.09)

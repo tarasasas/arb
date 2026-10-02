@@ -227,3 +227,42 @@ class PolymarketMakerOrderTests(unittest.TestCase):
         pv.http.post.return_value = {"id": "x", "executions": [{"type": "EXECUTION_TYPE_REJECTED", "orderRejectReason": "PDI"}]}
         with self.assertRaises(ApiError):
             pv.post_maker("slug", "yes", 10, 0.5, 120)
+
+
+class StreamPoly(FakePoly):
+    """FakePoly behind Polymarket's private stream: fills are pushed on passes 3 and 6 of the wait."""
+
+    def __init__(self):
+        super().__init__(script=(0,))
+        self.passes, self.cum = 0, 0
+
+    def streaming(self):
+        return True
+
+    def wait_order(self, oid, timeout):
+        self.passes += 1
+        push = {3: 10, 6: 30}.get(self.passes)
+        if push is not None:
+            self.cum = push
+        return push is not None
+
+    def order(self, oid):
+        self.reads += 1
+        cum = min(self.cum, self.qty)
+        return {"state": "ORDER_STATE_FILLED" if cum >= self.qty else self.state, "cumQuantity": cum,
+                "avgPx": {"value": "0.5"}}
+
+
+@mock.patch.object(config, "TRADES_LOG", TL)
+@mock.patch.object(config, "MAKER_AUTO_POLL_SECS", 0)
+class MakerStreamTests(unittest.TestCase):
+    def test_pushed_fills_are_hedged_and_the_order_is_read_only_on_news(self):
+        p = StreamPoly()
+        s = FakeScanner(FakeKalshi(), p, [row()])
+        b = maker.MakerBot(s, run_async=False, sleep=lambda _s: None)
+        b.set(True)
+        b.check(s.state["maker"])
+        h = b.history[0]
+        self.assertEqual(h["status"], "ok")
+        self.assertEqual(sum(q for q, _ in s.trader.venues["kalshi"].buys), h["filled"])
+        self.assertEqual(p.reads, 3)                       # first look, then one read per pushed fill

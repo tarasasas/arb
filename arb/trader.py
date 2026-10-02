@@ -150,7 +150,12 @@ class Trader:
         return {"yes": list(m.levels.get("yes") or []), "no": list(m.levels.get("no") or [])}
 
     def _cached_cash(self, ex, shard=None):
-        """Cash from the scanner's balance reading if it's fresh (and not marked stale by a trade)."""
+        """Cash from the scanner's balance reading if it's fresh (and not marked stale by a trade).
+        Polymarket buying power pushed by its private stream wins: it's current even right after a trade."""
+        if ex == "polymarket":
+            live = getattr((self.venues or {}).get("polymarket"), "stream_buying_power", lambda: None)()
+            if live is not None:
+                return live
         state = getattr(self.scanner, "state", None) or {}
         b = state.get("balances") or {}
         if not b.get("time") or b.get("stale") or b.get("error"):

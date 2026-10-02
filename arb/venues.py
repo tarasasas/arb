@@ -196,6 +196,29 @@ class PolymarketVenue:
     def __init__(self, public_client, signer):
         self.public = public_client          # gateway (market data)
         self.http = RateLimitedClient(config.POLYMARKET_TRADE_BASE, 8.0, signer=signer)
+        self.private = None                  # streams.PolymarketPrivateStream once started
+        self._seen = {}                      # order id -> stream updates already acted on
+
+    def streaming(self):
+        s = self.private
+        return bool(s and s.connected)
+
+    def stream_buying_power(self):
+        """Buying power pushed by the private stream, or None (not connected, or not known yet)."""
+        s = self.private
+        return s.buying_power if s and s.connected else None
+
+    def wait_order(self, oid, timeout):
+        """With the private stream: wait up to `timeout` for news about this order. True if some came,
+        False if not; None without the stream (the caller paces itself)."""
+        if not self.streaming():
+            return None
+        seen = self._seen.get(oid, 0)
+        now = self.private.wait(oid, seen, timeout)
+        if len(self._seen) > 2000:
+            self._seen.clear()
+        self._seen[oid] = now
+        return now > seen
 
     def levels(self, slug):
         return self.public.live_levels(slug)
@@ -210,6 +233,9 @@ class PolymarketVenue:
                 "tick": lambda _p: tick, "min_qty": float(m.get("minimumTradeQty") or 1)}
 
     def balance(self, shard=None):
+        live = self.stream_buying_power()
+        if live is not None:
+            return live
         bals = self.http.get("/v1/account/balances").get("balances") or []
         usd = next((b for b in bals if b.get("currency") in (None, "", "USD")), bals[0] if bals else {})
         return float(usd.get("buyingPower") or 0)
@@ -242,8 +268,11 @@ class PolymarketVenue:
         oid = r.get("id") or best.get("id")
         delay, deadline = 0.05, time.monotonic() + 12.0    # check soon, then back off
         while time.monotonic() < deadline:
-            time.sleep(delay)
-            delay = min(delay * 1.6, 0.25)
+            # With the private stream: read the order as soon as news about it is pushed (at most 1s
+            # apart as a backstop) instead of polling it every 50-250ms.
+            if self.wait_order(oid, 1.0) is None:
+                time.sleep(delay)
+                delay = min(delay * 1.6, 0.25)
             with priority():
                 d = self.http.get(f"/v1/order/{oid}")
             o = d.get("order", d)

@@ -435,6 +435,15 @@ Streams need the `websocket-client` package; `start-dashboard.bat` installs it t
 no keys or no package, the scanner polls as before. A dropped stream reconnects by itself, and a
 missed Kalshi update forces a fresh book.
 
+**Your Polymarket orders and buying power are streamed too** (`wss://api.polymarket.us/v1/ws/private`),
+as Polymarket's rate-limit guide asks instead of polling. A fill on any of your orders is pushed the
+moment it happens: an order confirmation is read right then instead of being polled every 50-250ms,
+and Auto maker hedges a resting order's fill on Kalshi as soon as it's pushed (it used to find out by
+reading the order every 0.5s; with the stream it reads it on each push and every 2s as a backstop,
+while still checking Kalshi's price every 0.5s). Buying power comes from the stream as well, so a trade
+doesn't have to download it. If this stream is down, everything falls back to polling as before. The
+window says "Polymarket order stream on" once it's connected.
+
 If a stream goes quiet (no message for 90 seconds) it reconnects by itself. Every full sweep still
 polls every market as a backstop, and a streamed market is only trusted without polling while it has
 updated in the last minute, so a silent stream can't freeze prices. A polled price never replaces a
