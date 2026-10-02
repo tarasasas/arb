@@ -28,13 +28,17 @@ def summarize(arb):
     pairs = min(leg["shares"] for leg in legs) if legs else 0
     paid = sum(leg["paid"] for leg in legs)
     guaranteed = arb.get("payout", 1.0) * pairs
-    unhedged = [{"exchange": leg["exchange"], "side": leg["side"], "shares": leg["shares"] - pairs}
-                for leg in legs if leg["shares"] - pairs > 1e-9]
+    # Extra shares on one side. Less than one share (a Polymarket buy by dollar amount gets e.g. 12.04)
+    # can't be hedged, since Kalshi trades whole contracts, and risks under $1: listed as leftover, not unhedged.
+    extra = [{"exchange": leg["exchange"], "side": leg["side"], "shares": round(leg["shares"] - pairs, 4)}
+             for leg in legs if leg["shares"] - pairs > 1e-6]
+    unhedged = [x for x in extra if x["shares"] >= 1 - 1e-6]
+    leftover = [x for x in extra if x["shares"] < 1 - 1e-6]
     # Per pair at your real cost: what one share on each side cost, against what the pair pays.
     pair_cost = sum(leg["paid"] / leg["shares"] for leg in legs if leg["shares"] > 0) if pairs else 0.0
     return {"pairs": pairs, "paid": round(paid, 2), "guaranteed": round(guaranteed, 2),
             "profit": round(guaranteed - paid, 2), "roi": (guaranteed - paid) / paid if paid else 0,
-            "unhedged": unhedged, "pair_cost": round(pair_cost, 4),
+            "unhedged": unhedged, "leftover": leftover, "pair_cost": round(pair_cost, 4),
             "pair_edge": round(arb.get("payout", 1.0) - pair_cost, 4) if pairs else 0.0}
 
 

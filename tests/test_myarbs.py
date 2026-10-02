@@ -39,6 +39,14 @@ class MyArbsTests(unittest.TestCase):
         self.assertEqual((s["pairs"], s["guaranteed"], s["profit"]), (100, 100.0, -0.6))
         self.assertEqual(s["unhedged"], [{"exchange": "kalshi", "side": "yes", "shares": 20}])
 
+    def test_fraction_of_a_share_extra_is_leftover_not_unhedged(self):
+        # 12 Kalshi NO against 12.04 Polymarket YES (bought by dollar amount) is fully hedged
+        s = myarbs.summarize({"payout": 1.0, "legs": [
+            {"exchange": "kalshi", "side": "no", "shares": 12, "paid": 9.89},
+            {"exchange": "polymarket", "side": "yes", "shares": 12.04, "paid": 1.89}]})
+        self.assertEqual((s["pairs"], s["unhedged"]), (12, []))
+        self.assertEqual(s["leftover"], [{"exchange": "polymarket", "side": "yes", "shares": 0.04}])
+
     def test_save_edit_delete_persist(self):
         a = self.store.save({"game": "BTC", "legs": legs()})
         self.assertEqual(myarbs.MyArbs(self.path).items[0]["game"], "BTC")          # written to disk
