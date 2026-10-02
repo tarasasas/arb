@@ -321,6 +321,15 @@
   .unp .card > .hd { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px; border-bottom: 1px solid var(--border); }
   .unp .card table td, .unp .card table th { font-size: 13px; }
   .unp .from { font-size: 12px; color: var(--text-muted); }
+  .set-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); }
+  .set-row input[type=checkbox] { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+  .set-row input[type=number], .set-row select { margin-left: 6px; }
+  .set-row .muted { font-size: 12.5px; margin-top: 2px; }
+  .modal h4 { margin: 16px 0 4px; font-size: 14px; }
+  .bal-opt { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+  .bal-opt.best { border-color: var(--accent, #2f5fd0); }
+  .bal-opt.off { opacity: .7; }
+  .bal-opt button { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -333,6 +342,7 @@
       <button role="tab" data-view="scanner">Scanner</button>
     </nav>
     <span class="status" id="cash"></span>
+    <button type="button" id="settings-open" title="What Auto-trade may take, trade limits, Auto maker">⚙ Settings</button>
   </header>
   <div class="statusline">
     <span class="status"><span id="dot" class="dot start"></span><span id="status">Starting…</span></span>
@@ -869,8 +879,10 @@ function renderAuto(s) {
   el.innerHTML = `<b>⚡ Auto-trade</b>
     <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
-    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with rule warnings ·
-      ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit" : ""} ·
+    <button type="button" class="settings-link" style="margin:0">⚙ Settings</button>
+    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs settling within ${a.fast_max_hours}h${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with one-way-rules, different-source or contradicting-price warnings ·
+      ${a.allow_player_props ? "player props included" : "no player props"} ·
+      ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit (too-good-to-be-true rows included)" : ", never rows flagged too good to be true"} ·
       ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade${a.min_profit > 0 ? ` · profit ≥ ${money(a.min_profit)}` : ""} ·
       stops after ${money(a.max_daily_loss)} lost in a day or ${a.max_misses} misses in a row on one site${missRun ? ` (now: ${missRun})` : ""} ·
       second leg needs ${a.hedge_depth}× the shares in its book · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</div></details>
@@ -889,7 +901,7 @@ function renderAuto(s) {
     if (!a.on && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
         `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for arbs settling within ${a.fast_max_hours}h` +
         `${a.allow_auto_matched ? ", including auto-matched pairs you haven't checked (a wrong match can lose on both sides)" : ""}. ` +
-        `It turns itself off if a trade leaves shares unhedged. Change the limits in .env.`)) return;
+        `It turns itself off if a trade leaves shares unhedged. Change what it may take in ⚙ Settings.`)) return;
     try { state.autotrade = await post("/api/autotrade", { on: !a.on }); renderAuto(state); }
     catch (e) { alert(e.message); }
   };
@@ -1444,7 +1456,10 @@ function renderMyArbs() {
       <td class="num" data-l="Paid">${money(a.paid)}</td><td class="num" data-l="Pays">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
       <td class="num profit" data-l="Profit">${money(a.profit)}</td><td class="num" data-l="ROI">${pct(a.roi)}</td>
       <td class="num c-worth" data-l="Worth now">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
-      <td class="c-acts"><button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
+      <td class="c-acts">${isOpen(a) && a.phase === "active" && (a.unhedged.length || (a.leftover || []).length)
+          ? `<button data-mine="balance" data-id="${esc(a.id)}" class="trade" ${tradingOn() ? "" : "disabled title='Needs both API keys'"}
+              title="Sell the extra shares, or buy the missing ones on the other site, whichever leaves more">Balance</button>` : ""}
+          <button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
           <button data-mine="del" data-id="${esc(a.id)}">${isOpen(a) ? "Delete" : "Remove"}</button></td></tr>`).join("");
   const head = `<thead><tr>${myTh("game", "Market")}${myTh("placed", "Placed", "", "When you placed it (your first Kalshi fill)")}${
     myTh("closes", "Pays out", "", "Sort by when it pays out")}${
@@ -1500,11 +1515,99 @@ document.getElementById("myarbs").addEventListener("click", async e => {
     await loadMyArbs();
   }
   if (b.dataset.mine === "edit" && a) openTrack(null, a);
+  if (b.dataset.mine === "balance" && a) openBalance(a);
   if (b.dataset.mine === "del" && a && confirm(`Remove "${a.game}" from My arbs?`)) {
     try { await post("/api/myarbs/delete", { id: a.id }); } catch (err) { alert(err.message); }
     loadMyArbs();
   }
 });
+// Settings: what Auto-trade may take and every limit, saved to .env by the scanner.
+async function openSettings() {
+  showModal(`<h3>Settings</h3><div class="muted">Loading…</div>`);
+  let cur;
+  try {
+    const res = await fetch("/api/settings");
+    cur = await res.json();
+    if (!res.ok) throw new Error(cur.error || res.status);
+  } catch (e) {
+    return showModal(`<h3>Settings</h3><div class="alert">${esc(e.message)}</div><div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+  const items = cur.groups.flatMap(g => g.items);
+  const shown = (it, v) => it.kind === "bool" ? (v ? "on" : "off") : it.kind === "money" ? money(v)
+    : it.kind === "percent" ? v + "%" : String(v);
+  const field = it => {
+    const attrs = `data-set="${esc(it.key)}"`;
+    const input = it.kind === "bool" ? `<input type="checkbox" ${attrs} ${it.value ? "checked" : ""}>`
+      : it.kind === "choice" ? `<select ${attrs}>${it.options.map(o => `<option ${o === it.value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`
+      : `<input type="number" ${attrs} min="0" step="${it.kind === "int" ? 1 : "any"}" value="${esc(it.value)}" style="width:90px">`;
+    return `<label class="set-row">${it.kind === "bool" ? input : ""}<span><b>${esc(it.label)}</b>${it.kind === "bool" ? "" : input}
+      <div class="muted">${esc(it.help)}${it.help ? " " : ""}Default: ${esc(shown(it, it.default))}.</div></span></label>`;
+  };
+  showModal(`<h3>Settings</h3>
+    <div class="muted">Saved to your .env and applied right away. Auto-trade and Auto maker themselves are still switched on and off
+      with their buttons (they start off every time).</div>
+    ${cur.groups.map(g => `<h4>${esc(g.title)}</h4>${g.items.map(field).join("")}`).join("")}
+    <div class="actions"><span class="muted" id="set-msg"></span><button onclick="closeModal()">Close</button>
+      <button class="primary" id="set-save">Save</button></div>`);
+  document.getElementById("set-save").onclick = async () => {
+    const changes = {};
+    document.querySelectorAll("[data-set]").forEach(el => {
+      const it = items.find(i => i.key === el.dataset.set);
+      const v = el.type === "checkbox" ? el.checked : el.tagName === "SELECT" ? el.value : el.value === "" ? null : +el.value;
+      if (v !== null && v !== it.value) changes[it.key] = v;
+    });
+    const msg = document.getElementById("set-msg");
+    if (!Object.keys(changes).length) { msg.textContent = "Nothing changed."; return; }
+    try {
+      await post("/api/settings", { changes });
+      msg.textContent = `Saved ${Object.keys(changes).length} change${Object.keys(changes).length > 1 ? "s" : ""}.`;
+      poll();
+      setTimeout(closeModal, 700);
+    } catch (e) { msg.textContent = e.message; }
+  };
+}
+document.getElementById("settings-open").onclick = openSettings;
+document.addEventListener("click", e => { if (e.target.closest(".settings-link")) openSettings(); });
+
+// Balance: one leg holds more shares than the other. Preview both fixes on live books, then place the one you pick.
+async function openBalance(a) {
+  showModal(`<h3>Balance ${esc(a.game)}</h3><div class="muted">Checking live order books…</div>`);
+  let plan;
+  try { plan = await post("/api/myarbs/balance/preview", { id: a.id }); }
+  catch (e) {
+    return showModal(`<h3>Balance</h3><div class="alert">${esc(e.message)}</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+  const opt = (k, o) => o.ok
+    ? `<div class="bal-opt${plan.recommended === k ? " best" : ""}"><b>${plan.recommended === k ? "Recommended: " : ""}${esc(o.text)}</b>
+        <div class="muted">${o.action === "sell" ? `You get ${money(o.value)}` : `Leaves you ${money(o.value)} after paying for them`}
+          (${o.action === "sell" ? "sell" : "buy"} at ${o.action === "sell" ? "≥" : "≤"} ${cents(o.limit)}, fees ${money(o.fee)})${
+          o.left > 0 ? ` · ${compact(o.left)} still extra after this` : ""}</div>
+        <button class="${plan.recommended === k ? "trade" : ""}" data-bal="${k}">${o.action === "sell" ? "Sell" : "Buy"} ${compact(o.qty)}</button></div>`
+    : `<div class="bal-opt off"><b>${k === "sell" ? "Sell the extra" : "Buy the difference"}</b>
+        <div class="muted">Not possible now: ${esc(o.why)}</div></div>`;
+  showModal(`<h3>Balance ${esc(a.game)}</h3>
+    <div>${compact(plan.extra)} ${esc(plan.extra_side.toUpperCase())} on ${esc(plan.extra_exchange)} ${plan.extra === 1 ? "has" : "have"} no partner
+      on the other site (worth $0 if that side loses). Two ways to even it up, priced on the books right now:</div>
+    ${opt("sell", plan.options.sell)}${opt("buy", plan.options.buy)}
+    <div class="policy">One immediate-or-cancel order at no worse than the price shown: if the book moved it fills less, never at a
+      worse price. This preview is good for 30 seconds.</div>
+    <div class="actions"><button onclick="closeModal()">Cancel</button></div>`);
+  document.querySelectorAll("[data-bal]").forEach(btn => btn.onclick = async () => {
+    document.querySelectorAll("[data-bal]").forEach(x => x.disabled = true);
+    btn.textContent = "Placing…";
+    try {
+      const res = await post("/api/myarbs/balance/execute", { plan_id: plan.id, choice: btn.dataset.bal });
+      showModal(`<h3>Balance</h3><div class="${res.status === "ok" ? "" : "alert"}">${esc(res.text)}</div>
+        <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+    } catch (e) {
+      showModal(`<h3>Balance</h3><div class="alert">${esc(e.message)}</div>
+        <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+    }
+    loadMyArbs();
+  });
+}
+
 // Form to record the orders you actually placed. From an opportunity it starts with the dashboard's sizing.
 function openTrack(r, existing) {
   const budget = +document.getElementById("f-budget").value || 0;
@@ -1674,7 +1777,7 @@ function render(force) {
     const key = rowKey(r), isPinned = pinned.has(key);
     const row = `<tr class="row" data-key="${esc(key)}">
       <td class="num profit c-profit" data-label="Profit">${money(z.profit)}</td><td class="num c-roi" data-label="ROI">${pct(z.roi)}</td><td class="num c-ann" data-label="Annualized">${pct(z.annualized)}</td>
-      <td class="num c-n" data-label="Shares">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}${z.limitedBy
+      <td class="num c-n" data-label="Shares">${compact(z.n)}${z.n < r.size ? `<div class="muted" title="${Number(r.size).toLocaleString()} pairs on the books right now each still make money after fees (the walk stops at the first pair that wouldn't). Taking all of them: ${money(r.profit)} profit on ${money(r.capital)}.">of ${compact(r.size)}${z.limitedBy
         ? `<br>limited by ${z.limitedBy.map(x => x === "kalshi" && z.shard ? `your Kalshi cash on shard ${z.shard}` : LIMIT_TEXT[x]).join(" and ")}` : ""}</div>` : ""}</td>
       <td class="num c-cap" data-label="Capital">${money(z.capital)}</td>
       <td class="c-game"><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span>${isPinned ? `<span class="pin">pinned</span>` : ""}

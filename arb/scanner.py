@@ -62,6 +62,8 @@ class Scanner:
         self.autotrader = AutoTrader(self)  # off until you turn it on in the dashboard
         from .maker import MakerBot
         self.makerbot = MakerBot(self)      # Auto maker: off until you turn it on in Maker mode
+        from .balance import Balancer
+        self.balancer = Balancer(self)      # "Balance" in My arbs: even up legs with different share counts
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
                       "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
                       "scan_seconds": None, "logs": []}

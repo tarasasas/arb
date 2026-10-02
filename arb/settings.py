@@ -1,0 +1,152 @@
+"""Trading settings you can change from the dashboard (Settings). A change applies right away and is
+saved to .env, so it's still set after a restart; editing .env by hand keeps working too."""
+
+import os
+import re
+import threading
+
+from . import config
+
+# (key, kind, label, help, default). kind: bool | money | number | int | percent | choice:<a>,<b>,...
+GROUPS = [
+    ("What Auto-trade and Fast trade may take", [
+        ("FAST_MAX_HOURS", "number", "Only arbs that pay out within (hours)",
+         "Arbs settling later always need Make trade with its confirm step.", 24),
+        ("FAST_ALLOW_AUTO_MATCHED", "bool", "Pairs matched by wording you haven't checked",
+         "Non-sports pairs the matcher paired automatically. A wrong match can lose on both sides.", True),
+        ("FAST_ALLOW_TOO_GOOD", "bool", "Rows flagged too good to be true",
+         "Prices are always re-checked live first, but a big gap usually means a stale quote or a different question.", True),
+        ("FAST_ALLOW_PLAYER_PROPS", "bool", "Player props",
+         "If the player doesn't play, each site settles at its own fair price, so the pair may not pay exactly $1.", True),
+        ("AUTO_TRADE_LIVE_GAMES", "bool", "Games already in progress (Auto-trade and Auto maker)",
+         "Live prices move between the two orders, so the second leg misses more often.", False),
+        ("AUTO_TRADE_MIN_ROI", "percent", "Minimum return (Auto-trade)", "Of the money put in.", 0.5),
+        ("AUTO_TRADE_MIN_PROFIT", "money", "Minimum profit per trade (Auto-trade)", "0 = only the minimum return counts.", 0),
+    ]),
+    ("Auto-trade limits", [
+        ("AUTO_TRADE_MAX_TRADE", "money", "Per trade", "Both legs together.", 25),
+        ("AUTO_TRADE_DAILY_LIMIT", "money", "Per day", "Money Auto-trade may put in each day.", 100),
+        ("AUTO_TRADE_MAX_DAILY_LOSS", "money", "Turn off after losing", "Net loss in one day.", 5),
+        ("AUTO_TRADE_MAX_MISSES", "int", "Turn off after misses in a row", "On one site: rejected, unfilled or unhedged.", 3),
+        ("AUTO_TRADE_HEDGE_DEPTH", "number", "Second leg's book must hold (x the shares)",
+         "Within break-even; a thin book is what makes the second leg miss.", 2),
+        ("AUTO_TRADE_ORDER", "choice:thinner_first,together,polymarket_first", "Order of the two legs",
+         "thinner_first: the thinner book first, the other for what filled. together: both at once. "
+         "polymarket_first: Polymarket first.", "thinner_first"),
+    ]),
+    ("Every trade", [
+        ("MAX_TRADE_DOLLARS", "money", "Hard cap per trade", "Make trade, Fast trade and Auto-trade, both legs together.", 100),
+        ("FAST_MAX_TRADE", "money", "Fast trade, per click", "Both legs together.", 50),
+        ("TRADE_ORDER", "choice:together,thinner_first,polymarket_first", "Order of the two legs (Make trade and Fast trade)",
+         "together: both at once. thinner_first: the thinner book first. polymarket_first: Polymarket first.", "together"),
+        ("CLOSE_OUT_MAX_LOSS", "money", "Hedge leftover shares up to ($ per share above break-even)",
+         "When that loses less than selling them back. 0 = always sell back.", 0.05),
+        ("KALSHI_AUTO_SHARD_FUNDING", "bool", "Move Kalshi cash to the market's shard automatically",
+         "Kalshi keeps cash per exchange shard; an order can only use its own shard's cash.", True),
+    ]),
+    ("Auto maker", [
+        ("MAKER_AUTO_MAX_ORDER", "money", "Per resting order", "Both legs together.", 25),
+        ("MAKER_AUTO_MAX_RESTING", "money", "Resting at once, all orders", "", 100),
+        ("MAKER_AUTO_MAX_ORDERS", "int", "Resting orders at once", "", 2),
+        ("MAKER_AUTO_TTL_SECS", "number", "Cancel each order after (seconds)", "Polymarket expires it even if this app stops.", 120),
+        ("MAKER_AUTO_DAILY_LIMIT", "money", "Filled per day", "", 200),
+    ]),
+]
+SPEC = {key: (kind, label, help_, default) for _, items in GROUPS for key, kind, label, help_, default in items}
+_lock = threading.Lock()
+
+
+def _shown(key):
+    """config's value in the units the dashboard and .env use."""
+    kind, v = SPEC[key][0], getattr(config, key)
+    return round(v * 100, 4) if kind == "percent" else v
+
+
+def current():
+    return {"groups": [{"title": title, "items": [
+        {"key": key, "kind": kind.split(":")[0], "label": label, "help": help_, "default": default,
+         "value": _shown(key), "options": kind.split(":", 1)[1].split(",") if kind.startswith("choice:") else None}
+        for key, kind, label, help_, default in items]} for title, items in GROUPS]}
+
+
+def _parse(key, raw):
+    kind = SPEC[key][0]
+    if kind == "bool":
+        if isinstance(raw, bool):
+            return raw
+        if str(raw).strip().lower() in ("1", "true", "yes", "on"):
+            return True
+        if str(raw).strip().lower() in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"{SPEC[key][1]}: on or off")
+    if kind.startswith("choice:"):
+        if raw not in kind.split(":", 1)[1].split(","):
+            raise ValueError(f"{SPEC[key][1]}: not one of the choices")
+        return raw
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{SPEC[key][1]}: needs a number")
+    if not 0 <= v <= 1_000_000 or v != v:
+        raise ValueError(f"{SPEC[key][1]}: needs a number from 0 up")
+    if kind == "int":
+        if v < 1 or v != int(v):
+            raise ValueError(f"{SPEC[key][1]}: needs a whole number from 1 up")
+        return int(v)
+    return v
+
+
+def _env_text(v):
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    return f"{v:g}" if isinstance(v, (int, float)) else str(v)
+
+
+def _apply(key, v):
+    setattr(config, key, v / 100 if SPEC[key][0] == "percent" else v)
+    if key == "TRADE_ORDER":
+        config.TRADE_LEGS_TOGETHER = v == "together"
+    os.environ[key] = _env_text(v)
+
+
+def write_env(values, path=None):
+    """Set KEY=value lines in .env: an existing line is replaced in place (comments, keys and every
+    other line are kept as they are); new keys go at the end. Written to a temp file, then swapped in."""
+    path = path or config.PROJECT_ROOT / ".env"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out, done = [], set()
+    for raw in lines:
+        m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", raw)
+        if m and m[1] in values:
+            if m[1] not in done:
+                out.append(f"{m[1]}={values[m[1]]}")
+                done.add(m[1])
+            continue
+        out.append(raw)
+    new = [k for k in values if k not in done]
+    if new:
+        header = "# Set from the dashboard (Settings)"
+        if header not in out:
+            if out and out[-1].strip():
+                out.append("")
+            out.append(header)
+        out += [f"{k}={values[k]}" for k in new]
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def update(changes, path=None):
+    """changes: {KEY: value}. All are checked before any is applied. Returns current()."""
+    parsed = {}
+    for key, raw in (changes or {}).items():
+        if key not in SPEC:
+            raise ValueError(f"Unknown setting {key}")
+        parsed[key] = _parse(key, raw)
+    if not parsed:
+        return current()
+    with _lock:
+        write_env({k: _env_text(v) for k, v in parsed.items()}, path)
+        for k, v in parsed.items():
+            _apply(k, v)
+    return current()

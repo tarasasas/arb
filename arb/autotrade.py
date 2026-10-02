@@ -133,6 +133,7 @@ class AutoTrader:
                 "live_games": config.AUTO_TRADE_LIVE_GAMES, "max_daily_loss": config.AUTO_TRADE_MAX_DAILY_LOSS,
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
                 "allow_auto_matched": config.FAST_ALLOW_AUTO_MATCHED, "allow_too_good": config.FAST_ALLOW_TOO_GOOD,
+                "allow_player_props": config.FAST_ALLOW_PLAYER_PROPS,
                 "misses": dict(self.misses), "max_misses": config.AUTO_TRADE_MAX_MISSES,
                 "hedge_depth": config.AUTO_TRADE_HEDGE_DEPTH, "order": config.AUTO_TRADE_ORDER,
                 "history": list(self.history)}

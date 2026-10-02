@@ -36,7 +36,14 @@ POLYMARKET_SECRET_KEY = os.environ.get("POLYMARKET_SECRET_KEY", "").strip()
 POLYMARKET_TRADE_BASE = "https://api.polymarket.us"
 
 # ---- trading ("Make trade" button) ----------------------------------------------------------
-MAX_TRADE_DOLLARS = 100.0          # hard cap per trade, both legs combined (fees included)
+def _env_num(name, default):
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+MAX_TRADE_DOLLARS = _env_num("MAX_TRADE_DOLLARS", 100)    # hard cap per trade, both legs combined (fees included)
 TRADE_PLAN_TTL_SECS = 20           # a confirmed plan must be executed within this window
 SECOND_LEG_RETRIES = 2             # extra attempts to hedge the second leg before selling back
 # The second leg's first try goes out with its limit at break-even (not at the price seen when planning).
@@ -62,13 +69,6 @@ TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
 # account). Set KALSHI_AUTO_SHARD_FUNDING=0 in .env to turn it off.
 KALSHI_AUTO_SHARD_FUNDING = os.environ.get("KALSHI_AUTO_SHARD_FUNDING", "1").strip().lower() not in ("0", "false", "no", "off")
 SHARD_TRANSFER_WAIT_SECS = 8.0     # how long to wait for a shard transfer to show up before trading
-
-
-def _env_num(name, default):
-    try:
-        return float(os.environ.get(name, "") or default)
-    except ValueError:
-        return default
 
 
 # ---- Dashboard on your phone (python -m arb --phone, or DASHBOARD_PHONE=1) ----------------------

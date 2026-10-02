@@ -238,7 +238,13 @@ require your check.
     (`AUTO_TRADE_MAX_MISSES`). `trade-report.bat` shows the same `MISSED` lines.
   - Every trade goes to My arbs and `trades.jsonl`.
 
-Limits, in `.env` (defaults shown):
+**⚙ Settings** (top right, and next to the Auto-trade switch) changes all of these from the dashboard:
+what Auto-trade and Fast trade may take (auto-matched pairs, too-good-to-be-true rows, player props,
+games in progress), the minimum return, the per-trade and per-day limits, the hard cap per trade
+(`MAX_TRADE_DOLLARS`, default $100), leg order, and Auto maker's limits. A change applies at once and
+is saved to `.env`, the same lines you can still edit by hand.
+
+Defaults (in `.env`):
 
 ```
 FAST_MAX_HOURS=24
@@ -295,6 +301,13 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   - Good ones show "Arb at your cost: $0.03 per pair locked". The Active arbs card counts the ones that
     aren't.
   - Pairing your positions uses every matched market, whatever Focus is set to.
+- **Balance** (on an arb whose legs hold different share counts): checks both live books and shows the
+  two ways to even it up, selling the extra shares or buying the missing ones on the other site,
+  with what each leaves you after fees. It recommends whichever leaves more money (shares an option
+  can't cover count as $0) and sends nothing until you pick one. The order is immediate-or-cancel at
+  no worse than the price shown. A sale's gain or loss against what those shares cost is kept in the
+  arb's profit. Extra shares under one share (Polymarket fills fractions on a buy by dollar amount)
+  can be balanced too, as long as the site takes an order that small.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
   cost cut pro rata. An arb with a leg sold out moves to **Closed early**, with a note saying what

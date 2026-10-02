@@ -230,7 +230,8 @@ class PolymarketVenue:
         m = self.public.http.get(f"/market/slug/{slug}")["market"]
         tick = float(m.get("orderPriceMinTickSize") or 0.01)
         return {"open": bool(m.get("active")) and not m.get("closed") and m.get("status") == "MARKET_STATUS_OPEN",
-                "tick": lambda _p: tick, "min_qty": float(m.get("minimumTradeQty") or 1)}
+                "tick": lambda _p: tick, "min_qty": float(m.get("minimumTradeQty") or 1),
+                "fee_coef": float(m.get("feeCoefficient") or config.POLYMARKET_DEFAULT_COEF)}
 
     def balance(self, shard=None):
         live = self.stream_buying_power()

@@ -153,6 +153,9 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                 return self._json(403, {"error": "Forbidden"})
             if path == "/api/state":
                 return self._json(200, scanner.snapshot())
+            if path == "/api/settings":
+                from . import settings
+                return self._json(200, settings.current())
             if path == "/api/myarbs":
                 return self._json(200, {"arbs": scanner.my_arbs.snapshot(scanner.kalshi, scanner.pm),
                                         **scanner.my_arbs.state()})
@@ -203,6 +206,17 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                 if path == "/api/myarbs/sync":
                     scanner.sync_positions()
                     return self._json(200, scanner.my_arbs.state())
+                if path == "/api/settings":
+                    from . import settings
+                    out = settings.update(body.get("changes") or {})
+                    scanner.log("Settings changed: " + ", ".join(f"{k}={v}" for k, v in (body.get("changes") or {}).items()))
+                    return self._json(200, out)
+                if path == "/api/myarbs/balance/preview":
+                    return self._json(200, scanner.balancer.preview(str(body.get("id") or "")))
+                if path == "/api/myarbs/balance/execute":
+                    res = scanner.balancer.execute(str(body.get("plan_id") or ""), str(body.get("choice") or ""))
+                    scanner.log(f"Balance: {res['text']}")
+                    return self._json(200, res)
                 if path == "/api/myarbs/delete":
                     scanner.my_arbs.delete(body.get("id", ""))
                     return self._json(200, {"ok": True})

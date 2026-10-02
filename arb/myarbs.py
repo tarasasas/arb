@@ -28,6 +28,7 @@ def summarize(arb):
     pairs = min(leg["shares"] for leg in legs) if legs else 0
     paid = sum(leg["paid"] for leg in legs)
     guaranteed = arb.get("payout", 1.0) * pairs
+    realized = arb.get("realized") or 0.0       # what selling extra shares made or lost (Balance)
     # Extra shares on one side. Less than one share (Polymarket fills fractions: a buy by dollar amount gets
     # e.g. 12.04 or 8.8) risks under $1 and is evened up on Polymarket: listed as leftover, not unhedged.
     extra = [{"exchange": leg["exchange"], "side": leg["side"], "shares": round(leg["shares"] - pairs, 4)}
@@ -37,7 +38,7 @@ def summarize(arb):
     # Per pair at your real cost: what one share on each side cost, against what the pair pays.
     pair_cost = sum(leg["paid"] / leg["shares"] for leg in legs if leg["shares"] > 0) if pairs else 0.0
     return {"pairs": pairs, "paid": round(paid, 2), "guaranteed": round(guaranteed, 2),
-            "profit": round(guaranteed - paid, 2), "roi": (guaranteed - paid) / paid if paid else 0,
+            "profit": round(guaranteed - paid + realized, 2), "roi": (guaranteed - paid + realized) / paid if paid else 0,
             "unhedged": unhedged, "leftover": leftover, "pair_cost": round(pair_cost, 4),
             "pair_edge": round(arb.get("payout", 1.0) - pair_cost, 4) if pairs else 0.0}
 
@@ -381,6 +382,30 @@ class MyArbs:
             if changed:
                 self._save()
         return changed
+
+    def apply_balance(self, arb_id, exchange, action, qty, amount, fee):
+        """Record a Balance order: a buy adds shares and what they cost to that leg; a sale takes shares
+        out at the leg's average cost and keeps what it made or lost over that cost (in `realized`)."""
+        names = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
+        with self.lock:
+            a = next((a for a in self.items if a["id"] == arb_id), None)
+            leg = next((l for l in (a or {}).get("legs", []) if l["exchange"] == exchange), None)
+            if leg is None or qty <= 0:
+                return None
+            side = leg["side"].upper()
+            if action == "buy":
+                leg["shares"], leg["paid"] = round(leg["shares"] + qty, 4), round(leg["paid"] + amount + fee, 2)
+                did = f"bought {qty:g} {side} on {names[exchange]} for ${amount + fee:.2f}"
+            else:
+                cost = leg["paid"] / leg["shares"] * qty if leg["shares"] else 0.0
+                leg["shares"], leg["paid"] = round(leg["shares"] - qty, 4), round(max(0.0, leg["paid"] - cost), 2)
+                pnl = amount - fee - cost
+                a["realized"] = round((a.get("realized") or 0.0) + pnl, 2)
+                did = (f"sold {qty:g} extra {side} on {names[exchange]} for ${amount - fee:.2f} "
+                       f"({'+' if pnl >= 0 else '-'}${abs(pnl):.2f} vs what they cost)")
+            a["note"] = f"Balanced: {did}. " + (a.get("note") or "")
+            self._save()
+            return a
 
     def delete(self, arb_id):
         with self.lock:
