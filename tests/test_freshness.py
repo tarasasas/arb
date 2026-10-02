@@ -144,3 +144,25 @@ class PayoutCacheTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CdnCacheTests(unittest.TestCase):
+    """Polymarket's gateway CDN keeps replies 30s by URL (and ignores no-cache), so every live read must
+    carry a parameter no other request has."""
+
+    def test_every_live_read_has_its_own_url(self):
+        urls = []
+
+        def get(_self, path, params=None):
+            urls.append((path, tuple(params or ())))
+            if path.endswith("/book"):
+                return {"marketData": {"bids": [], "offers": []}}
+            return {"markets": []}
+        c = pm_client(get)
+        for _ in range(2):
+            c.live_levels("s")
+            c.refresh_quotes([pmm("s")])
+            c.markets_by_slug(["s"])
+        self.assertEqual(len(urls), 6)
+        self.assertEqual(len(set(urls)), 6)                  # no two identical, so none served from the cache
+        self.assertTrue(all(any(k == "_" for k, _v in params) for _p, params in urls))

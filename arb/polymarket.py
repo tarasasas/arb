@@ -1,5 +1,6 @@
 """Polymarket US public market data: sports market parsing, batched quotes, order books."""
 
+import itertools
 import re
 import time
 from dataclasses import dataclass, field
@@ -9,6 +10,16 @@ from .http import LanePool, RateLimitedClient
 
 PAGE = 500
 WORKERS = 16          # requests in flight; the rate limiter keeps the pace at POLYMARKET_RPS
+
+
+_seq = itertools.count()
+
+
+def fresh():
+    """A query parameter no other request carries. The gateway's CDN (Cloudflare) keeps every reply for 30
+    seconds by URL and ignores no-cache headers, so without it a book or quote read twice within 30s is
+    the same old copy: arbs that are already gone, liquidity that isn't there."""
+    return ("_", f"{time.time_ns():x}{next(_seq):x}")      # the counter: Windows clocks tick in ms
 
 SLUG_RE = re.compile(r"^(?P<prefix>aec|asc|tsc|atc|astatc)-(?P<league>[a-z0-9]+)-(?P<t1>[a-z0-9]+)-(?P<t2>[a-z0-9]+)-"
                      r"(?P<date>\d{4}-\d{2}-\d{2})(?:-(?P<rest>.+))?$")
@@ -231,8 +242,8 @@ class PolymarketClient:
         self.http = RateLimitedClient(config.POLYMARKET_BASE, config.POLYMARKET_RPS)
 
     def _page(self, offset):
-        return self.http.get("/markets", {"active": "true", "closed": "false", "categories": "sports",
-                                          "limit": PAGE, "offset": offset}).get("markets") or []
+        return self.http.get("/markets", [("active", "true"), ("closed", "false"), ("categories", "sports"),
+                                          ("limit", PAGE), ("offset", offset), fresh()]).get("markets") or []
 
     def load_sports_markets(self, log=print):
         """Pages are fetched in parallel waves; the listing ends at the first short page."""
@@ -256,8 +267,8 @@ class PolymarketClient:
             got, offset = [], 0
             while True:
                 try:
-                    ms = self.http.get("/markets", {"active": "true", "closed": "false", "categories": cat,
-                                                    "limit": PAGE, "offset": offset}).get("markets") or []
+                    ms = self.http.get("/markets", [("active", "true"), ("closed", "false"), ("categories", cat),
+                                                    ("limit", PAGE), ("offset", offset), fresh()]).get("markets") or []
                 except Exception as e:
                     log(f"  polymarket: category {cat!r} not loaded ({e!r})")
                     return got
@@ -277,7 +288,7 @@ class PolymarketClient:
         out = {}
         slugs = list(slugs)
         for i in range(0, len(slugs), 100):
-            d = self.http.get("/markets", [("slug", s) for s in slugs[i:i + 100]] + [("limit", 200)])
+            d = self.http.get("/markets", [("slug", s) for s in slugs[i:i + 100]] + [("limit", 200), fresh()])
             out.update({m["slug"]: m for m in d.get("markets") or []})
         return out
 
@@ -291,7 +302,7 @@ class PolymarketClient:
         def fetch(chunk):
             sent = time.time()
             try:
-                return chunk, sent, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200)])
+                return chunk, sent, self.http.get("/markets", [("slug", s) for s in chunk] + [("limit", 200), fresh()])
             except Exception:
                 return chunk, sent, None      # unpriced this cycle
 
@@ -323,7 +334,7 @@ class PolymarketClient:
     def live_levels(self, slug):
         """Current depth for buying each side: {"yes": [...], "no": [...], "state": ...}.
         Buying YES lifts offers; buying NO = shorting into bids at cost (1 - bid)."""
-        d = self.http.get(f"/markets/{slug}/book").get("marketData") or {}
+        d = self.http.get(f"/markets/{slug}/book", [fresh()]).get("marketData") or {}
         bids = [(_q(l.get("px")), float(l.get("qty") or 0)) for l in d.get("bids") or []]
         offers = [(_q(l.get("px")), float(l.get("qty") or 0)) for l in d.get("offers") or []]
         bids = sorted(((p, q) for p, q in bids if p is not None and q > 0), key=lambda t: -t[0])
