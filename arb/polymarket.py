@@ -31,7 +31,7 @@ class PMMarket:
     date: str            # YYYY-MM-DD (event-local date, as in the slug)
     t1: str
     t2: str
-    kind: str            # GAME | SPREAD | TOTAL | TEAMTOTAL
+    kind: str            # GAME | SPREAD | TOTAL | TEAMTOTAL | BTTS | SCORE | PROP
     period: str
     team: str | None     # PM team abbreviation, "draw", or None
     op: str
@@ -48,6 +48,9 @@ class PMMarket:
     state: str = ""
     quoted_at: float = 0.0   # when the request behind the current quote was sent (or the stream update arrived)
     tick: float = 0.01   # price step (orderPriceMinTickSize); maker mode posts one step better
+    score: tuple | None = None   # SCORE: ((t1, goals), (t2, goals)) in the slug's team codes
+    player: str = ""             # PROP: the player's name
+    stat: str = ""               # PROP: key in PLAYER_PROPS
 
 
 def _q(v):
@@ -66,6 +69,45 @@ def _period(mid):
 
 # Yes/no markets on a game that aren't winner/spread/total: (sport, period, kind, line).
 BTTS_RE = re.compile(r"^(?P<sport>soccer|football)_game_(?:(?P<mid>[a-z_]+?)_)?(?:btts|both_teams_score_points)$")
+
+
+# Player props -> the stat names kalshi.PLAYER_PROPS uses (see there for what's left out and why).
+PLAYER_PROPS = {
+    "baseball_player_hits": "hits", "baseball_player_home_runs": "hr", "baseball_player_hits_runs_rbis": "hrr",
+    "baseball_player_strikeouts": "k", "baseball_player_total_bases": "tb", "baseball_player_rbis": "rbi",
+    "baseball_player_stolen_bases": "sb", "baseball_player_hits_allowed": "ha", "baseball_player_outs": "outs",
+    "football_player_receiving_yards": "recyd", "football_player_rushing_yards": "ryd",
+    "football_player_passing_yards": "pyd", "football_player_passing_touchdowns": "ptd",
+    "football_player_receptions": "rec", "football_player_touchdowns": "td",
+    "football_player_passing_completions": "pcmp", "football_player_passing_attempts": "patt",
+    "football_player_rushing_attempts": "ratt", "football_player_interceptions_thrown": "int",
+    "football_player_scrimmage_yards": "scrim",
+    "hockey_player_points": "pts", "hockey_player_goals": "goals", "hockey_player_assists": "ast",
+}
+EXACT_SCORE = {"soccer_game_exact_score": "FG", "soccer_game_first_half_exact_score": "1H"}
+SCORE_REST_RE = re.compile(r"^(?:fh-)?exact-score-(?P<x>\d+)-(?P<y>\d+)$")     # t1 goals - t2 goals
+PROP_REST_RE = re.compile(r"-gte(?P<n>\d+)$")                                 # "at least n"
+
+
+def _prop_or_score(m, sm, stype):
+    """(kind, period, op, line, score, player, stat) for an exact-score or player-prop market, else None."""
+    rest = sm["rest"] or ""
+    if stype in EXACT_SCORE:
+        mm = SCORE_REST_RE.match(rest)
+        if not mm:
+            return None
+        return "SCORE", EXACT_SCORE[stype], ">", 0.5, ((sm["t1"], int(mm["x"])), (sm["t2"], int(mm["y"]))), "", ""
+    if stype in PLAYER_PROPS:
+        mm = PROP_REST_RE.search(rest)
+        player = ((m.get("metadata") or {}).get("playerName") or "").strip()
+        try:
+            same_line = float(m.get("line")) == int(mm["n"]) if mm else False
+        except (TypeError, ValueError):
+            same_line = False
+        if not (mm and player and same_line):
+            return None
+        return "PROP", "FG", ">", int(mm["n"]) - 0.5, None, player, PLAYER_PROPS[stype]     # >= n  <=>  > n - 0.5
+    return None
 
 
 def _special(stype):
@@ -88,6 +130,19 @@ def parse_market(m):
     stype = m.get("sportsMarketType") or ""
     rest = sm["rest"] or ""
     team_total = re.match(r"^tt(?:1h|2h)?-([a-z0-9]+)-", rest)
+    other = _prop_or_score(m, sm, stype)
+    if other:
+        kind_c, period, op, line, score, player, stat = other
+        pm = PMMarket(
+            slug=slug, league=sm["league"], sport=stype.split("_")[0], date=sm["date"], t1=sm["t1"], t2=sm["t2"],
+            kind=kind_c, period=period, team=None, op=op, line=line, tie_half=False,
+            title=m.get("question") or slug, rules=m.get("description") or "",
+            start_time=m.get("gameStartTime") or m.get("endDate") or "",
+            fee_coef=float(m.get("feeCoefficient") or config.POLYMARKET_DEFAULT_COEF), team_names={},
+            tick=float(m.get("orderPriceMinTickSize") or 0.01), score=score, player=player, stat=stat,
+        )
+        set_quotes(pm, m)
+        return pm
     special = _special(stype)
     if special:
         sport, period, kind_c, line = special

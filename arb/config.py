@@ -84,6 +84,9 @@ FAST_ALLOW_AUTO_MATCHED = os.environ.get("FAST_ALLOW_AUTO_MATCHED", "1").strip()
 # Also allow rows flagged "too good to be true" (no upper limit on the return). Live prices are always
 # re-checked before ordering. Set to 0 to skip them.
 FAST_ALLOW_TOO_GOOD = os.environ.get("FAST_ALLOW_TOO_GOOD", "1").strip().lower() not in ("0", "false", "no", "off")
+# Also allow player props (if the player doesn't play, each site settles at its own fair price, so the
+# pair may pay a little more or less than $1). Set to 0 to skip them.
+FAST_ALLOW_PLAYER_PROPS = os.environ.get("FAST_ALLOW_PLAYER_PROPS", "1").strip().lower() not in ("0", "false", "no", "off")
 FAST_MAX_TRADE = _env_num("FAST_MAX_TRADE", 50)             # $ per Fast trade, both legs
 AUTO_TRADE_MAX_TRADE = _env_num("AUTO_TRADE_MAX_TRADE", 25)  # $ per Auto-trade, both legs
 AUTO_TRADE_DAILY_LIMIT = _env_num("AUTO_TRADE_DAILY_LIMIT", 100)   # $ spent by Auto-trade per day

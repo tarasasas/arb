@@ -309,6 +309,9 @@ def warnings_for(k, p, now):
         w.append("Tennis: a retirement mid-match counts as a win for the opponent on both sites, but if the match "
                  "never starts (walkover, injury before the first point) each site settles at its own fair price, so "
                  "the two legs may not add up to $1.")
+    if k.var[0] == "player":
+        w.append(f"Player prop: if {_player(k.var)} doesn't play (scratched, not in the starting lineup, never takes "
+                 f"a snap or the ice), each site settles at its own fair price, so the two legs may not add up to $1.")
     if k.integer_line or p.integer_line:
         w.append("Whole-number line: a push is assumed to pay $0 on both sides (conservative).")
     ok, op = _ot_rule(k.rules), _ot_rule(p.rules)
@@ -329,13 +332,31 @@ def leg_text(c, side, price):
             "side": side, "action": action, "price": round(price, 4)}
 
 
+STAT_NAMES = {"hits": "hits", "hr": "home runs", "hrr": "hits + runs + RBIs", "k": "strikeouts",
+              "tb": "total bases", "rbi": "RBIs", "sb": "stolen bases", "ha": "hits allowed", "outs": "outs recorded",
+              "recyd": "receiving yards", "ryd": "rushing yards", "pyd": "passing yards", "ptd": "passing TDs",
+              "rec": "receptions", "td": "touchdowns", "pcmp": "pass completions", "patt": "pass attempts",
+              "ratt": "rushing attempts", "int": "interceptions thrown", "scrim": "rushing + receiving yards",
+              "pts": "points", "goals": "goals", "ast": "assists"}
+
+
+def _player(var):
+    # Joined initials ("tj") back in capitals; two-letter names ("bo", "ty") and "jr" stay names.
+    return " ".join(w.upper() if w in ("ii", "iii", "iv") or len(w) == 2 and not set(w) & set("aeiouy")
+                    and w not in ("jr", "sr") else w.capitalize() for w in var[2].split())
+
+
 def describe_var(var, note=""):
     if var[0] == "price":
         return f"{var[1].upper()} settlement price (CF Benchmarks 60-second average)"
     if var[0] == "event":
         return {"structural": "Paired by contract terms", "auto": "Auto-matched by wording"}.get(note, "Your approved match")
+    if var[0] == "player":
+        return f"{_player(var)}: {STAT_NAMES.get(var[1], var[1])}"
     kind, period = var[0], var[1]
     per = "" if period == "FG" else f" ({period})"
+    if kind == "score":
+        return f"Exact score{per}"
     if kind == "btts":
         return f"Both teams score{per}"
     if kind == "margin":
@@ -377,10 +398,15 @@ def outcome_text(var, lo, hi):
         return f"{coin} closes {_dollars(lo)} to {_dollars(hi)}"
     if var[0] == "event":
         return "It happens (Kalshi market resolves YES)" if (lo or 0) >= 1 else "It doesn't happen (Kalshi resolves NO)"
+    if var[0] == "player":
+        n = _range_text(None if lo == 0 and hi != 0 else lo, hi, str)
+        return f"{_player(var)}: {n} {STAT_NAMES.get(var[1], var[1])}"
     per = var[1]
     prefix = "" if per == "FG" else PERIOD_NAMES.get(per, f"Inning {per[1:]}" if per.startswith("I") else per) + ": "
     if var[0] == "btts":
         return f"{prefix}Both teams score" if (lo or 0) >= 1 else f"{prefix}Not both teams score"
+    if var[0] == "score":
+        return f"{prefix}Ends {var[2]}" if (lo or 0) >= 1 else f"{prefix}Any other score"
     if var[0] in ("total", "tt"):
         who = "Combined score" if var[0] == "total" else f"{var[2]} scores"
         return f"{prefix}{who} {_range_text(None if lo == 0 and hi != 0 else lo, hi, str)}"
@@ -533,6 +559,8 @@ def fast_check(row, now):
     if auto and not config.FAST_ALLOW_AUTO_MATCHED:
         return {"ok": False, "why": "auto-matched: confirm the match first"}
     blocking = tuple(b for b in FAST_BLOCKING if not (auto and b == "AUTO-MATCHED" and config.FAST_ALLOW_AUTO_MATCHED))
+    if not config.FAST_ALLOW_PLAYER_PROPS:
+        blocking += ("Player prop",)
     w = next((w for w in row.get("warnings") or [] if w.startswith(blocking)), None)
     if w:
         return {"ok": False, "why": w.split(":")[0].split(" (")[0].lower()}

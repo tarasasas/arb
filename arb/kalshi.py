@@ -16,8 +16,22 @@ from .kalshi_auth import load_signer
 DEFAULT_TOKEN_COST = 10   # all market-data GETs; see GET /account/endpoint_costs
 
 PERIODS = ("1H", "2H", "1Q", "2Q", "3Q", "4Q", "1P", "2P", "3P", "F5")
-SERIES_REST_RE = re.compile(r"^(?P<period>1H|2H|1Q|2Q|3Q|4Q|1P|2P|3P|F5)?(?P<kind>GAME|SPREAD|TOTAL|TEAMTOTAL|INNINGTOTAL|RFI|BTTS)?$")
+SERIES_REST_RE = re.compile(r"^(?P<period>1H|2H|1Q|2Q|3Q|4Q|1P|2P|3P|F5)?(?P<kind>GAME|SPREAD|TOTAL|TEAMTOTAL|INNINGTOTAL|RFI|BTTS|SCORE)?$")
 TEAM_STRIKE_RE = re.compile(r"^(?P<team>[A-Z0-9]*?[A-Z])(?P<num>\d+)$")
+SCORE_STRIKE_RE = re.compile(r"^(?P<a>[A-Z]+)(?P<x>\d+)(?P<b>[A-Z]+)(?P<y>\d+)$")     # AZE5LTU2: AZE 5, LTU 2
+
+# Player props: Kalshi series -> stat, the same names polymarket.PLAYER_PROPS uses. Only stats whose
+# rules match on both sites (same participation rule: starting lineup / starting pitcher, a snap, time
+# on ice). Soccer goals are left out: Kalshi counts a substitute's goals and extra time, Polymarket
+# settles a non-starter at a fair price and stops at 90 minutes.
+PLAYER_PROPS = {
+    "KXMLBHIT": "hits", "KXMLBHR": "hr", "KXMLBHRR": "hrr", "KXMLBKS": "k", "KXMLBTB": "tb", "KXMLBRBI": "rbi",
+    "KXMLBSB": "sb", "KXMLBHA": "ha", "KXMLBOUTS": "outs",
+    "KXNFLRECYDS": "recyd", "KXNFLRSHYDS": "ryd", "KXNFLPASSYDS": "pyd", "KXNFLPASSTDS": "ptd", "KXNFLREC": "rec",
+    "KXNFLTD": "td", "KXNFLPASSCOMP": "pcmp", "KXNFLPASSATT": "patt", "KXNFLRSHATT": "ratt", "KXNFLPASSINT": "int",
+    "KXNFLRRYDS": "scrim",
+    "KXNHLPTS": "pts", "KXNHLGOAL": "goals", "KXNHLAST": "ast",
+}
 
 # Kalshi league code -> (Polymarket league code, sport); longest code first so that
 # e.g. BRASILEIROB is tried before BRASILEIRO.
@@ -35,7 +49,7 @@ class KalshiMarket:
     body: str            # event body, e.g. 26OCT04INDWAS
     date_code: str       # 26OCT04
     teams_str: str       # INDWAS
-    kind: str            # GAME | SPREAD | TOTAL | TEAMTOTAL
+    kind: str            # GAME | SPREAD | TOTAL | TEAMTOTAL | BTTS | SCORE | PROP
     period: str          # FG, 1H, ..., F5, I1..I9
     team: str | None     # team code, "TIE", or None
     op: str
@@ -55,6 +69,9 @@ class KalshiMarket:
     # Kalshi exchange shard the market trades on (0 default, 2 crypto/commodities, 3 some sports).
     # Orders only use cash held on that shard.
     shard: int = 0
+    score: tuple | None = None   # SCORE: ((team code, goals), (team code, goals))
+    player: str = ""             # PROP: the player's name, as Kalshi writes it
+    stat: str = ""               # PROP: key in PLAYER_PROPS
 
 
 def settle_time(m):
@@ -86,6 +103,8 @@ def parse_series(series_ticker):
         return "TENNIS", "atp", "tennis", "FG", "GAME"
     rest_all = series_ticker[2:]
     for code, pm_code, sport in _BY_KALSHI:
+        if rest_all.startswith(code) and series_ticker in PLAYER_PROPS:
+            return code, pm_code, sport, "FG", "PROP"
         if rest_all.startswith(code):
             m = SERIES_REST_RE.match(rest_all[len(code):])
             if not m or not (m["period"] or m["kind"]):
@@ -110,7 +129,7 @@ def parse_market(m, series_info, fee_coef):
     date_code, teams_str = body[:7], re.sub(r"^\d{4}", "", body[7:])
     suffix = m["ticker"][len(ev) + 1:]
     strike_type = m.get("strike_type")
-    team, op, line = None, None, None
+    team, op, line, score, player = None, None, None, None, ""
 
     if kind == "GAME":
         if strike_type != "structured":
@@ -123,6 +142,19 @@ def parse_market(m, series_info, fee_coef):
         period, kind, op, line = "I1", "TOTAL", ">", _f(m.get("floor_strike")) - 0.5
     elif kind == "BTTS":                    # both teams score (in the period): a yes/no event
         op, line = ">", 0.5
+    elif kind == "SCORE":                   # one exact score (after 90 minutes + stoppage): a yes/no event
+        mm = SCORE_STRIKE_RE.match(suffix)
+        if not mm or teams_str not in (mm["a"] + mm["b"], mm["b"] + mm["a"]):     # both teams of this game
+            return None
+        score = ((mm["a"], int(mm["x"])), (mm["b"], int(mm["y"])))
+        op, line = ">", 0.5
+    elif kind == "PROP":                    # "Gerrit Cole: 7+" strikeouts = count > 6.5
+        if strike_type != "greater" or _f(m.get("floor_strike")) is None:
+            return None
+        player = (m.get("yes_sub_title") or "").split(":")[0].strip()
+        if not player:
+            return None
+        op, line = ">", _f(m.get("floor_strike"))
     elif kind == "INNINGTOTAL":
         mm = re.match(r"^(\d+)-\d+$", suffix)
         if not mm or strike_type != "greater":
@@ -150,7 +182,8 @@ def parse_market(m, series_info, fee_coef):
         team=team, op=op, line=line, title=m.get("title") or m["ticker"], name=m.get("yes_sub_title") or "",
         rules=((m.get("rules_primary") or "") + "\n\n" + (m.get("rules_secondary") or "")).strip(),
         close_time=settle_time(m), fee_coef=fee_coef,
-        shard=int(m.get("exchange_index") or 0),
+        shard=int(m.get("exchange_index") or 0), score=score, player=player,
+        stat=PLAYER_PROPS.get(ev.split("-")[0], "") if kind == "PROP" else "",
     )
     km.yes_ask, km.no_ask = _f(m.get("yes_ask_dollars")), _f(m.get("no_ask_dollars"))
     km.yes_ask_size = _f(m.get("yes_ask_size_fp"))

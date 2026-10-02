@@ -159,6 +159,33 @@ def _var(kind, period, team, anchor):
     return ("tt", period, team)
 
 
+def player_key(name):
+    """A player's name as both sites can agree on it: no accents, case or punctuation, initials joined
+    ("T.J. Hockenson" = "TJ Hockenson" = "T. J. Hockenson"). Suffixes stay: "Luis Garcia" and "Luis Garcia
+    Jr." are two different players, so a name written differently is left unpaired rather than guessed."""
+    name = unicodedata.normalize("NFKD", name)
+    name = "".join(ch for ch in name if not unicodedata.combining(ch)).lower()
+    toks = re.sub(r"[^a-z0-9 ]", " ", re.sub(r"[.'\u2019]", "", name).replace("-", " ")).split()
+    out = []
+    for t in toks:                          # "t j hockenson" -> "tj hockenson"
+        if len(t) == 1 and out and len(out[-1]) <= 2 and out[-1].isalpha() and len(toks) > 2:
+            out[-1] += t
+        else:
+            out.append(t)
+    return " ".join(out)
+
+
+def _score_var(period, score, anchor, codes):
+    """An exact score as ("score", period, "AAA x-y BBB") with the anchor team first, or None if its teams
+    aren't this game's. score: ((code, goals), (code, goals)) in Kalshi codes."""
+    (a, x), (b, y) = score
+    if {a, b} != set(codes) or anchor not in codes:
+        return None
+    if a != anchor:
+        (a, x), (b, y) = (b, y), (a, x)
+    return ("score", period, f"{a} {x}-{y} {b}")
+
+
 def _no_draw(league, sport, var):
     """Full games that can't finish level: OT/shootouts/extra innings decide them.
     (NFL can tie, NPB/KBO baseball can tie, soccer can draw.)"""
@@ -176,7 +203,18 @@ def build_contracts(matches):
         sport = kg.markets[0].sport
         d = date.fromisoformat(key[1])
         label = f"{key[2].upper()} vs {key[3].upper()}, {d:%b} {d.day}"
+        codes = sorted(set(team_map.values()))
         for km in kg.markets:
+            if km.kind in ("SCORE", "PROP"):
+                var = (_score_var(km.period, km.score, anchor, codes) if km.kind == "SCORE"
+                       else ("player", km.stat, player_key(km.player)))
+                if var is None:
+                    continue
+                c = Contract("kalshi", km.ticker, game_key, var, km.op, km.line, km.title, km.rules, False,
+                             km.fee_coef, km.close_time, False, False, label)
+                contracts.append(c)
+                source[("kalshi", km.ticker)] = km
+                continue
             if km.team == "TIE":
                 op, line = "==", 0.0
             else:
@@ -188,6 +226,21 @@ def build_contracts(matches):
             contracts.append(c)
             source[("kalshi", km.ticker)] = km
         for pm in pms:
+            if pm.kind in ("SCORE", "PROP"):
+                if pm.kind == "SCORE":
+                    (t1, x), (t2, y) = pm.score
+                    if t1 not in team_map or t2 not in team_map:
+                        continue
+                    var = _score_var(pm.period, ((team_map[t1], x), (team_map[t2], y)), anchor, codes)
+                else:
+                    var = ("player", pm.stat, player_key(pm.player))
+                if var is None:
+                    continue
+                c = Contract("polymarket", pm.slug, game_key, var, pm.op, pm.line, pm.title, pm.rules, False,
+                             pm.fee_coef, pm.start_time, False, False, label)
+                contracts.append(c)
+                source[("polymarket", pm.slug)] = pm
+                continue
             team = pm.team
             if team not in (None, "draw"):
                 team = team_map.get(team)

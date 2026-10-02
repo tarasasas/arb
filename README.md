@@ -2,7 +2,8 @@
 
 Finds guaranteed-profit pairs across Kalshi and Polymarket US sports markets: moneylines,
 spreads, totals, team totals, and period markets (halves, quarters, hockey periods, MLB
-first 5 innings and innings). Scanning works without API keys, and a Kalshi key makes it
+first 5 innings and innings), plus tennis match winners, first-inning runs, both teams to
+score, soccer exact scores, and MLB/NFL/NHL player props. Scanning works without API keys, and a Kalshi key makes it
 faster. With both a Kalshi and a Polymarket key, the **Make trade** button can place both
 legs of an arb for you after you confirm (see below).
 
@@ -243,6 +244,7 @@ Limits, in `.env` (defaults shown):
 FAST_MAX_HOURS=24
 FAST_ALLOW_AUTO_MATCHED=1       # 0 = only pairs you or the sports matcher verified
 FAST_ALLOW_TOO_GOOD=1           # 0 = skip rows flagged too good to be true
+FAST_ALLOW_PLAYER_PROPS=1       # 0 = skip player props (a player who doesn't play settles at fair prices)
 FAST_MAX_TRADE=50
 AUTO_TRADE_MAX_TRADE=25
 AUTO_TRADE_DAILY_LIMIT=100
@@ -408,7 +410,10 @@ Then, if you answer `y`, it sends real test orders on each site alone and on bot
 2. **Match games.** Matches games by league, date, and team codes. When codes differ, it
    falls back to team names, e.g. Kalshi "Los Angeles R" = Polymarket "Los Angeles Rams".
 3. **Normalize contracts.** Rewrites every contract as a condition on one game number:
-   winning margin, combined total, or one team's total, each per period. For example:
+   winning margin, combined total, or one team's total, each per period. Exact scores and
+   both-teams-score are yes/no conditions; a player prop is a condition on that player's stat
+   (paired only when both sites name the same player the same way; soccer player goals are left
+   out, since the sites' rules differ on substitutes and extra time). For example:
    - Polymarket "PIT +1.5" becomes *margin(PIT) > −1.5*.
    - Kalshi "CLE wins by over 7.5" becomes *margin(PIT) < −7.5*.
 4. **Find guaranteed pairs.** For each pair of positions, one per exchange, it checks every
