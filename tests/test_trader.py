@@ -26,7 +26,7 @@ class FakeVenue:
     def balance(self, shard=None):
         return self.bal
 
-    def buy(self, mid, side, qty, limit, coef):
+    def buy(self, mid, side, qty, limit, coef, expect=None):
         self.orders.append(("buy", side, qty, limit))
         if self.fractional_fill is not None:          # simulate an exchange filling less than asked
             qty, self.fractional_fill = min(qty, self.fractional_fill), None
@@ -43,7 +43,7 @@ class FakeVenue:
         n = sum(q for _, q in fills)
         return Fill(qty=n, amount=sum(p * q for p, q in fills), fee=total_fee(self.name, fills, coef))
 
-    def sell(self, mid, side, qty, min_price, coef):
+    def sell(self, mid, side, qty, min_price, coef, expect=None):
         self.orders.append(("sell", side, qty, min_price))
         return Fill(qty=qty, amount=qty * min_price, fee=total_fee(self.name, [(min_price, qty)], coef))
 
@@ -166,6 +166,23 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+class ExpectedPriceTests(unittest.TestCase):
+    def test_orders_carry_the_planned_average_price(self):
+        seen = []
+
+        class Venue(FakeVenue):
+            def buy(self, mid, side, qty, limit, coef, expect=None):
+                seen.append((self.name, expect))
+                return super().buy(mid, side, qty, limit, coef)
+        k, p = Venue("kalshi", yes=[(0.40, 500)]), Venue("polymarket", no=[(0.50, 20)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        t.execute(plan["id"])
+        for ex, expect in seen:
+            leg = plan["legs"][ex]
+            self.assertAlmostEqual(expect, leg["amount"] / plan["size"])
 
 class ShardTests(unittest.TestCase):
     def test_empty_shard_explains_what_to_do(self):
@@ -320,7 +337,7 @@ class TogetherTests(unittest.TestCase):
         barrier = threading.Barrier(2, timeout=2)        # each buy waits for the other: deadlocks if sequential
 
         class Waiting(FakeVenue):
-            def buy(self, *a):
+            def buy(self, *a, **kw):
                 barrier.wait()
                 return super().buy(*a)
         k, p = Waiting("kalshi", yes=[(0.40, 500)]), Waiting("polymarket", no=[(0.50, 500)])
@@ -344,9 +361,38 @@ class TogetherTests(unittest.TestCase):
         self.assertGreater(len(p.orders), 1)                   # then the rest on a retry
         self.assertEqual(res["unhedged_shares"], 0)
 
+    def test_headroom_never_costs_more_than_the_profit(self, *_):
+        k, p = FakeVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)])
+        t = make(k, p)
+        plan = t.prepare(LEGS)
+        info = t.plans[plan["id"]][1]
+        lim = t.together_limits(plan, info)
+        self.assertGreater(lim["kalshi"], plan["legs"]["kalshi"]["limit"])     # room above the plan on both
+        self.assertGreater(lim["polymarket"], plan["legs"]["polymarket"]["limit"])
+        n = plan["size"]
+        worst = sum(n * lim[ex] + total_fee(ex, [(lim[ex], n)], plan["legs"][ex]["fee_coef"]) for ex in ("kalshi", "polymarket"))
+        self.assertLessEqual(worst, plan["payout"] * n + 1e-9)    # both filled at the raised limits: still break even
+        with mock.patch.object(trader_mod.config, "TOGETHER_HEADROOM", 0.0):
+            lim0 = t.together_limits(plan, info)
+        self.assertEqual(lim0, {ex: plan["legs"][ex]["limit"] for ex in ("kalshi", "polymarket")})
+
+    def test_a_small_move_fills_on_the_first_try(self, *_):
+        def run():
+            k, p = FakeVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)])
+            t = make(k, p)
+            plan = t.prepare(LEGS)
+            k.book["yes"] = [(0.42, 500)]                         # Kalshi ticks up 2c as the orders go out
+            return t.execute(plan["id"]), k
+        res, k = run()
+        self.assertEqual((res["status"], res["hedged_pairs"]), ("ok", 107))
+        self.assertEqual(len(k.orders), 1)                         # filled with the headroom, no retry
+        with mock.patch.object(trader_mod.config, "TOGETHER_HEADROOM", 0.0):
+            res0, k0 = run()
+        self.assertGreater(len(k0.orders), 1)                      # exactly the plan: missed, then a retry
+
     def test_one_side_rejected_sells_the_other_back(self, *_):
         class Rejecting(FakeVenue):
-            def buy(self, *a):
+            def buy(self, *a, **kw):
                 raise trader_mod.ApiError(400, "insufficient shard balance")
         k = Rejecting("kalshi", yes=[(0.40, 500)])
         p = FakeVenue("polymarket", no=[(0.50, 500)])
@@ -360,7 +406,7 @@ class TogetherTests(unittest.TestCase):
 
     def test_unconfirmed_order_stops_without_selling(self, *_):
         class Broken(FakeVenue):
-            def buy(self, *a):
+            def buy(self, *a, **kw):
                 raise ConnectionError("timed out")
         k = Broken("kalshi", yes=[(0.40, 500)])
         p = FakeVenue("polymarket", no=[(0.50, 500)])
@@ -429,7 +475,7 @@ class PolymarketFirstTests(unittest.TestCase):
         sent = []
 
         class Logging(FakeVenue):
-            def buy(self, *a):
+            def buy(self, *a, **kw):
                 sent.append(self.name)
                 return super().buy(*a)
         k = Logging("kalshi", yes=[(0.40, 500)])

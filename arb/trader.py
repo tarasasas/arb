@@ -117,11 +117,16 @@ class Trader:
 
     # ---- tick-to-trade timeline -------------------------------------------------------------
 
-    def _timed_buy(self, plan, kind, leg, qty, limit):
-        """venue.buy, recording when the order went out and when its final answer came back."""
+    def _timed_buy(self, plan, kind, leg, qty, limit, expect=None):
+        """venue.buy, recording when the order went out and when its final answer came back. expect: the
+        average price per share this order should fill at (the leg's planned average if not given), so
+        the fill price is read right near 50/50."""
         sent = time.time()
+        if expect is None and leg.get("amount") and plan.get("size"):
+            expect = leg["amount"] / plan["size"]
         try:
-            return self.venues[leg["exchange"]].buy(leg["market_id"], leg["side"], qty, limit, leg["fee_coef"])
+            return self.venues[leg["exchange"]].buy(leg["market_id"], leg["side"], qty, limit, leg["fee_coef"],
+                                                    expect=expect)
         finally:
             with _TL_LOCK:
                 plan.setdefault("timeline", {}).setdefault("orders", []).append(
@@ -464,11 +469,13 @@ class Trader:
         fills_b, hedged, first_attempt = [], 0.0, 0
         if plan.get("together"):
             # 1. both legs at once at their planned limits
-            A, B, fa, fb = self._send_both(plan, record, steps, log)
+            A, B, fa, fb = self._send_both(plan, info, record, steps, log)
             va, vb = self.venues[A["exchange"]], self.venues[B["exchange"]]
             if fa.qty <= 0:
                 errs = {o["exchange"]: o["error"] for o in log["orders"] if o.get("error")}
-                missed = [self._miss(leg, plan["size"], leg["limit"], errs.get(leg["exchange"])) for leg in (A, B)]
+                lim = plan.get("together_limits") or {}
+                missed = [self._miss(leg, plan["size"], lim.get(leg["exchange"], leg["limit"]), errs.get(leg["exchange"]))
+                          for leg in (A, B)]
                 log["missed"] = missed
                 self._write(log, status="no_fill")
                 return self._result(plan, "no_fill", steps, fa, [], None, 0,
@@ -507,15 +514,32 @@ class Trader:
 
         return self._finish(plan, info, A, B, va, vb, fa, fills_b, hedged, first_attempt, steps, log, record)
 
-    def _send_both(self, plan, record, steps, log):
-        """Send both orders at the same moment. Returns (A, B, fill A, fill B) with A the side that
-        filled more (plan["first"] is set to it). A rejected order counts as no fill; an order whose
-        outcome can't be confirmed stops everything."""
+    @staticmethod
+    def together_limits(plan, info):
+        """Limits for sending both orders at once. Neither can hedge the other, so a one-tick move on one
+        site leaves the other's fill to be sold back. So each order gets half of TOGETHER_HEADROOM x the
+        arb's profit as room above its planned cost: if both fill at their raised limits the pair still
+        pays back what it cost (at the default 1.0). Each order still fills at the best prices on the
+        book, so the room only costs anything when a price really moved."""
+        n = plan["size"]
+        share = max(0.0, plan["payout"] * n - plan["capital"]) * config.TOGETHER_HEADROOM / 2
+        out = {}
+        for ex in EXCHANGES:
+            leg = plan["legs"][ex]
+            room = leg["amount"] + leg["fee"] + share
+            out[ex] = max(leg["limit"], break_even_price(ex, n, room, leg["fee_coef"], info[ex]["tick"]))
+        return out
+
+    def _send_both(self, plan, info, record, steps, log):
+        """Send both orders at the same moment, at together_limits. Returns (A, B, fill A, fill B) with A
+        the side that filled more (plan["first"] is set to it). A rejected order counts as no fill; an
+        order whose outcome can't be confirmed stops everything."""
         legs = [plan["legs"]["kalshi"], plan["legs"]["polymarket"]]
+        limits = plan["together_limits"] = self.together_limits(plan, info)
 
         def send(leg):
             try:
-                return self._timed_buy(plan, "together", leg, plan["size"], leg["limit"]), None
+                return self._timed_buy(plan, "together", leg, plan["size"], limits[leg["exchange"]]), None
             except Exception as e:
                 return None, e
         with LanePool(2) as pool:
@@ -682,7 +706,8 @@ class Trader:
         extra, sold = [], None
         if hedge_q and hedge_per > sell_per and hedge_cost <= cash_b:
             try:
-                fb = self._timed_buy(plan, "close hedge", B, hedge_q, hedge_fills[-1][0])
+                fb = self._timed_buy(plan, "close hedge", B, hedge_q, hedge_fills[-1][0],
+                                     expect=sum(p * q for p, q in hedge_fills) / hedge_q)
                 record("close_hedge", B, fb)
                 extra.append(fb)
                 if fb.qty:
@@ -704,7 +729,8 @@ class Trader:
             t = info[A["exchange"]]["tick"](bid)
             min_price = max(t, round(bid - config.SELLBACK_SLIPPAGE_TICKS * t, 6))
             try:
-                sold = va.sell(A["market_id"], A["side"], sell_qty, min_price, A["fee_coef"])
+                sold = va.sell(A["market_id"], A["side"], sell_qty, min_price, A["fee_coef"],
+                               expect=sum(p * q for p, q in sell_fills) / sum(q for _, q in sell_fills) if sell_fills else None)
                 record("sellback", A, sold)
                 steps.append(f"{NAMES[A['exchange']]}: sold back {sold.qty:g} unhedged {A['side'].upper()} "
                              f"for ${sold.amount:.2f} − ${sold.fee:.2f} fee")
@@ -752,12 +778,13 @@ class Trader:
         legs = plan["legs"]
         if plan["together"]:                       # both sent at once: each lands after its own site's time
             order = sorted(EXCHANGES, key=lambda ex: lat[ex])
+            lim = self.together_limits(plan, info)
             sleep(lat[order[0]])
             lv0 = book(legs[order[0]])
             sleep(max(0.0, lat[order[1]] - lat[order[0]]))
             lv1 = book(legs[order[1]])
-            got = {order[0]: take(legs[order[0]], plan["size"], legs[order[0]]["limit"], lv0, "together"),
-                   order[1]: take(legs[order[1]], plan["size"], legs[order[1]]["limit"], lv1, "together")}
+            got = {order[0]: take(legs[order[0]], plan["size"], lim[order[0]], lv0, "together"),
+                   order[1]: take(legs[order[1]], plan["size"], lim[order[1]], lv1, "together")}
             plan["first"] = max(EXCHANGES, key=lambda ex: got[ex].qty)
         A = legs[plan["first"]]
         B = legs["polymarket" if plan["first"] == "kalshi" else "kalshi"]

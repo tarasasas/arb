@@ -99,3 +99,22 @@ class PolymarketStreamVenueTests(unittest.TestCase):
     def test_without_the_stream_it_polls_as_before(self):
         v = self.venue(None)
         self.assertIsNone(v.wait_order("o-1", 1.0))
+
+
+class FillPriceTests(unittest.TestCase):
+    """Near 50/50 an average fill price fits the limit read either way; the expected price decides."""
+
+    def test_reading(self):
+        self.assertAlmostEqual(venues._per_share(0.49, 0.52, True, expect=0.49), 0.49)
+        self.assertAlmostEqual(venues._per_share(0.51, 0.52, True, expect=0.49), 0.49)   # quoted on the other side
+        self.assertAlmostEqual(venues._per_share(0.49, 0.52, True), 0.51)                # no expectation: conservative
+        self.assertAlmostEqual(venues._per_share(0.72, 0.30, True, expect=0.50), 0.28)   # only one reading fits
+        self.assertEqual(venues._per_share(0, 0.52, True, expect=0.49), 0.52)            # no average: the limit
+        self.assertAlmostEqual(venues._per_share(0.49, 0.47, False, expect=0.51), 0.51)  # selling
+
+    def test_kalshi_no_buy_quoted_on_the_yes_book(self):
+        class Http:
+            def post(self, path, body):
+                return {"fill_count": "10", "average_fill_price": "0.51", "average_fee_paid": "0.0175"}
+        f = venue(Http()).buy("T", "no", 10, 0.52, 0.07, expect=0.49)
+        self.assertAlmostEqual(f.avg, 0.49)                      # was recorded as 0.51 before

@@ -63,6 +63,10 @@ TRADE_LEGS_TOGETHER = TRADE_ORDER == "together"
 SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks below the best bid
 SECOND_LEG_RETRY_PAUSE = 0.25      # longest wait before a second-leg retry (a live stream ends it early)
 PLAN_RECHECK_AFTER_SECS = 1.5      # a plan older than this (it sat in the confirm dialog) is re-checked first
+# Both orders at once: share of the arb's profit given to the two orders as room above their planned limits
+# (half each), so a small move on either site still fills instead of leaving the other leg to be sold back.
+# 1.0 = all of it: if both fill at their raised limits the pair still breaks even. 0 = exactly the plan.
+TOGETHER_HEADROOM = _env_num("TOGETHER_HEADROOM", 1.0)
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
 # Kalshi keeps cash per exchange shard and an order can only use its market's shard. KALSHI_SHARD_MODE:
 #   even:      every shard is kept stocked with an equal share. Kalshi's own rebalancing holds the split

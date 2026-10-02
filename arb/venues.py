@@ -34,15 +34,21 @@ def floor_to(x, step):
     return math.floor(x / step + 1e-9) * step
 
 
-def _per_share(avg, limit, buying):
+def _per_share(avg, limit, buying, expect=None):
     """Exchanges report an average price; which side it's quoted in isn't always explicit.
-    Pick the reading consistent with the limit, conservatively (higher cost / lower proceeds)."""
+    Keep the readings consistent with the limit. Near 50/50 both are (0.49 and 0.51 under a 0.52
+    limit): then take the one closest to the price the trade expected, since reading 0.49 as 0.51
+    puts the second leg's break-even 2c too low and makes it miss. Without an expected price,
+    the conservative reading (higher cost / lower proceeds). No average: the limit."""
+    if not avg:
+        return limit
     cands = [avg, 1 - avg]
-    if buying:
-        ok = [c for c in cands if c <= limit + 1e-6]
-        return max(ok) if ok else limit
-    ok = [c for c in cands if c >= limit - 1e-6]
-    return min(ok) if ok else limit
+    ok = [c for c in cands if (c <= limit + 1e-6 if buying else c >= limit - 1e-6)]
+    if not ok:
+        return limit
+    if expect is not None and len(ok) == 2:
+        return min(ok, key=lambda c: abs(c - expect))
+    return max(ok) if buying else min(ok)
 
 
 class KalshiVenue:
@@ -170,26 +176,27 @@ class KalshiVenue:
             return r
         return None
 
-    def buy(self, ticker, side, qty, limit, fee_coef):
+    def buy(self, ticker, side, qty, limit, fee_coef, expect=None):
+        """expect: the average price per share the trade expects (reads the fill price near 50/50)."""
         # buy YES at <= limit: bid at limit.  buy NO at <= limit: sell YES (ask) at >= 1 - limit.
         body, r = self._order(ticker, "bid" if side == "yes" else "ask", qty,
                               limit if side == "yes" else 1 - limit)
         n = float(r.get("fill_count") or 0)
         f = Fill(qty=n, order_id=r.get("order_id", ""), request=body, response=r)
         if n > 0:
-            f.amount = n * _per_share(float(r.get("average_fill_price") or limit), limit, True)
+            f.amount = n * _per_share(float(r.get("average_fill_price") or 0), limit, True, expect)
             fee = r.get("average_fee_paid")
             f.fee = float(fee) * n if fee is not None else math.ceil(fee_per_contract(fee_coef, f.avg) * n * 100) / 100
         return f
 
-    def sell(self, ticker, side, qty, min_price, fee_coef):
+    def sell(self, ticker, side, qty, min_price, fee_coef, expect=None):
         # sell YES at >= min: ask at min.  sell NO at >= min: buy YES (bid) at <= 1 - min.
         body, r = self._order(ticker, "ask" if side == "yes" else "bid", qty,
                               min_price if side == "yes" else 1 - min_price, reduce_only=True)
         n = float(r.get("fill_count") or 0)
         f = Fill(qty=n, order_id=r.get("order_id", ""), request=body, response=r)
         if n > 0:
-            f.amount = n * _per_share(float(r.get("average_fill_price") or min_price), min_price, False)
+            f.amount = n * _per_share(float(r.get("average_fill_price") or 0), min_price, False, expect)
             fee = r.get("average_fee_paid")
             f.fee = float(fee) * n if fee is not None else math.ceil(fee_per_contract(fee_coef, f.avg) * n * 100) / 100
         return f
@@ -286,20 +293,20 @@ class PolymarketVenue:
                 return o
         raise RuntimeError(f"Polymarket order {oid} didn't reach a final state; check the account")
 
-    def _fill(self, body, r, order, limit, buying, fee_coef):
+    def _fill(self, body, r, order, limit, buying, fee_coef, expect=None):
         n = float(order.get("cumQuantity") or 0)
         f = Fill(qty=n, order_id=r.get("id", ""), request=body, response=r)
         if n > 0:
-            avg = float(((order.get("avgPx") or {}).get("value")) or limit)
-            f.amount = n * _per_share(avg, limit, buying)
+            avg = float(((order.get("avgPx") or {}).get("value")) or 0)
+            f.amount = n * _per_share(avg, limit, buying, expect)
             fee = (order.get("commissionNotionalTotalCollected") or {}).get("value")
             f.fee = float(fee) if fee is not None else round(fee_per_contract(fee_coef, f.avg) * n, 2)
         return f
 
-    def buy(self, slug, side, qty, limit, fee_coef):
+    def buy(self, slug, side, qty, limit, fee_coef, expect=None):
         intent, yes_price = ("ORDER_INTENT_BUY_LONG", limit) if side == "yes" else ("ORDER_INTENT_BUY_SHORT", 1 - limit)
         body, r, order = self._order(slug, intent, qty, yes_price)
-        return self._fill(body, r, order, limit, True, fee_coef)
+        return self._fill(body, r, order, limit, True, fee_coef, expect)
 
     # ---- resting (maker) orders ------------------------------------------------------------
 
@@ -342,7 +349,7 @@ class PolymarketVenue:
         fee = float(fee) if fee is not None else -config.POLYMARKET_MAKER_REBATE * per * (1 - per) * n
         return n, n * per, fee
 
-    def sell(self, slug, side, qty, min_price, fee_coef):
+    def sell(self, slug, side, qty, min_price, fee_coef, expect=None):
         intent, yes_price = ("ORDER_INTENT_SELL_LONG", min_price) if side == "yes" else ("ORDER_INTENT_SELL_SHORT", 1 - min_price)
         body, r, order = self._order(slug, intent, qty, yes_price)
-        return self._fill(body, r, order, min_price, False, fee_coef)
+        return self._fill(body, r, order, min_price, False, fee_coef, expect)
