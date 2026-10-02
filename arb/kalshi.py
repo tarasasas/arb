@@ -73,10 +73,17 @@ def settle_time(m):
     return exp or latest or m.get("close_time") or ""
 
 
+# Tennis match-winner series on every tour, read as one league (see config.LEAGUES "atp", "wta", ...).
+TENNIS_SERIES = {"KXATPMATCH", "KXWTAMATCH", "KXATPCHALLENGERMATCH", "KXWTACHALLENGERMATCH", "KXCHALLENGERMATCH",
+                 "KXITFMATCH", "KXITFWMATCH"}
+
+
 def parse_series(series_ticker):
     """KXNFL1HSPREAD -> (NFL, nfl, football, 1H, SPREAD) or None."""
     if not series_ticker.startswith("KX"):
         return None
+    if series_ticker in TENNIS_SERIES:
+        return "TENNIS", "atp", "tennis", "FG", "GAME"
     rest_all = series_ticker[2:]
     for code, pm_code, sport in _BY_KALSHI:
         if rest_all.startswith(code):

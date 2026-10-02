@@ -305,6 +305,10 @@ def warnings_for(k, p, now):
                  "the 60 seconds before the close and Polymarket the 60 prices ending at it, so the two can differ "
                  "by a second's move: only a close within a few dollars of a line could split them.")
         return w
+    if k.game_key.startswith("TENNIS:"):
+        w.append("Tennis: a retirement mid-match counts as a win for the opponent on both sites, but if the match "
+                 "never starts (walkover, injury before the first point) each site settles at its own fair price, so "
+                 "the two legs may not add up to $1.")
     if k.integer_line or p.integer_line:
         w.append("Whole-number line: a push is assumed to pay $0 on both sides (conservative).")
     ok, op = _ot_rule(k.rules), _ot_rule(p.rules)

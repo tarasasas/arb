@@ -103,7 +103,9 @@ def parse_market(m):
         return pm
 
     # Special-cased names that don't follow sport_scope_period_kind.
-    if stype == "football_team_points_full_game_total":
+    if stype == "tennis_match_winner":
+        sport, mid, kind = "tennis", "full_game", "winner"
+    elif stype == "football_team_points_full_game_total":
         sport, mid, kind = "football", "full_game", "total"
     elif stype in ("baseball_team_total_runs", "hockey_team_total_goals", "soccer_team_total_goals"):
         sport, mid, kind = stype.split("_")[0], "full_game", "total"

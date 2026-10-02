@@ -182,6 +182,11 @@ LEAGUES = {
     "lnb": ("LNBELITE", "basketball"),
     "fra2": ("LNBELITE2", "basketball"),
     "acb": ("ACB", "basketball"),
+    # Tennis: every Kalshi tour's match series is one pool (TENNIS); games pair by date and player names.
+    "atp": ("TENNIS", "tennis"),
+    "wta": ("TENNIS", "tennis"),
+    "itfme": ("TENNIS", "tennis"),
+    "itfwo": ("TENNIS", "tennis"),
 }
 
 # Fees (taker). Kalshi: 0.07 x series fee_multiplier x C x P x (1-P), rounded up to the cent.

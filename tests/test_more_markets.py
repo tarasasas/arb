@@ -62,3 +62,35 @@ class PairingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TennisTests(unittest.TestCase):
+    def test_every_kalshi_tour_is_one_tennis_league(self):
+        for s in ("KXATPMATCH", "KXWTAMATCH", "KXATPCHALLENGERMATCH", "KXITFWMATCH"):
+            self.assertEqual(kseries(s), ("TENNIS", "atp", "tennis", "FG", "GAME"))
+        self.assertIsNone(kseries("KXATPEXACTMATCH"))              # exact set score: a different market
+
+    def test_polymarket_match_winner_and_pairing(self):
+        m = polymarket.parse_market({
+            "slug": "aec-atp-gushei-laumid-2026-10-02", "sportsMarketType": "tennis_match_winner", "active": True,
+            "status": "MARKET_STATUS_OPEN", "question": "q",
+            "marketSides": [{"long": True, "team": {"abbreviation": "gushei", "name": "Gustavo Heide"}},
+                            {"long": False, "team": {"abbreviation": "laumid", "name": "Lautaro Midon"}}],
+            "bestBidQuote": {"value": "0.70"}, "bestAskQuote": {"value": "0.71"}})
+        self.assertEqual((m.sport, m.kind, m.team, m.op, m.line), ("tennis", "GAME", "gushei", ">", 0.0))
+        g = matching.KalshiGame("TENNIS", "26OCT02HEIMID", "26OCT02", "HEIMID")
+        for code, name in (("HEI", "Gustavo Heide"), ("MID", "Lautaro Midon")):
+            g.markets.append(kalshi.KalshiMarket(f"KXATPMATCH-26OCT02HEIMID-{code}", "KXATPMATCH-26OCT02HEIMID", "KXATPMATCH",
+                                                 "TENNIS", "atp", "tennis", "26OCT02HEIMID", "26OCT02", "HEIMID", "GAME",
+                                                 "FG", code, ">", 0.0, "t", name, "", "", 0.07))
+            g.names[code] = name
+        matches, _ = matching.match_games({("TENNIS", "26OCT02HEIMID"): g}, {("atp", "2026-10-02", "gushei", "laumid"): [m]},
+                                          {"atp": ("TENNIS", "tennis")})
+        self.assertEqual(matches[0][3], {"gushei": "HEI", "laumid": "MID"})
+        contracts, _ = matching.build_contracts(matches)
+        self.assertTrue(all(c.no_draw for c in contracts))            # a tennis match can't be drawn
+        k_hei = next(c for c in contracts if c.market_id.endswith("-HEI"))
+        p = next(c for c in contracts if c.exchange == "polymarket")
+        self.assertEqual(guaranteed_payout([(k_hei, "no"), (p, "yes")]), 1.0)   # Kalshi NO Heide + PM YES Heide
+        w = engine.warnings_for(k_hei, p, engine.now_utc())
+        self.assertTrue(any("never starts" in x for x in w))

@@ -163,7 +163,7 @@ def _no_draw(league, sport, var):
     """Full games that can't finish level: OT/shootouts/extra innings decide them.
     (NFL can tie, NPB/KBO baseball can tie, soccer can draw.)"""
     return var[0] == "margin" and var[1] == "FG" and (
-        sport in ("basketball", "hockey") or league in ("MLB", "NCAAF"))
+        sport in ("basketball", "hockey", "tennis") or league in ("MLB", "NCAAF"))
 
 
 def build_contracts(matches):
