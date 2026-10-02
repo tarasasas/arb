@@ -48,6 +48,10 @@ def main():
         return 1
     before = client.http.get("/account/limits")
     print("Before:\n" + describe(before))
+    if before.get("usage_tier", "basic") != "basic" or before.get("grants"):
+        print(f"\nAlready upgraded: you're on {before.get('usage_tier')} with a read budget of "
+              f"{read_budget(before):g} tokens/s. Nothing to do; the dashboard already uses it.")
+        return 0
 
     answer, refused = None, None
     for host in HOSTS:
@@ -57,8 +61,11 @@ def main():
             print(f"\nKalshi accepted the upgrade request ({host.split('/')[2]}): {answer or 'OK'}")
             break
         except ApiError as e:
-            print(f"\n{host.split('/')[2]} answered HTTP {e.status}: {e.detail[:300]}")
-            if e.status == 403:
+            blocked = e.detail.lstrip().startswith("<")     # a web page, not Kalshi's API answering
+            print(f"\n{host.split('/')[2]} answered HTTP {e.status}" + (
+                " (the host's front door blocked the request; trying the other host)" if blocked
+                else f": {e.detail[:300]}"))
+            if e.status == 403 and not blocked:
                 refused = e
                 break                       # a real "no": the other host would say the same
         except Exception as e:              # host unreachable from here: try the other one

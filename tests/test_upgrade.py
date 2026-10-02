@@ -67,6 +67,35 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(len(acct.posts), 1)               # a real "no" isn't retried elsewhere
         self.assertIn("Make trade", out)
 
+    def test_already_upgraded_does_nothing(self):
+        acct = Account()
+        acct.upgraded = True
+        code, out = run(acct)
+        self.assertEqual((code, acct.posts), (0, []))
+        self.assertIn("Already upgraded", out)
+
+    def test_blocked_host_page_is_not_a_refusal(self):
+        acct = Account()
+        reads = mock.Mock(signer=object())
+        reads.get.side_effect = lambda path, params=None: acct.limits()
+
+        class Http:
+            def __init__(self, host, rps, signer=None):
+                self.host = host
+
+            def post(self, path, body):
+                acct.posts.append(self.host.split("/")[2])
+                if "external-api" in self.host:      # the front door's own HTML page, not Kalshi's API
+                    raise ApiError(403, "<html><head><title>403 Forbidden</title></head></html>")
+                acct.upgraded = True
+                return {}
+        out = io.StringIO()
+        with mock.patch.object(upgrade, "KalshiClient", return_value=mock.Mock(http=reads)), \
+                mock.patch.object(upgrade, "RateLimitedClient", Http), redirect_stdout(out):
+            code = upgrade.main()
+        self.assertEqual((code, acct.posts), (0, ["external-api.kalshi.com", "api.elections.kalshi.com"]))
+        self.assertIn("Upgraded.", out.getvalue())
+
     def test_needs_a_key(self):
         reads = mock.Mock(signer=None)
         out = io.StringIO()
