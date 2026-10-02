@@ -56,6 +56,42 @@ class SuggestTests(unittest.TestCase):
         self.assertEqual(groups, [])
 
 
+class TimeWindowTests(unittest.TestCase):
+    """"How low will BTC get in October?" is not "How low will Bitcoin get this year?": a dip in November
+    loses both legs. The yearly Kalshi market is the twin. (Real titles; both sites' end dates are too loose
+    to tell them apart: Polymarket Jan 15 for a Dec 31 question, Kalshi up to a year late.)"""
+
+    def test_windows_from_wording(self):
+        self.assertEqual(nonsports.periods("How low will BTC get in October?", "October"), {"month"})
+        self.assertEqual(nonsports.periods("How low will Bitcoin get in 2026?", "In 2026"), {"year"})
+        self.assertEqual(nonsports.periods("How low will Bitcoin get this year?"), {"year"})
+        self.assertEqual(nonsports.periods("How high will Bitcoin get this week?"), {"week"})
+        self.assertEqual(nonsports.periods("2026 Nobel Peace Prize Winner"), set())     # a label, not a window
+        self.assertFalse(nonsports.periods_compatible("How low will Bitcoin get this year?",
+                                                      ["How low will BTC get in October?", "October"]))
+        self.assertTrue(nonsports.periods_compatible("Will Bitcoin be above ___ in 2026?", ["Bitcoin range", ""]))
+
+    def test_only_the_same_window_is_suggested(self):
+        pm = [pm_market(f"cpc-btc-hitprice-low-yr-12-31-2026-{n}k", "How low will Bitcoin get this year?",
+                        f"Below ${n},000.00", 0.3, 0.32, end="2027-01-15T04:00:00Z", category="crypto") for n in (65, 70)]
+
+        def event(ticker, title, sub, close):
+            ms = [k_market(f"{ticker}-{n}", ticker, f"Below ${n},000.00", 0.3, 0.32, close=close) for n in (65, 70)]
+            return {"event_ticker": ticker, "title": title, "sub_title": sub, "category": "Crypto", "markets": ms}
+        october = event("KXBTCMINMON-BTC-26OCT31", "How low will BTC get in October?", "October", "2026-11-01T03:59:59Z")
+        year = event("KXBTCMINY-27JAN01", "How low will Bitcoin get in 2026?", "In 2026", "2027-01-01T05:00:00Z")
+        # Unrelated markets on both sites, so word weights are like a real catalog's
+        topics = ["Oscar Best Picture", "Fed rate decision", "Nobel Peace Prize", "Super Bowl champion", "Mayor of Chicago",
+                  "Ethereum price", "Grammy Album of the Year", "UK Prime Minister", "Eurovision winner", "World Cup winner"]
+        pm += [pm_market(f"f{i}", f"{t} winner?", "Someone", 0.5, 0.52) for i, t in enumerate(topics)]
+        filler = [{"event_ticker": f"KXF{i}-26", "title": f"{t} winner?", "sub_title": "", "category": "World",
+                   "markets": [k_market(f"KXF{i}-26-A", f"KXF{i}-26", "Someone", 0.5, 0.52)]} for i, t in enumerate(topics)]
+        keys = lambda evs: {g["kalshi"]["key"] for g in nonsports.suggest(pm, evs + filler, set(), set())}
+        self.assertIn("KXBTCMINY-27JAN01", keys([october, year]))
+        self.assertNotIn("KXBTCMINMON-BTC-26OCT31", keys([october, year]))
+        self.assertNotIn("KXBTCMINMON-BTC-26OCT31", keys([october]))
+
+
 class SafetyTests(unittest.TestCase):
     def test_years_from_titles_and_kalshi_tickers(self):
         self.assertEqual(nonsports.years("2026 Nobel Peace Prize Winner"), {2026})

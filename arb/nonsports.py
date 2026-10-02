@@ -150,6 +150,31 @@ def clock_times(text):
     return out
 
 
+_MONTHS_ALT = "january|february|march|april|may|june|july|august|september|october|november|december"
+# The time window a question covers, from its wording. "How low will BTC get in October?" is not "How low
+# will Bitcoin get this year?": a dip in November loses both legs.
+PERIOD_RES = (
+    ("day", re.compile(r"\btoday\b|\bdaily\b", re.I)),
+    ("week", re.compile(r"\bthis week\b|\bweekly\b|\bweek of\b", re.I)),
+    ("month", re.compile(rf"\bthis month\b|\bmonthly\b|\bin (?:{_MONTHS_ALT})\b|^\s*(?:{_MONTHS_ALT})\s*$", re.I)),
+    ("quarter", re.compile(r"\bthis quarter\b|\bquarterly\b|\bq[1-4]\b", re.I)),
+    ("year", re.compile(r"\bthis year\b|\bin 20[2-4]\d\s*\??\s*$|\bby (?:the )?end of (?:the |this )?year\b|"
+                        r"\byearly\b|\bannual\b|^\s*in 20[2-4]\d\s*$", re.I)),
+)
+
+
+def periods(*texts):
+    """{'month', 'year', ...}: the time windows the texts name ("in October", "this year", "In 2026")."""
+    return {name for t in texts for name, rx in PERIOD_RES if rx.search(t or "")}
+
+
+def periods_compatible(a, b):
+    """False when both name a time window and the windows differ (month vs year, week vs year)."""
+    pa, pb = (periods(*a) if isinstance(a, (list, tuple)) else periods(a)), \
+             (periods(*b) if isinstance(b, (list, tuple)) else periods(b))
+    return not (pa and pb and not pa & pb)
+
+
 def times_compatible(a, b):
     ta, tb = clock_times(a), clock_times(b)
     return not (ta and tb and not ta & tb)
@@ -436,6 +461,8 @@ def suggest(pm_markets, kalshi_events, decided_pairs, rejected_events, max_group
                 continue                                        # 2026 Nobel is never the 2027 Nobel
             if not times_compatible(q["question"], f"{kq[i]['title']} {kq[i]['sub_title']}"):
                 continue                                        # 5pm crypto close is never the noon one
+            if not periods_compatible(q["question"], [kq[i]["title"], kq[i]["sub_title"]]):
+                continue                                        # "in October" is never "this year"
             s = cosine(v, k_vecs[i])
             pm_months, k_months = p_set & MONTH_NAMES, k_set & MONTH_NAMES
             if pm_months and k_months and not pm_months & k_months:
