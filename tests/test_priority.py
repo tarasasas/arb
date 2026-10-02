@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 
-from arb.http import LanePool, RateLimitedClient, is_priority, priority
+from arb.http import LanePool, RateLimitedClient, is_priority, is_trade, priority, trading
 
 
 class PriorityLaneTests(unittest.TestCase):
@@ -28,6 +28,37 @@ class PriorityLaneTests(unittest.TestCase):
             t.join()
         # 5 priority slots, plus at most the slots background threads had already reserved (4).
         self.assertLess(took, 0.02 * (5 + 4) + 0.05)
+
+    def test_a_trade_goes_ahead_of_a_busy_priority_lane(self):
+        c = RateLimitedClient("https://example.com", rps=20)      # one slot every 50 ms
+        stop = time.monotonic() + 1.5
+
+        def fast_lane():                                          # keeps the priority queue full
+            while time.monotonic() < stop:
+                with priority():
+                    c._wait_turn()
+                time.sleep(0.05)                                  # the request itself
+
+        threads = [threading.Thread(target=fast_lane) for _ in range(8)]
+        for t in threads:
+            t.start()
+        time.sleep(0.3)
+        waits = {}
+        for name, lane in (("priority", priority), ("trade", trading)):
+            t0 = time.monotonic()
+            with lane():
+                for _ in range(3):                                # a trade's checks: a few reads in a row
+                    c._wait_turn()
+            waits[name] = time.monotonic() - t0
+        for t in threads:
+            t.join()
+        self.assertLess(waits["trade"], 3 * 0.05 + 0.05)          # about one slot each, never queued behind
+        self.assertLess(waits["trade"], waits["priority"])
+
+    def test_pool_workers_keep_the_trade_lane(self):
+        with trading(), LanePool(2) as pool:
+            self.assertEqual(list(pool.map(lambda _: (is_trade(), is_priority()), range(2))), [(True, True)] * 2)
+        self.assertFalse(is_trade())
 
     def test_pool_workers_keep_the_lane(self):
         with priority(), LanePool(2) as pool:

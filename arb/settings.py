@@ -32,6 +32,11 @@ GROUPS = [
          "The pairs Auto-trade could take (paying out within the hours above) get their own price check about every "
          "half second and go first on the live streams, instead of waiting for the full sweep. auto: while Auto-trade "
          "or Auto maker is on. always: also for Fast trade by hand. off: everything waits for the normal scan.", "auto"),
+        ("AUTO_TRADE_FOCUS", "bool", "Auto-trade mode: only refresh what Auto-trade can take",
+         "While Auto-trade is on, the full scan, near-arb re-checks, non-sports suggestions and the My positions "
+         "check pause, and the fast lane gets all the request slots. Market lists and your cash still refresh. Other "
+         "rows on the dashboard stop updating until Auto-trade is off (Make trade still re-checks live prices).",
+         True),
     ]),
     ("Auto-trade limits", [
         ("AUTO_TRADE_MAX_TRADE", "money", "Per trade", "Both legs together.", 25),

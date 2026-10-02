@@ -23,7 +23,7 @@ import uuid
 from types import SimpleNamespace
 
 from . import config, engine
-from .http import ApiError, LanePool, priority
+from .http import ApiError, LanePool, trading
 from .model import YES, guaranteed_payout, total_fee
 from .venues import Fill, floor_to
 
@@ -185,7 +185,7 @@ class Trader:
         each book shows at the prices paid."""
         tl = dict(timeline or {})
         tl.setdefault("decided", time.time())      # Make trade: the click is the decision
-        with priority():                   # trades go ahead of background market loads
+        with trading():                    # ahead of every other request, the fast lane's included
             plan = self._prepare(legs, max_invest, hedge_depth, order if order in ORDER_MODES else config.TRADE_ORDER,
                                  first=first, dry=dry, book_share=book_share)
         tl["checks_done"] = time.time()
@@ -427,7 +427,7 @@ class Trader:
             plan, info = entry
             if time.time() - plan["created"] > config.TRADE_PLAN_TTL_SECS:
                 raise TradeError("That plan expired (prices move fast). Press Make trade again for fresh numbers.")
-            with priority():
+            with trading():
                 res = self._run(plan, info)
         tl = plan.setdefault("timeline", {})
         tl["done"] = time.time()

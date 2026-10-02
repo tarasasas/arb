@@ -1724,7 +1724,9 @@ function render(force) {
   const s = state, st = s.stats || {};
   const dot = document.getElementById("dot");
   dot.className = "dot " + (s.status === "running" ? "run" : s.status.startsWith("error") ? "err" : "start");
-  document.getElementById("status").textContent = s.status === "running" ? "Scanning" : s.status === "starting" ? "Loading markets (first load takes ~2 min)…" : s.status;
+  document.getElementById("status").textContent = s.status === "running"
+    ? (s.mode === "auto" ? "Auto-trade mode: only its markets refresh" : "Scanning")
+    : s.status === "starting" ? "Loading markets (first load takes ~2 min)…" : s.status;
   document.getElementById("updated").textContent = s.last_prices ? "Prices updated " + ago(s.last_prices) : "";
   document.getElementById("access").textContent = st.kalshi_access ? "Kalshi API: " + st.kalshi_access : "";
   document.getElementById("trading").innerHTML = st.trading && st.trading !== "on"     // only worth showing when it's not on

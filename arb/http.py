@@ -53,13 +53,30 @@ def priority():
         _lane.priority = old
 
 
+# A trade that has been decided goes ahead of everything, the priority lane included: the fast lane alone
+# can keep that lane's queue full (up to 15 book downloads every half second), and a trade's checks used to
+# wait behind it for seconds while the prices it was about to trade on moved.
+def is_trade():
+    return getattr(_lane, "trade", False)
+
+
+@contextmanager
+def trading():
+    old = (is_trade(), is_priority())
+    _lane.trade = _lane.priority = True
+    try:
+        yield
+    finally:
+        _lane.trade, _lane.priority = old
+
+
 class LanePool(ThreadPoolExecutor):
     """A thread pool whose workers keep the lane of the thread that handed them the work."""
     def submit(self, fn, *args, **kwargs):
-        lane = is_priority()
+        lane, trade = is_priority(), is_trade()
 
         def run(*a, **kw):
-            _lane.priority = lane
+            _lane.priority, _lane.trade = lane, trade
             return fn(*a, **kw)
         return super().submit(run, *args, **kwargs)
 
@@ -79,7 +96,7 @@ class RateLimitedClient:
         self.signer = signer
         self._lock = threading.Lock()
         self._next_slot = 0.0
-        self._priority_waiting = self._bg_waiting = self._priority_streak = 0
+        self._priority_waiting = self._bg_waiting = self._priority_streak = self._trade_waiting = 0
         self.request_count = 0
         # Kept-alive connections: a new HTTPS connection costs a TCP + TLS handshake on every call.
         u = urllib.parse.urlparse(self.base_url)
@@ -184,15 +201,18 @@ class RateLimitedClient:
         """Take the next request slot. Slots are claimed only when due (not reserved ahead), so a
         priority request waits about one slot however many background threads are queued; background
         work still gets one slot in every PRIORITY_BURST + 1 while it's waiting. Priority requests
-        may also use the burst allowance; an order never waits (it still counts toward the pace)."""
+        may also use the burst allowance; an order never waits (it still counts toward the pace). A trade's
+        own reads (trading()) take the next slot their burst allowance gives, before any other waiter."""
         if order:
             with self._lock:
                 self._next_slot = max(time.monotonic(), self._next_slot) + self.min_interval
             return
-        pri = is_priority()
+        trade, pri = is_trade(), is_priority()
         full_tau = (self.burst - 1) * self.min_interval
         with self._lock:
-            if pri:
+            if trade:
+                self._trade_waiting += 1
+            elif pri:
                 self._priority_waiting += 1
             else:
                 self._bg_waiting += 1
@@ -200,24 +220,34 @@ class RateLimitedClient:
             while True:
                 with self._lock:
                     now = time.monotonic()
-                    bg_turn = self._bg_waiting and self._priority_streak >= self.PRIORITY_BURST
-                    # Priority may burst; background shares that allowance only on its turns while
-                    # priority is waiting (so the alternation holds), and otherwise keeps the plain pace.
-                    tau = full_tau if pri or (bg_turn and self._priority_waiting) else 0.0
-                    if now >= self._next_slot - tau:
-                        if pri and not bg_turn:
-                            self._priority_streak += 1 if self._bg_waiting else 0
+                    if trade:
+                        if now >= self._next_slot - full_tau:
                             self._next_slot = max(now, self._next_slot) + self.min_interval
                             return
-                        if not pri and (bg_turn or not self._priority_waiting):
-                            self._priority_streak = 0
-                            self._next_slot = max(now, self._next_slot) + self.min_interval
-                            return
-                    wait = self._next_slot - tau - now
+                        wait = self._next_slot - full_tau - now
+                    elif self._trade_waiting:
+                        wait = 0.005                      # a trade's read is waiting: it goes first
+                    else:
+                        bg_turn = self._bg_waiting and self._priority_streak >= self.PRIORITY_BURST
+                        # Priority may burst; background shares that allowance only on its turns while
+                        # priority is waiting (so the alternation holds), and otherwise keeps the plain pace.
+                        tau = full_tau if pri or (bg_turn and self._priority_waiting) else 0.0
+                        if now >= self._next_slot - tau:
+                            if pri and not bg_turn:
+                                self._priority_streak += 1 if self._bg_waiting else 0
+                                self._next_slot = max(now, self._next_slot) + self.min_interval
+                                return
+                            if not pri and (bg_turn or not self._priority_waiting):
+                                self._priority_streak = 0
+                                self._next_slot = max(now, self._next_slot) + self.min_interval
+                                return
+                        wait = self._next_slot - tau - now
                 time.sleep(min(max(wait, 0.002), self.min_interval))
         finally:
             with self._lock:
-                if pri:
+                if trade:
+                    self._trade_waiting -= 1
+                elif pri:
                     self._priority_waiting -= 1
                 else:
                     self._bg_waiting -= 1

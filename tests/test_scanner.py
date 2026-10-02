@@ -442,7 +442,7 @@ class EvenOutShardsTests(unittest.TestCase):
         s.trader = SimpleNamespace(venues={"kalshi": kv}, lock=threading.Lock())
         s.autotrader = SimpleNamespace(busy=False)
         s.state = {"balances": {"kalshi_shards": {str(k): v for k, v in shards.items()}, "time": "x"}}
-        s._shard_set_at = set_at
+        s._even_since = set_at
         return s, moved
 
     def test_moves_the_surplus_to_short_shards(self):
@@ -476,6 +476,15 @@ class EvenOutShardsTests(unittest.TestCase):
         s.trader.lock.release()
         self.assertEqual(moved, [])
 
+    def test_steps_in_even_if_kalshi_refused_the_split(self):
+        from types import SimpleNamespace
+        s, moved = self.make({0: 60.0, 2: 0.0, 3: 0.0}, set_at=None)
+        s.trader.venues["kalshi"].set_rebalancing = lambda split: (_ for _ in ()).throw(OSError("rejected"))
+        s.keep_shard_split(now=1000)                              # fails, logs, will retry
+        self.assertIn("will retry", "\n".join(s.logs))
+        s.even_out_shards(now=1000 + scanner.config.SHARD_EVEN_GRACE_SECS)
+        self.assertEqual(len(moved), 2)                           # evened out by direct transfers anyway
+
     def test_only_in_even_mode_and_on_fresh_balances(self):
         s, moved = self.make({0: 60.0, 2: 0.0, 3: 0.0})
         with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "per_trade"):
@@ -483,6 +492,63 @@ class EvenOutShardsTests(unittest.TestCase):
         s.state["balances"]["stale"] = True
         s.even_out_shards(now=1060)
         self.assertEqual(moved, [])
+
+
+class AutoTradeModeTests(unittest.TestCase):
+    """Regular mode scans everything; Auto-trade mode refreshes only what Auto-trade can take."""
+
+    def make(self, on):
+        import threading
+        from types import SimpleNamespace
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock, s.dirty_lock = threading.Lock(), threading.Lock()
+        s.logs, s.log_to_console = __import__("collections").deque(maxlen=10), False
+        s.state, s.hot_groups = {}, {"g": {}}
+        s.autotrader = SimpleNamespace(on=on)
+        s.passes = []
+        s.refresh_prices = lambda hot=False, stream_groups=None: s.passes.append(
+            "stream" if stream_groups is not None else "hot" if hot else "full")
+        s.save_warm = lambda: None
+        return s
+
+    def run_once(self, loop, s, *args):
+        import threading
+        stop = threading.Event()
+        with mock.patch.object(scanner.time, "sleep", lambda _s: stop.set()):
+            loop(stop, *args)
+
+    def test_auto_trade_mode_pauses_the_sweeps(self):
+        s = self.make(on=True)
+        self.run_once(s._loop, s, False)
+        self.run_once(s._loop, s, True)
+        self.assertEqual(s.passes, [])                            # no full sweep, no near-arb re-check
+        self.assertEqual(s.state["mode"], "auto")
+        self.assertIn("Auto-trade mode", "\n".join(s.logs))
+        s.autotrader.on = False
+        self.run_once(s._loop, s, False)
+        self.run_once(s._loop, s, True)
+        self.assertEqual(s.passes, ["full", "hot"])
+        self.assertEqual(s.state["mode"], "regular")
+        self.assertIn("Regular mode", "\n".join(s.logs))
+
+    def test_live_feed_rechecks_only_auto_trade_markets(self):
+        import threading
+        s = self.make(on=True)
+        s.market_groups = {("kalshi", "K1"): {"lane"}, ("kalshi", "K2"): {"other"}}
+        s.lane_groups = lambda: {"lane": {}}
+        seen = []
+        s.refresh_prices = lambda stream_groups=None: seen.append(stream_groups)
+        s._tick, s.dirty = threading.Event(), {("kalshi", "K1"), ("kalshi", "K2")}
+        stop = threading.Event()
+        s._tick.wait = lambda _t: stop.set() or True              # one pass
+        s._stream_loop(stop)
+        self.assertEqual(seen, [{"lane"}])
+
+    def test_setting_off_keeps_regular_mode(self):
+        s = self.make(on=True)
+        with mock.patch.object(scanner.config, "AUTO_TRADE_FOCUS", False):
+            self.run_once(s._loop, s, False)
+        self.assertEqual(s.passes, ["full"])
 
 class PairingIgnoresFocusTests(FocusTests):
     def test_positions_outside_focus_still_pair(self):

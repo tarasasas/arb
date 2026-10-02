@@ -129,6 +129,11 @@ class Scanner:
         mode, now = config.KALSHI_SHARD_MODE, now or time.time()
         if not kv or not hasattr(kv, "set_rebalancing"):
             return
+        # even_out_shards steps in a minute after even mode starts, whether or not Kalshi took the split
+        if mode != "even":
+            self._even_since = None
+        elif getattr(self, "_even_since", None) is None:
+            self._even_since = now
         if mode == getattr(self, "_shard_mode_set", None) and (mode == "manual" or now - getattr(
                 self, "_shard_checked", 0) < config.SHARD_SPLIT_CHECK_SECS):
             return
@@ -145,8 +150,6 @@ class Scanner:
             return
         first = mode != getattr(self, "_shard_mode_set", None)
         self._shard_mode_set = mode
-        if split and (was is not None or first):
-            self._shard_set_at = now               # Kalshi gets SHARD_EVEN_GRACE_SECS to even them out itself
         text = ", ".join(f"shard {i} {p}%" for i, p in split.items())
         if was is not None:
             old = ", ".join(f"shard {a.get('exchange_index')} {a.get('percent')}%" for a in was) or "off"
@@ -160,7 +163,8 @@ class Scanner:
 
     def even_out_shards(self, now=None):
         """even mode, as a backstop to Kalshi's rebalancing: if the shards are still well off an equal
-        share SHARD_EVEN_GRACE_SECS after the split was set, move the surplus to the short ones directly.
+        share SHARD_EVEN_GRACE_SECS after even mode started (whether or not Kalshi accepted the split),
+        move the surplus to the short ones directly.
         Same direction as Kalshi's own moves, so the two never fight. Only between trades, at most once a
         minute, and only moves above-share cash. Returns the moves made."""
         from . import shards
@@ -168,8 +172,8 @@ class Scanner:
         now = now or time.time()
         if config.KALSHI_SHARD_MODE != "even" or not kv or not hasattr(kv, "transfer"):
             return []
-        set_at = getattr(self, "_shard_set_at", None)
-        if set_at is None or now - set_at < config.SHARD_EVEN_GRACE_SECS or now - getattr(self, "_evened_at", 0) < 60:
+        since = getattr(self, "_even_since", None)
+        if since is None or now - since < config.SHARD_EVEN_GRACE_SECS or now - getattr(self, "_evened_at", 0) < 60:
             return []
         if getattr(getattr(self.trader, "lock", None), "locked", lambda: False)() or getattr(self.autotrader, "busy", False):
             return []                              # a trade is sizing against this cash right now
@@ -518,7 +522,7 @@ class Scanner:
 
     def _positions_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
-            if self.contracts:                   # pairing needs the market catalog loaded
+            if self.contracts and not self.auto_mode():   # pairing needs the market catalog loaded
                 try:
                     self.sync_positions()
                 except Exception as e:
@@ -527,6 +531,9 @@ class Scanner:
 
     def _crypto_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
+            if self.auto_mode() and not config.AUTO_TRADE_CRYPTO_WINDOWS:
+                time.sleep(1)                    # Auto-trade leaves crypto windows alone
+                continue
             try:
                 self.refresh_crypto()
             except Exception as e:
@@ -535,7 +542,7 @@ class Scanner:
 
     def _suggest_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
-            if time.time() - self.suggest_time > config.SUGGEST_REFRESH_SECS:
+            if time.time() - self.suggest_time > config.SUGGEST_REFRESH_SECS and not self.auto_mode():
                 try:
                     self.refresh_suggestions()
                 except Exception as e:
@@ -969,6 +976,8 @@ class Scanner:
                 with self.lock:
                     idx = self.market_groups
                 gs = set().union(*(idx.get(d, set()) for d in dirty))
+                if self.auto_mode():
+                    gs &= set(self.lane_groups())        # only what Auto-trade can take
                 try:
                     if gs:
                         self.refresh_prices(stream_groups=gs)
@@ -991,12 +1000,27 @@ class Scanner:
                     continue
             time.sleep(2)
 
+    def auto_mode(self):
+        """Auto-trade mode (AUTO_TRADE_FOCUS, while Auto-trade is on): only the markets Auto-trade can take
+        refresh (the fast lane), so it and Auto-trade's own checks get the request budget. Paused meanwhile:
+        full sweeps, near-arb re-checks, live-feed re-checks of other markets, non-sports suggestions, the My
+        arbs position check, and crypto pairing unless Auto-trade takes crypto windows. Market lists, cash
+        and shards still refresh. Work already under way when it starts finishes."""
+        on = bool(config.AUTO_TRADE_FOCUS and getattr(getattr(self, "autotrader", None), "on", False))
+        if on != getattr(self, "_auto_mode_was", False):
+            self._auto_mode_was = on
+            self.log("Auto-trade mode: only the markets Auto-trade can take are refreshed; the full scan and other "
+                     "checks wait until it's off" if on else "Regular mode: every market is scanned again")
+            with self.lock:
+                self.state["mode"] = "auto" if on else "regular"
+        return on
+
     def _loop(self, stop_event, hot):
         """Full sweeps and hot re-checks run in parallel threads, so the near-arb list keeps
         updating every couple of seconds while a full sweep is in progress."""
         while not (stop_event and stop_event.is_set()):
             try:
-                if hot and not self.hot_groups:
+                if (hot and not self.hot_groups) or self.auto_mode():
                     time.sleep(1)
                     continue
                 self.refresh_prices(hot=hot)

@@ -80,8 +80,8 @@ def _shard_mode(env=os.environ):
 
 KALSHI_SHARD_MODE = _shard_mode()
 SHARD_SPLIT_CHECK_SECS = 600       # even: re-check this often that Kalshi still keeps the even split
-SHARD_EVEN_GRACE_SECS = 60         # even: if Kalshi hasn't evened the shards out this long after the split was
-                                   # set, the app moves the cash itself (between trades, at most once a minute)
+SHARD_EVEN_GRACE_SECS = 60         # even: if Kalshi hasn't evened the shards out this long after even mode
+                                   # started, the app moves the cash itself (between trades, at most once a minute)
 SHARD_TRANSFER_WAIT_SECS = 8.0     # per_trade: how long to wait for a shard transfer to show up before trading
 
 
@@ -162,6 +162,9 @@ FAST_LANE = os.environ.get("FAST_LANE", "").strip().lower() or "auto"
 if FAST_LANE not in ("auto", "always", "off"):
     FAST_LANE = "auto"
 FAST_LANE_PAUSE_SECS = _env_num("FAST_LANE_PAUSE_SECS", 0.5)
+# Auto-trade mode: while Auto-trade is on, only the markets it can take are refreshed (the fast lane), so it
+# and its own pre-trade checks get the whole request budget. Off: everything keeps refreshing as usual.
+AUTO_TRADE_FOCUS = os.environ.get("AUTO_TRADE_FOCUS", "1").strip().lower() not in ("0", "false", "no", "off")
 # Paper trading (AUTO_TRADE_DRY_RUN): how long each site's order takes to land, in seconds, when no
 # real trades have been timed yet.
 PAPER_LATENCY = {"kalshi": 0.15, "polymarket": 0.7}
