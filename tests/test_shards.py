@@ -109,6 +109,6 @@ class ShardModeTests(unittest.TestCase):
         from arb import config
         self.assertEqual(config._shard_mode({}), "even")                                      # default
         self.assertEqual(config._shard_mode({"KALSHI_SHARD_MODE": "per_trade"}), "per_trade")
-        self.assertEqual(config._shard_mode({"KALSHI_AUTO_SHARD_FUNDING": "0"}), "manual")    # older .env
-        self.assertEqual(config._shard_mode({"KALSHI_AUTO_SHARD_FUNDING": "1"}), "even")
+        self.assertEqual(config._shard_mode({"KALSHI_AUTO_SHARD_FUNDING": "0"}), "even")      # old flag: ignored
+        self.assertEqual(config._shard_mode({"KALSHI_SHARD_MODE": "manual"}), "manual")
         self.assertEqual(config._shard_mode({"KALSHI_SHARD_MODE": "nonsense"}), "even")

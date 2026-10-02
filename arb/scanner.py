@@ -127,10 +127,14 @@ class Scanner:
         from . import shards
         kv = (self.trader.venues or {}).get("kalshi") if self.trader else None
         mode, now = config.KALSHI_SHARD_MODE, now or time.time()
-        if mode == "manual" or not kv or not hasattr(kv, "set_rebalancing"):
+        if not kv or not hasattr(kv, "set_rebalancing"):
             return
-        if mode == getattr(self, "_shard_mode_set", None) and now - getattr(self, "_shard_checked", 0) < \
-                config.SHARD_SPLIT_CHECK_SECS:
+        if mode == getattr(self, "_shard_mode_set", None) and (mode == "manual" or now - getattr(
+                self, "_shard_checked", 0) < config.SHARD_SPLIT_CHECK_SECS):
+            return
+        if mode == "manual":
+            self._shard_mode_set = mode
+            self.log("Kalshi shards: manual (Settings > Kalshi cash across exchange shards): the app leaves them as they are")
             return
         self._shard_checked = now
         split = shards.even_split() if mode == "even" else {}
@@ -139,16 +143,68 @@ class Scanner:
         except Exception as e:
             self.log(f"Kalshi shards: couldn't set Kalshi's automatic rebalancing ({e!r}); will retry")
             return
+        first = mode != getattr(self, "_shard_mode_set", None)
         self._shard_mode_set = mode
-        if was is None:
-            return
-        old = ", ".join(f"shard {a.get('exchange_index')} {a.get('percent')}%" for a in was) or "off"
-        if split:
-            self.log(f"Kalshi shards: Kalshi now keeps an even split ({', '.join(f'shard {i} {p}%' for i, p in split.items())}; "
-                     f"was {old}), moving cash between your shards about every 10 seconds")
-        else:
-            self.log(f"Kalshi shards: turned off Kalshi's automatic rebalancing (was {old}); the app now moves cash "
+        if split and (was is not None or first):
+            self._shard_set_at = now               # Kalshi gets SHARD_EVEN_GRACE_SECS to even them out itself
+        text = ", ".join(f"shard {i} {p}%" for i, p in split.items())
+        if was is not None:
+            old = ", ".join(f"shard {a.get('exchange_index')} {a.get('percent')}%" for a in was) or "off"
+            self.log(f"Kalshi shards: Kalshi now keeps an even split ({text}; was {old}), moving cash between your "
+                     f"shards about every 10 seconds" if split else
+                     f"Kalshi shards: turned off Kalshi's automatic rebalancing (was {old}); the app now moves cash "
                      f"onto a market's shard only when a trade needs it")
+        elif first:
+            self.log(f"Kalshi shards: even split ({text}) is set at Kalshi" if split else
+                     "Kalshi shards: per trade: Kalshi's automatic rebalancing is off; the app moves cash as trades need it")
+
+    def even_out_shards(self, now=None):
+        """even mode, as a backstop to Kalshi's rebalancing: if the shards are still well off an equal
+        share SHARD_EVEN_GRACE_SECS after the split was set, move the surplus to the short ones directly.
+        Same direction as Kalshi's own moves, so the two never fight. Only between trades, at most once a
+        minute, and only moves above-share cash. Returns the moves made."""
+        from . import shards
+        kv = (self.trader.venues or {}).get("kalshi") if self.trader else None
+        now = now or time.time()
+        if config.KALSHI_SHARD_MODE != "even" or not kv or not hasattr(kv, "transfer"):
+            return []
+        set_at = getattr(self, "_shard_set_at", None)
+        if set_at is None or now - set_at < config.SHARD_EVEN_GRACE_SECS or now - getattr(self, "_evened_at", 0) < 60:
+            return []
+        if getattr(getattr(self.trader, "lock", None), "locked", lambda: False)() or getattr(self.autotrader, "busy", False):
+            return []                              # a trade is sizing against this cash right now
+        with self.lock:
+            b = dict(self.state.get("balances") or {})
+        cash = {int(k): float(v) for k, v in (b.get("kalshi_shards") or {}).items()}
+        if not cash or b.get("stale") or b.get("error"):
+            return []
+        split = shards.even_split()
+        total = sum(cash.values())
+        target = {i: total * split.get(i, 0) / 100 for i in set(cash) | set(split)}
+        short = sorted(((target[i] - cash.get(i, 0.0), i) for i in split
+                        if cash.get(i, 0.0) < 0.9 * target[i] and target[i] - cash.get(i, 0.0) >= 1), reverse=True)
+        moves = []
+        for need, dst in short:
+            for src in sorted((i for i in cash if cash[i] > target[i]), key=lambda i: target[i] - cash[i]):
+                amount = math.floor(min(need, cash[src] - target[src]) * 100) / 100
+                if amount < 1:
+                    continue
+                kv.transfer(src, dst, amount)
+                cash[src] -= amount
+                cash[dst] = cash.get(dst, 0.0) + amount
+                need -= amount
+                moves.append((src, dst, amount))
+                if need < 1:
+                    break
+        self._evened_at = now
+        for src, dst, amount in moves:
+            self.log(f"Kalshi shards: moved ${amount:.2f} from shard {src} to shard {dst} toward an even split "
+                     f"(Kalshi hadn't evened them out)")
+        if moves:
+            with self.lock:
+                if self.state.get("balances"):
+                    self.state["balances"] = {**self.state["balances"], "stale": True}
+        return moves
 
     def start_message(self):
         self.log(f"Kalshi access: {self.kalshi.auth_info}")
@@ -406,7 +462,11 @@ class Scanner:
     def _balances_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
             self.refresh_balances()
-            self.keep_shard_split()
+            try:
+                self.keep_shard_split()
+                self.even_out_shards()
+            except Exception as e:
+                self.log(f"Kalshi shards: even split check failed ({e!r})")
             try:
                 self.prefund_shards()
             except Exception as e:

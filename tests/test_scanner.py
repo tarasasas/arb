@@ -391,11 +391,12 @@ class KeepShardSplitTests(unittest.TestCase):
         self.assertEqual(kalshi["posts"], [{"allocations": self.EVEN}] * 2)
         self.assertIn("even split", "\n".join(s.logs))
 
-    def test_already_even_sends_nothing(self):
+    def test_already_even_sends_nothing_but_says_so(self):
         s, kalshi = self.make(list(self.EVEN))
         with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even"):
             s.keep_shard_split(now=1000)
         self.assertEqual(kalshi["posts"], [])
+        self.assertIn("even split (shard 0 34%, shard 2 33%, shard 3 33%) is set at Kalshi", "\n".join(s.logs))
 
     def test_switching_to_per_trade_turns_rebalancing_off_at_once(self):
         s, kalshi = self.make([])
@@ -409,7 +410,9 @@ class KeepShardSplitTests(unittest.TestCase):
         s, kalshi = self.make([{"exchange_index": 0, "percent": 60}, {"exchange_index": 2, "percent": 40}])
         with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "manual"):
             s.keep_shard_split(now=1000)
+            s.keep_shard_split(now=1015)
         self.assertEqual(kalshi["posts"], [])
+        self.assertEqual(sum("manual" in line for line in s.logs), 1)   # said once
 
     def test_failure_is_logged_and_retried(self):
         from types import SimpleNamespace
@@ -422,6 +425,64 @@ class KeepShardSplitTests(unittest.TestCase):
             s.keep_shard_split(now=1000 + scanner.config.SHARD_SPLIT_CHECK_SECS)
         self.assertEqual(len(calls), 2)
         self.assertIn("will retry", "\n".join(s.logs))
+
+
+@mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even")
+class EvenOutShardsTests(unittest.TestCase):
+    """If Kalshi's rebalancing hasn't evened the shards out, the app moves the cash itself."""
+
+    def make(self, shards, set_at=1000):
+        import threading
+        from types import SimpleNamespace
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock = threading.Lock()
+        s.logs, s.log_to_console = __import__("collections").deque(maxlen=10), False
+        moved = []
+        kv = SimpleNamespace(transfer=lambda src, dst, amt: moved.append((src, dst, amt)))
+        s.trader = SimpleNamespace(venues={"kalshi": kv}, lock=threading.Lock())
+        s.autotrader = SimpleNamespace(busy=False)
+        s.state = {"balances": {"kalshi_shards": {str(k): v for k, v in shards.items()}, "time": "x"}}
+        s._shard_set_at = set_at
+        return s, moved
+
+    def test_moves_the_surplus_to_short_shards(self):
+        s, moved = self.make({0: 49.99, 2: 0.01, 3: 16.49})       # the dashboard's numbers
+        s.even_out_shards(now=1000 + scanner.config.SHARD_EVEN_GRACE_SECS)
+        self.assertEqual(moved, [(0, 2, 21.93), (0, 3, 5.45)])    # -> $22.61 / $21.94 / $21.94
+        self.assertTrue(s.state["balances"]["stale"])
+        self.assertIn("toward an even split", "\n".join(s.logs))
+
+    def test_gives_kalshi_a_minute_first_and_then_at_most_once_a_minute(self):
+        s, moved = self.make({0: 60.0, 2: 0.0, 3: 0.0})
+        s.even_out_shards(now=1030)                               # Kalshi may still be on it
+        self.assertEqual(moved, [])
+        s.even_out_shards(now=1060)
+        self.assertEqual(len(moved), 2)
+        moved.clear()
+        s.state["balances"].pop("stale")
+        s.even_out_shards(now=1090)
+        self.assertEqual(moved, [])
+
+    def test_leaves_near_even_shards_and_trades_alone(self):
+        s, moved = self.make({0: 22.0, 2: 21.0, 3: 20.5})         # within 10% of an equal share
+        s.even_out_shards(now=1060)
+        self.assertEqual(moved, [])
+        s, moved = self.make({0: 60.0, 2: 0.0, 3: 0.0})
+        s.autotrader.busy = True                                  # a trade is sizing against this cash
+        s.even_out_shards(now=1060)
+        s.autotrader.busy = False
+        s.trader.lock.acquire()                                   # or placing its orders
+        s.even_out_shards(now=1060)
+        s.trader.lock.release()
+        self.assertEqual(moved, [])
+
+    def test_only_in_even_mode_and_on_fresh_balances(self):
+        s, moved = self.make({0: 60.0, 2: 0.0, 3: 0.0})
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "per_trade"):
+            s.even_out_shards(now=1060)
+        s.state["balances"]["stale"] = True
+        s.even_out_shards(now=1060)
+        self.assertEqual(moved, [])
 
 class PairingIgnoresFocusTests(FocusTests):
     def test_positions_outside_focus_still_pair(self):

@@ -75,15 +75,13 @@ SHARD_MODES = ("even", "per_trade", "manual")
 
 def _shard_mode(env=os.environ):
     mode = env.get("KALSHI_SHARD_MODE", "").strip().lower()
-    if mode in SHARD_MODES:
-        return mode
-    # Before modes existed, KALSHI_AUTO_SHARD_FUNDING=0 meant "don't move my cash".
-    old = env.get("KALSHI_AUTO_SHARD_FUNDING", "").strip().lower()
-    return "manual" if old in ("0", "false", "no", "off") else "even"
+    return mode if mode in SHARD_MODES else "even"     # the older KALSHI_AUTO_SHARD_FUNDING is ignored
 
 
 KALSHI_SHARD_MODE = _shard_mode()
 SHARD_SPLIT_CHECK_SECS = 600       # even: re-check this often that Kalshi still keeps the even split
+SHARD_EVEN_GRACE_SECS = 60         # even: if Kalshi hasn't evened the shards out this long after the split was
+                                   # set, the app moves the cash itself (between trades, at most once a minute)
 SHARD_TRANSFER_WAIT_SECS = 8.0     # per_trade: how long to wait for a shard transfer to show up before trading
 
 
