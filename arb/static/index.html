@@ -1411,8 +1411,8 @@ function renderUnpaired(open) {
     <div class="unp">${card("kalshi", "Kalshi")}${card("polymarket", "Polymarket")}</div>`;
 }
 
-// Under one share extra on one side (Polymarket trades fractions of a share, Kalshi doesn't): the fix is
-// always on Polymarket, buying the missing fraction or selling the extra one.
+// Under one share extra on one side (a buy by dollar amount fills fractions of a share): evened up on
+// Polymarket, buying the missing fraction or selling the extra one.
 function leftoverHtml(a, u) {
   const leg = a.legs.find(l => l.exchange === u.exchange) || {}, pm = a.legs.find(l => l.exchange === "polymarket") || {};
   const stake = leg.shares ? leg.paid / leg.shares * u.shares : null, n = compact(u.shares);

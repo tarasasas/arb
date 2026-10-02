@@ -13,6 +13,8 @@ class FakeHTTP:
 
     def get(self, path, params=None):
         self.calls.append((path, dict(params or {})))
+        if path == "/portfolio/fills":
+            return {"fills": []}              # no fill history: the position keeps its lifetime fees
         return self.pages.pop(0)
 
 
@@ -36,6 +38,9 @@ def contract(ex, mid, key="MACRO:gas"):
 
 
 class ParseTests(unittest.TestCase):
+    def setUp(self):
+        accounts._fee_cache.clear()
+
     def test_kalshi_positions(self):
         k = accounts.kalshi_positions(FakeHTTP([KALSHI]))
         self.assertEqual(k["KXGAS-5.20"], {"side": "yes", "shares": 100, "paid": 20.08, "fees": 1.08,
@@ -54,7 +59,8 @@ class ParseTests(unittest.TestCase):
         h = FakeHTTP([{"market_positions": [KALSHI["market_positions"][0]], "cursor": "c2"},
                       {"market_positions": [KALSHI["market_positions"][1]], "cursor": ""}])
         self.assertEqual(set(accounts.kalshi_positions(h)), {"KXGAS-5.20", "KXNOBEL-X"})
-        self.assertEqual(h.calls[1][1]["cursor"], "c2")
+        pages = [params for path, params in h.calls if path == "/portfolio/positions"]
+        self.assertEqual(pages[1]["cursor"], "c2")
 
 
 class PairTests(unittest.TestCase):
@@ -142,3 +148,58 @@ class BalanceTests(unittest.TestCase):
         s.refresh_balances()
         self.assertEqual(s.state["balances"]["kalshi"], 50.0)
         self.assertIn("down", s.state["balances"]["error"])
+
+
+class HeldFeeTests(unittest.TestCase):
+    """Kalshi's positions list gives lifetime fees for a market; the cost of what you hold uses only
+    the fees on the contracts still held (what Kalshi's app shows as "includes fee of")."""
+
+    def setUp(self):
+        accounts._fee_cache.clear()
+
+    def fill(self, side, n, fee, ts, **kw):
+        return {"outcome_side": side, "count_fp": f"{n:.2f}", "fee_cost": f"{fee:.4f}", "ts": ts, **kw}
+
+    def test_a_round_trip_earlier_is_not_part_of_the_cost(self):
+        fills = [self.fill("yes", 5, 0.05, 1), self.fill("no", 5, 0.05, 2),      # bought 5, sold them
+                 self.fill("yes", 9, 0.04, 3), self.fill("yes", 1, 0.01, 4)]     # then the 10 held
+        self.assertEqual(accounts.held_fee(fills, 10), 0.05)
+
+    def test_partial_sale_takes_out_its_share_and_a_flip_keeps_the_new_side(self):
+        self.assertEqual(accounts.held_fee([self.fill("yes", 10, 0.10, 1), self.fill("no", 4, 0.03, 2)], 6), 0.06)
+        self.assertEqual(accounts.held_fee([self.fill("yes", 5, 0.05, 1), self.fill("no", 8, 0.08, 2)], -3), 0.03)
+
+    def test_legacy_action_and_side_fields(self):
+        fills = [{"action": "buy", "side": "no", "count_fp": "4.00", "fee_cost": "0.0200", "ts": 1},
+                 {"action": "sell", "side": "no", "count_fp": "1.00", "fee_cost": "0.0100", "ts": 2}]
+        self.assertEqual(accounts.held_fee(fills, -3), 0.015)
+
+    def test_fills_that_dont_add_up_give_none(self):
+        self.assertIsNone(accounts.held_fee([self.fill("yes", 9, 0.04, 1)], 10))
+
+    def http(self, fills):
+        class H:
+            calls = []
+
+            def get(self, path, params=None):
+                self.calls.append(path)
+                if path == "/portfolio/positions":
+                    return {"market_positions": [{"ticker": "KXOSCAR-DAMON", "position_fp": "10.00",
+                                                  "market_exposure_dollars": "9.2000", "fees_paid_dollars": "0.1500"}]}
+                return {"fills": fills, "cursor": ""}
+        return H()
+
+    def test_cost_is_the_position_plus_the_fee_on_it(self):
+        h = self.http([self.fill("yes", 5, 0.05, 1), self.fill("no", 5, 0.05, 2), self.fill("yes", 10, 0.05, 3)])
+        k = accounts.kalshi_positions(h)["KXOSCAR-DAMON"]
+        self.assertEqual((k["paid"], k["fees"]), (9.25, 0.05))                    # Kalshi's app: Cost $9.25
+        accounts.kalshi_positions(h)
+        self.assertEqual(h.calls.count("/portfolio/fills"), 1)                     # once per position change
+
+    def test_a_direct_position_fee_field_is_used_as_is(self):
+        h = self.http([])
+        h.get = lambda path, params=None: {"market_positions": [{
+            "ticker": "KX-1", "position_fp": "10.00", "market_exposure_dollars": "9.2000",
+            "fees_paid_dollars": "0.1500", "position_fee_cost_dollars": "0.0500"}]} if path == "/portfolio/positions" \
+            else self.fail("fills read")
+        self.assertEqual(accounts.kalshi_positions(h)["KX-1"]["paid"], 9.25)

@@ -1,6 +1,7 @@
 """Your live positions on both exchanges, read with the API keys in .env, paired into arbs.
 
-Kalshi: GET /portfolio/positions (position_fp > 0 is YES, < 0 is NO; cost = market exposure + fees).
+Kalshi: GET /portfolio/positions (position_fp > 0 is YES, < 0 is NO; cost = the position's cost basis plus
+the fees on the shares held, the "Cost" Kalshi's app shows).
 Polymarket US: GET /v1/portfolio/positions (netPosition > 0 is YES; < 0 is a short, i.e. Buy No).
 """
 
@@ -16,8 +17,63 @@ def _f(v):
         return None
 
 
+_fee_cache = {}       # (ticker, position, lifetime fees) -> fee on the shares held
+
+
+def held_fee(fills, position):
+    """Fees on the contracts still held, from a market's fills (any order): each buy adds its fee, a sale
+    takes out its share of the fees at the average (Kalshi's app shows the same "includes fee of").
+    position: signed contracts now (YES > 0). None if the fills don't add up to it."""
+    pos = fee = 0.0
+    for f in sorted(fills, key=lambda f: (f.get("ts") or 0, f.get("created_time") or "")):
+        n = _f(f.get("count_fp") if f.get("count_fp") is not None else f.get("count")) or 0.0
+        side = f.get("outcome_side") or ((f.get("side") if f.get("action") == "buy" else
+                                          {"yes": "no", "no": "yes"}.get(f.get("side"))) if f.get("action") else None)
+        if side not in ("yes", "no") or n <= 0:
+            return None
+        d, cost = (1 if side == "yes" else -1) * n, _f(f.get("fee_cost")) or 0.0
+        if pos == 0 or (pos > 0) == (d > 0):             # opening more
+            pos, fee = pos + d, fee + cost
+            continue
+        closed = min(n, abs(pos))                          # selling: its own fee is spent, not held
+        fee -= fee * closed / abs(pos)
+        pos += d
+        if n > closed:                                     # flipped to the other side
+            fee = cost * (n - closed) / n
+    return round(fee, 4) if abs(pos - position) < 0.005 else None
+
+
+def _position_fee(http, p, qty):
+    """The fee on a position's held contracts. Kalshi's positions list only gives lifetime fees for the
+    market (sold shares included), so the held part comes from the fills, once per position change."""
+    lifetime = _f(p.get("fees_paid_dollars")) or 0.0
+    direct = _f(p.get("position_fee_cost_dollars"))
+    if direct is not None:
+        return direct
+    if lifetime <= 0:
+        return 0.0
+    key = (p["ticker"], qty, lifetime)
+    if key not in _fee_cache:
+        fills, cursor = [], None
+        try:
+            while True:
+                params = {"ticker": p["ticker"], "limit": 200}
+                if cursor:
+                    params["cursor"] = cursor
+                d = http.get("/portfolio/fills", params)
+                fills += d.get("fills") or []
+                cursor = d.get("cursor")
+                if not cursor or not d.get("fills"):
+                    break
+        except Exception:
+            return lifetime                                     # tried again next read
+        fee = held_fee(fills, qty)
+        _fee_cache[key] = lifetime if fee is None else fee    # fills don't add up: lifetime (never too low)
+    return _fee_cache[key]
+
+
 def kalshi_positions(http):
-    """{ticker: {side, shares, paid}} for every open Kalshi position."""
+    """{ticker: {side, shares, paid, fees}} for every open Kalshi position."""
     out, cursor = {}, None
     while True:
         params = {"limit": 1000, "count_filter": "position"}
@@ -29,7 +85,7 @@ def kalshi_positions(http):
             qty = _f(p.get("position_fp") if p.get("position_fp") is not None else p.get("position"))
             if not qty:
                 continue
-            fees = _f(p.get("fees_paid_dollars")) or 0      # Kalshi's app shows "Cost" without these
+            fees = _position_fee(http, p, qty)
             cost = (_f(p.get("market_exposure_dollars")) or 0) + fees
             out[p["ticker"]] = {"side": "yes" if qty > 0 else "no", "shares": abs(qty), "paid": round(cost, 2),
                                 "fees": round(fees, 2), "title": p["ticker"]}
