@@ -213,7 +213,7 @@ class ShardFundingTests(unittest.TestCase):
                 return [(0, dollars)], self.cash[shard]
         k = ShardVenue("kalshi", yes=[(0.40, 500)])
         t = make(k, FakeVenue("polymarket", no=[(0.50, 500)]))
-        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "per_trade"):
             plan = t.prepare(LEGS)
         self.assertEqual(plan["size"], 107)                      # full $100 cap, as if the cash were there
         self.assertEqual(len(k.funded), 1)
@@ -241,10 +241,26 @@ class ShardFundingTests(unittest.TestCase):
                 return [(0, dollars)], self.cash[shard]
         k = ShardVenue("kalshi", yes=[(0.40, 500)])
         t = make(k, FakeVenue("polymarket", no=[(0.50, 500)]))
-        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "per_trade"):
             plan = t.prepare(LEGS)
         self.assertEqual(plan["size"], 20)                        # sized on the book after the transfer
         self.assertEqual(plan["legs"]["kalshi"]["limit"], 0.40)
+
+    def test_even_split_never_moves_cash_during_a_trade(self):
+        class ShardVenue(FakeVenue):
+            def market_info(self, _mid):
+                return {**super().market_info(_mid), "shard": 2}
+
+            def balance(self, shard=None):
+                return 20.0 if shard == 2 else 500.0
+
+            def fund_shard(self, shard, dollars):
+                raise AssertionError("moved cash in the middle of a trade")
+        t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "even"):
+            plan = t.prepare(LEGS)                                # sized to the shard's $20 instead
+        self.assertLessEqual(plan["legs"]["kalshi"]["amount"] + plan["legs"]["kalshi"]["fee"], 20.0)
+        self.assertEqual(plan["shard_transfers"], [])
 
     def test_off_means_no_transfer(self):
         class ShardVenue(FakeVenue):
@@ -257,7 +273,7 @@ class ShardFundingTests(unittest.TestCase):
             def fund_shard(self, shard, dollars):
                 raise AssertionError("moved cash with funding off")
         t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
-        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", False):
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "manual"):
             with self.assertRaises(TradeError):
                 t.prepare(LEGS)
 
@@ -378,7 +394,7 @@ class MainShardFundingTests(unittest.TestCase):
                 return [(2, dollars)], self.cash[shard]
         k = ShardVenue("kalshi", yes=[(0.40, 500)])
         t = make(k, FakeVenue("polymarket", no=[(0.50, 500)]))
-        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "per_trade"):
             plan = t.prepare(LEGS)
         self.assertEqual(k.funded[0][0], 0)
         self.assertEqual(plan["size"], 107)
@@ -397,7 +413,7 @@ class MainShardFundingTests(unittest.TestCase):
             def fund_shard(self, shard, dollars):
                 raise trader_mod.ApiError(403, "transfers not enabled")
         t = make(ShardVenue("kalshi", yes=[(0.40, 500)]), FakeVenue("polymarket", no=[(0.50, 500)]))
-        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "per_trade"):
             with self.assertRaises(TradeError) as cm:
                 t.prepare(LEGS)
         msg = str(cm.exception)
@@ -550,7 +566,7 @@ class LimitMessageTests(unittest.TestCase):
                 raise AssertionError("moved Kalshi cash for a trade Polymarket can't fund")
         k = ShardVenue("kalshi", yes=[(0.40, 500)])
         p = FakeVenue("polymarket", no=[(0.50, 500)], balance=0.0)
-        with mock.patch.object(trader_mod.config, "KALSHI_AUTO_SHARD_FUNDING", True):
+        with mock.patch.object(trader_mod.config, "KALSHI_SHARD_MODE", "per_trade"):
             with self.assertRaises(TradeError) as cm:
                 make(k, p).prepare(LEGS)
         self.assertIn("Polymarket buying power is $0.00", str(cm.exception))

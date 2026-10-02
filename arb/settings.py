@@ -70,8 +70,11 @@ GROUPS = [
          "together: both at once. thinner_first: the thinner book first. polymarket_first: Polymarket first.", "together"),
         ("CLOSE_OUT_MAX_LOSS", "money", "Hedge leftover shares up to ($ per share above break-even)",
          "When that loses less than selling them back. 0 = always sell back.", 0.05),
-        ("KALSHI_AUTO_SHARD_FUNDING", "bool", "Move Kalshi cash to the market's shard automatically",
-         "Kalshi keeps cash per exchange shard; an order can only use its own shard's cash.", True),
+        ("KALSHI_SHARD_MODE", "choice:even,per_trade,manual", "Kalshi cash across exchange shards",
+         "An order can only use its own market's shard's cash. even: every shard keeps an equal share (Kalshi "
+         "rebalances about every 10 seconds), so no trade waits for cash. per_trade: a trade first moves the cash it "
+         "needs to its shard, which takes seconds. manual: left as you set it (kalshi-shards.bat or kalshi.com).",
+         "even"),
     ]),
     ("Auto maker", [
         ("MAKER_AUTO_MAX_ORDER", "money", "Per resting order", "Both legs together.", 25),

@@ -118,20 +118,37 @@ class Scanner:
                           "n": len(vals)}
         return out
 
-    def take_over_shard_funding(self):
-        """With KALSHI_AUTO_SHARD_FUNDING the app moves cash between Kalshi shards as each trade needs it.
-        Kalshi's own rebalancing would move it back every 10 seconds, so turn that off."""
+    def keep_shard_split(self, now=None):
+        """Kalshi cash across exchange shards, per KALSHI_SHARD_MODE. even: Kalshi's own rebalancing keeps
+        an equal share on every shard, so a trade never waits for cash to move. per_trade: that rebalancing
+        is turned off, because the app moves cash as each trade needs it and Kalshi would move it back.
+        manual: left alone. Runs at start, after the mode changes in Settings, and every
+        SHARD_SPLIT_CHECK_SECS (someone may have changed the split at kalshi.com)."""
+        from . import shards
         kv = (self.trader.venues or {}).get("kalshi") if self.trader else None
-        if not (config.KALSHI_AUTO_SHARD_FUNDING and kv and hasattr(kv, "stop_kalshi_rebalancing")):
+        mode, now = config.KALSHI_SHARD_MODE, now or time.time()
+        if mode == "manual" or not kv or not hasattr(kv, "set_rebalancing"):
             return
+        if mode == getattr(self, "_shard_mode_set", None) and now - getattr(self, "_shard_checked", 0) < \
+                config.SHARD_SPLIT_CHECK_SECS:
+            return
+        self._shard_checked = now
+        split = shards.even_split() if mode == "even" else {}
         try:
-            was = kv.stop_kalshi_rebalancing()
-            if was:
-                self.log("Kalshi shards: turned off Kalshi's automatic rebalancing (" +
-                         ", ".join(f"shard {a.get('exchange_index')} {a.get('percent')}%" for a in was) +
-                         "); the app now moves cash onto a market's shard only when a trade needs it")
+            was = kv.set_rebalancing(split)
         except Exception as e:
-            self.log(f"Kalshi shards: couldn't check Kalshi's automatic rebalancing ({e!r})")
+            self.log(f"Kalshi shards: couldn't set Kalshi's automatic rebalancing ({e!r}); will retry")
+            return
+        self._shard_mode_set = mode
+        if was is None:
+            return
+        old = ", ".join(f"shard {a.get('exchange_index')} {a.get('percent')}%" for a in was) or "off"
+        if split:
+            self.log(f"Kalshi shards: Kalshi now keeps an even split ({', '.join(f'shard {i} {p}%' for i, p in split.items())}; "
+                     f"was {old}), moving cash between your shards about every 10 seconds")
+        else:
+            self.log(f"Kalshi shards: turned off Kalshi's automatic rebalancing (was {old}); the app now moves cash "
+                     f"onto a market's shard only when a trade needs it")
 
     def start_message(self):
         self.log(f"Kalshi access: {self.kalshi.auth_info}")
@@ -378,7 +395,7 @@ class Scanner:
         try:
             bal = self.accounts.balances()
             info = {**bal, "time": engine.now_utc().isoformat(), "missing": self.accounts.missing,
-                    "auto_shard_funding": config.KALSHI_AUTO_SHARD_FUNDING}
+                    "auto_shard_funding": config.KALSHI_SHARD_MODE == "per_trade"}
         except Exception as e:
             with self.lock:
                 old = dict(self.state.get("balances") or {})
@@ -389,6 +406,7 @@ class Scanner:
     def _balances_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
             self.refresh_balances()
+            self.keep_shard_split()
             try:
                 self.prefund_shards()
             except Exception as e:
@@ -400,7 +418,7 @@ class Scanner:
         a trade there doesn't wait for a transfer. Moves from your richest other shard (never below
         what that shard needs itself); at most once a minute per shard. Returns the moves made."""
         kv = (self.trader.venues or {}).get("kalshi") if self.trader else None
-        if not (config.KALSHI_AUTO_SHARD_FUNDING and kv and hasattr(kv, "transfer")):
+        if not (config.KALSHI_SHARD_MODE == "per_trade" and kv and hasattr(kv, "transfer")):
             return []
         with self.lock:
             b = dict(self.state.get("balances") or {})
@@ -1001,7 +1019,6 @@ class Scanner:
 
     def run_forever(self, stop_event=None):
         self.start_message()
-        threading.Thread(target=self.take_over_shard_funding, daemon=True).start()
         try:
             self.load_warm()
         except Exception as e:

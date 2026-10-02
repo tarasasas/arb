@@ -320,6 +320,7 @@ class FocusTests(unittest.TestCase):
         self.assertEqual(len(s.contracts), 6)
 
 
+@mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "per_trade")
 class PrefundTests(unittest.TestCase):
     def make(self, shards, rows):
         import threading
@@ -349,6 +350,78 @@ class PrefundTests(unittest.TestCase):
         s.prefund_shards(now=1000)
         self.assertEqual(moved, [(0, 2, 10.0)])                   # shard 0 keeps its own $50
 
+
+    def test_no_top_ups_with_an_even_split(self):
+        s, moved = self.make({0: 300.0, 2: 0.0}, [{"kalshi_shard": 2}])
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even"):
+            self.assertEqual(s.prefund_shards(now=1000), [])      # Kalshi's rebalancing does it
+        self.assertEqual(moved, [])
+
+
+class KeepShardSplitTests(unittest.TestCase):
+    """Kalshi's own rebalancing keeps the split the shard mode asks for."""
+
+    def make(self, current):
+        import threading
+        from types import SimpleNamespace
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock = threading.Lock()
+        s.logs, s.log_to_console = __import__("collections").deque(maxlen=10), False
+        kalshi = {"cur": current, "posts": []}
+
+        def set_rebalancing(split):
+            from arb.venues import KalshiVenue
+            http = SimpleNamespace(get=lambda path, params=None: {"allocations": kalshi["cur"]},
+                                   post=lambda path, body: kalshi["posts"].append(body) or kalshi.update(cur=body["allocations"]))
+            return KalshiVenue(SimpleNamespace(http=http)).set_rebalancing(split)
+        s.trader = SimpleNamespace(venues={"kalshi": SimpleNamespace(set_rebalancing=set_rebalancing)})
+        return s, kalshi
+
+    EVEN = [{"exchange_index": 0, "percent": 34}, {"exchange_index": 2, "percent": 33},
+            {"exchange_index": 3, "percent": 33}]
+
+    def test_even_sets_the_split_once_and_rechecks_later(self):
+        s, kalshi = self.make([])                                  # rebalancing off, as the app used to leave it
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even"):
+            s.keep_shard_split(now=1000)
+            self.assertEqual(kalshi["posts"], [{"allocations": self.EVEN}])
+            s.keep_shard_split(now=1015)                           # next balance refresh: not checked again yet
+            kalshi["cur"] = [{"exchange_index": 0, "percent": 100}]   # changed at kalshi.com
+            s.keep_shard_split(now=1000 + scanner.config.SHARD_SPLIT_CHECK_SECS)
+        self.assertEqual(kalshi["posts"], [{"allocations": self.EVEN}] * 2)
+        self.assertIn("even split", "\n".join(s.logs))
+
+    def test_already_even_sends_nothing(self):
+        s, kalshi = self.make(list(self.EVEN))
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even"):
+            s.keep_shard_split(now=1000)
+        self.assertEqual(kalshi["posts"], [])
+
+    def test_switching_to_per_trade_turns_rebalancing_off_at_once(self):
+        s, kalshi = self.make([])
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even"):
+            s.keep_shard_split(now=1000)
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "per_trade"):
+            s.keep_shard_split(now=1015)                           # changed in Settings: no 10-minute wait
+        self.assertEqual(kalshi["posts"][-1], {"allocations": []})
+
+    def test_manual_leaves_kalshi_alone(self):
+        s, kalshi = self.make([{"exchange_index": 0, "percent": 60}, {"exchange_index": 2, "percent": 40}])
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "manual"):
+            s.keep_shard_split(now=1000)
+        self.assertEqual(kalshi["posts"], [])
+
+    def test_failure_is_logged_and_retried(self):
+        from types import SimpleNamespace
+        s, _ = self.make([])
+        calls = []
+        s.trader = SimpleNamespace(venues={"kalshi": SimpleNamespace(
+            set_rebalancing=lambda split: calls.append(split) or (_ for _ in ()).throw(OSError("timeout")))})
+        with mock.patch.object(scanner.config, "KALSHI_SHARD_MODE", "even"):
+            s.keep_shard_split(now=1000)
+            s.keep_shard_split(now=1000 + scanner.config.SHARD_SPLIT_CHECK_SECS)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("will retry", "\n".join(s.logs))
 
 class PairingIgnoresFocusTests(FocusTests):
     def test_positions_outside_focus_still_pair(self):

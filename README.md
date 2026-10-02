@@ -565,18 +565,24 @@ use cash held on its own market's shard.** With all your cash on shard 0, a cryp
 - The header shows your Kalshi cash per shard (e.g. `Kalshi $505.00 (#0 $500.00, #2 $5.00)`). Each arb
   is sized to the cash on its own shard, and a row cut down by it says *limited by your Kalshi cash
   on shard 2*.
-- **Automatic (on by default):** before a trade on a shard that's short, the app moves just the cash
-  that trade needs onto it from your other shards (richest first; it's your own money on the same
-  account, nothing leaves Kalshi). It waits up to 8 seconds for the cash to arrive, then sizes the trade
-  to what's there. The confirm screen shows what was moved. Because of this, arbs are sized to your
-  total Kalshi cash. Any shard can be funded, including the main one. At start-up the app turns off
-  Kalshi's own automatic rebalancing (if it's on), because that would move the cash back every 10
-  seconds. To turn all of this off, put `KALSHI_AUTO_SHARD_FUNDING=0` in `.env`.
-- **Or keep a fixed split** (only with `KALSHI_AUTO_SHARD_FUNDING=0`): double-click `kalshi-shards.bat` (or run `python -m arb.shards`). It shows your
-  cash per shard, asks for a split (Enter = 50% main, 30% crypto, 20% tennis/baseball/basketball), and
-  turns on Kalshi's automatic rebalancing. Kalshi then moves cash between your shards every 10
-  seconds to keep that split. Run it again to change the split; `100 0 0` turns it off. You can also
-  move cash by hand at kalshi.com/account/exchange-indexes.
+- **Even split (the default):** every shard keeps an equal share of your Kalshi cash (34% main, 33%
+  crypto and commodities, 33% tennis, baseball and basketball). The app sets this up through Kalshi's
+  own automatic rebalancing, which moves cash between your shards about every 10 seconds, even while the
+  app is off. The app checks the split at start-up and every 10 minutes. Trades never wait for cash to
+  move. Right after a big trade drains a shard, the next trade there is sized to what's left until
+  Kalshi refills it.
+- **Other modes** are under *Kalshi cash across exchange shards* in Settings, or `KALSHI_SHARD_MODE`
+  in `.env`:
+  - `per_trade`: before a trade on a shard that's short, the app moves just the cash that trade needs
+    onto it from your other shards (richest first). It waits up to 8 seconds for the cash to arrive,
+    then sizes the trade to what's there. The confirm screen shows what was moved. Arbs are sized to
+    your total Kalshi cash. In this mode the app turns Kalshi's own rebalancing off, because it would
+    move the cash back.
+  - `manual`: the app leaves your shards alone. Set your own split with `kalshi-shards.bat` (or
+    `python -m arb.shards`): it shows your cash per shard, asks for a split (Enter = even), and turns
+    on Kalshi's automatic rebalancing with it. `100 0 0` turns rebalancing off. You can also move cash
+    by hand at kalshi.com/account/exchange-indexes. An older `.env` with `KALSHI_AUTO_SHARD_FUNDING=0`
+    counts as manual.
 - **Make trade**, **Fast trade** and **Auto-trade** check the market's shard before ordering. If it's
   empty they tell you, and nothing is traded.
 

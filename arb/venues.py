@@ -74,12 +74,17 @@ class KalshiVenue:
         params = {"exchange_index": shard} if shard is not None else None
         return float(self.client.http.get("/portfolio/balance", params)["balance"]) / 100
 
-    def stop_kalshi_rebalancing(self):
-        """Turn off Kalshi's own automatic rebalancing between shards, so cash only moves when a trade
-        needs it (fund_shard). Returns the allocation that was turned off ([] if it was already off)."""
+    def set_rebalancing(self, split):
+        """Have Kalshi's own automatic rebalancing keep `split` ({shard: percent}; {} turns it off). Kalshi
+        then moves cash between your shards about every 10 seconds. Returns the allocation it replaced,
+        or None if it was already set that way (nothing sent)."""
         cur = self.client.http.get("/portfolio/target_balance_allocation").get("allocations") or []
-        if cur:
-            self.client.http.post("/portfolio/target_balance_allocation", {"allocations": []})
+        have = {int(a.get("exchange_index") or 0): round(float(a.get("percent") or 0)) for a in cur}
+        want = {i: p for i, p in split.items() if p > 0}
+        if {i: p for i, p in have.items() if p > 0} == want or (not want and not have):
+            return None
+        from .shards import allocation_body
+        self.client.http.post("/portfolio/target_balance_allocation", allocation_body(split))
         return cur
 
     def shard_balances(self):

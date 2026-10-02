@@ -64,11 +64,27 @@ SELLBACK_SLIPPAGE_TICKS = 3        # sell-back accepts up to this many ticks bel
 SECOND_LEG_RETRY_PAUSE = 0.25      # longest wait before a second-leg retry (a live stream ends it early)
 PLAN_RECHECK_AFTER_SECS = 1.5      # a plan older than this (it sat in the confirm dialog) is re-checked first
 TRADES_LOG = PROJECT_ROOT / "trades.jsonl"
-# Kalshi keeps cash per exchange shard and an order can only use its market's shard. With this on, a
-# trade first moves the cash it needs onto that shard from your other shards (your own money, same
-# account). Set KALSHI_AUTO_SHARD_FUNDING=0 in .env to turn it off.
-KALSHI_AUTO_SHARD_FUNDING = os.environ.get("KALSHI_AUTO_SHARD_FUNDING", "1").strip().lower() not in ("0", "false", "no", "off")
-SHARD_TRANSFER_WAIT_SECS = 8.0     # how long to wait for a shard transfer to show up before trading
+# Kalshi keeps cash per exchange shard and an order can only use its market's shard. KALSHI_SHARD_MODE:
+#   even:      every shard is kept stocked with an equal share. Kalshi's own rebalancing holds the split
+#              (it moves cash about every 10 seconds, even while this app is off), so no trade waits for cash.
+#   per_trade: a trade first moves the cash it needs onto its market's shard (your own money, same
+#              account), then waits for it to arrive: seconds, while prices move.
+#   manual:    the app leaves your shards alone (set a split with kalshi-shards.bat or at kalshi.com).
+SHARD_MODES = ("even", "per_trade", "manual")
+
+
+def _shard_mode(env=os.environ):
+    mode = env.get("KALSHI_SHARD_MODE", "").strip().lower()
+    if mode in SHARD_MODES:
+        return mode
+    # Before modes existed, KALSHI_AUTO_SHARD_FUNDING=0 meant "don't move my cash".
+    old = env.get("KALSHI_AUTO_SHARD_FUNDING", "").strip().lower()
+    return "manual" if old in ("0", "false", "no", "off") else "even"
+
+
+KALSHI_SHARD_MODE = _shard_mode()
+SHARD_SPLIT_CHECK_SECS = 600       # even: re-check this often that Kalshi still keeps the even split
+SHARD_TRANSFER_WAIT_SECS = 8.0     # per_trade: how long to wait for a shard transfer to show up before trading
 
 
 # ---- Dashboard on your phone (python -m arb --phone, or DASHBOARD_PHONE=1) ----------------------

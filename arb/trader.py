@@ -291,11 +291,11 @@ class Trader:
             raise TradeError(f"Not profitable at live prices within your ${cap:.2f} limit any more (the books moved). "
                              f"Nothing was traded.")
 
-        # Kalshi cash is held per exchange shard. If this market's shard is short, move what the trade
+        # Kalshi cash is held per exchange shard. per_trade mode: if this market's shard is short, move what the trade
         # needs onto it from your other shards first (same account), then size against what arrived.
         shard = info["kalshi"].get("shard") or 0
         transfers, funding_error = [], ""
-        if config.KALSHI_AUTO_SHARD_FUNDING and not dry and hasattr(self.venues["kalshi"], "fund_shard"):   # any shard, 0 too
+        if config.KALSHI_SHARD_MODE == "per_trade" and not dry and hasattr(self.venues["kalshi"], "fund_shard"):   # any shard, 0 too
             want = largest(kalshi_cash=math.inf)
             c = cost_at(want)
             short = c["kalshi"]["amount"] + c["kalshi"]["fee"] - balance["kalshi"]
@@ -329,9 +329,12 @@ class Trader:
             elsewhere = (" You have " + ", ".join(f"${b:.2f} on shard {i}" for i, b in sorted(others.items())) + "."
                          if others else "")
             fix = (funding_error + "." if funding_error else
-                   "Automatic shard funding is off (KALSHI_AUTO_SHARD_FUNDING=0): move cash at kalshi.com/account/exchange-indexes, "
-                   "or run kalshi-shards.bat to keep every shard funded."
-                   if not config.KALSHI_AUTO_SHARD_FUNDING else
+                   "Kalshi refills every shard to an equal share about every 10 seconds, so this is usually just after "
+                   "a trade there; if it stays empty, check the split with kalshi-shards.bat."
+                   if config.KALSHI_SHARD_MODE == "even" else
+                   "Kalshi shards are set to manual: move cash at kalshi.com/account/exchange-indexes, or run "
+                   "kalshi-shards.bat to keep every shard funded."
+                   if config.KALSHI_SHARD_MODE == "manual" else
                    "Move cash at kalshi.com/account/exchange-indexes, or run kalshi-shards.bat to keep every shard funded.")
             raise TradeError(f"This Kalshi market trades on exchange shard {shard} ({SHARD_NAMES.get(shard, 'another shard')}) "
                              f"and you have ${balance['kalshi']:.2f} there{moved}.{elsewhere} Kalshi only lets an order use "
@@ -482,9 +485,11 @@ class Trader:
         except ApiError as e:
             record("first", A, error=str(e))
             self._write(log, status="failed_first_leg")
-            hint = (" Kalshi keeps cash separately per exchange shard and this market's shard has none: run "
-                    "kalshi-shards.bat once, or move cash at kalshi.com/account/exchange-indexes."
-                    if "shard" in str(e.detail).lower() else "")
+            hint = ("" if "shard" not in str(e.detail).lower() else
+                    " Kalshi keeps cash separately per exchange shard and this market's shard was short; Kalshi refills "
+                    "it to an equal share about every 10 seconds." if config.KALSHI_SHARD_MODE == "even" else
+                    " Kalshi keeps cash separately per exchange shard and this market's shard has none: run "
+                    "kalshi-shards.bat once, or move cash at kalshi.com/account/exchange-indexes.")
             raise TradeError(f"{NAMES[A['exchange']]} rejected the first order, nothing was traded: {e.detail}{hint}",
                              exchange=NAMES[A["exchange"]])
         except Exception as e:          # sent, but the outcome couldn't be confirmed

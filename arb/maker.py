@@ -183,7 +183,7 @@ class MakerBot:
         need_k = size * (hl0 + fee_per_contract(kcoef, hl0))
         k_cash = tr._cached_cash("kalshi", shard)
         k_cash = kv.balance(shard) if k_cash is None else k_cash
-        if k_cash < need_k and config.KALSHI_AUTO_SHARD_FUNDING and hasattr(kv, "fund_shard"):
+        if k_cash < need_k and config.KALSHI_SHARD_MODE == "per_trade" and hasattr(kv, "fund_shard"):
             try:
                 _, k_cash = kv.fund_shard(shard, math.ceil((need_k - k_cash + 0.05) * 100) / 100)
             except ApiError:

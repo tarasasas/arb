@@ -17,7 +17,15 @@ from .kalshi import KalshiClient
 SHARDS = [(0, "main: politics, economics, football and everything else"),
           (2, "crypto and commodities"),
           (3, "tennis, baseball and basketball")]
-DEFAULT = {0: 50, 2: 30, 3: 20}
+
+
+def even_split():
+    """{shard: percent}, whole percents as equal as possible; the main shard takes any extra."""
+    base, extra = divmod(100, len(SHARDS))
+    return {i: base + (1 if n < extra else 0) for n, (i, _) in enumerate(SHARDS)}
+
+
+DEFAULT = even_split()
 
 
 def parse_split(text, default=DEFAULT):
@@ -52,9 +60,10 @@ def main(ask=input):
     except ApiError:
         pass
     from . import config
-    if config.KALSHI_AUTO_SHARD_FUNDING:
-        print("\nNote: the dashboard moves cash onto a market's shard as each trade needs it, and turns this "
-              "rebalancing off when it starts. To keep a fixed split, add KALSHI_AUTO_SHARD_FUNDING=0 to .env first.")
+    if config.KALSHI_SHARD_MODE != "manual":
+        print("\nNote: the dashboard " + ("keeps an even split on every shard" if config.KALSHI_SHARD_MODE == "even"
+              else "moves cash onto a market's shard as each trade needs it") + " and will undo a split set here. "
+              "To keep your own split, set Kalshi shards to manual in Settings (or KALSHI_SHARD_MODE=manual in .env) first.")
     print(f"\nSplit to keep, in % for shards {', '.join(str(i) for i, _ in SHARDS)} "
           f"(Enter for {' '.join(str(DEFAULT[i]) for i, _ in SHARDS)}; 100 0 0 turns rebalancing off):")
     while True:
