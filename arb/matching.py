@@ -154,6 +154,8 @@ def _var(kind, period, team, anchor):
         return ("margin", period, anchor)
     if kind == "TOTAL":
         return ("total", period)
+    if kind == "BTTS":
+        return ("btts", period)          # 1 if both teams score in the period, else 0
     return ("tt", period, team)
 
 

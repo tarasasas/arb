@@ -332,6 +332,8 @@ def describe_var(var, note=""):
         return {"structural": "Paired by contract terms", "auto": "Auto-matched by wording"}.get(note, "Your approved match")
     kind, period = var[0], var[1]
     per = "" if period == "FG" else f" ({period})"
+    if kind == "btts":
+        return f"Both teams score{per}"
     if kind == "margin":
         return f"Winning margin{per}"
     if kind == "total":
@@ -373,6 +375,8 @@ def outcome_text(var, lo, hi):
         return "It happens (Kalshi market resolves YES)" if (lo or 0) >= 1 else "It doesn't happen (Kalshi resolves NO)"
     per = var[1]
     prefix = "" if per == "FG" else PERIOD_NAMES.get(per, f"Inning {per[1:]}" if per.startswith("I") else per) + ": "
+    if var[0] == "btts":
+        return f"{prefix}Both teams score" if (lo or 0) >= 1 else f"{prefix}Not both teams score"
     if var[0] in ("total", "tt"):
         who = "Combined score" if var[0] == "total" else f"{var[2]} scores"
         return f"{prefix}{who} {_range_text(None if lo == 0 and hi != 0 else lo, hi, str)}"

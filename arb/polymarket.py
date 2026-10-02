@@ -10,7 +10,7 @@ from .http import LanePool, RateLimitedClient
 PAGE = 500
 WORKERS = 16          # requests in flight; the rate limiter keeps the pace at POLYMARKET_RPS
 
-SLUG_RE = re.compile(r"^(?P<prefix>aec|asc|tsc|atc)-(?P<league>[a-z0-9]+)-(?P<t1>[a-z0-9]+)-(?P<t2>[a-z0-9]+)-"
+SLUG_RE = re.compile(r"^(?P<prefix>aec|asc|tsc|atc|astatc)-(?P<league>[a-z0-9]+)-(?P<t1>[a-z0-9]+)-(?P<t2>[a-z0-9]+)-"
                      r"(?P<date>\d{4}-\d{2}-\d{2})(?:-(?P<rest>.+))?$")
 TYPE_RE = re.compile(r"^(?P<sport>football|basketball|baseball|hockey|soccer)_(?P<scope>team|game)_(?P<mid>.+?)_"
                      r"(?P<kind>winner|spread|total|total_runs|total_goals)$")
@@ -64,6 +64,20 @@ def _period(mid):
     return f"I{m[1]}" if m else None
 
 
+# Yes/no markets on a game that aren't winner/spread/total: (sport, period, kind, line).
+BTTS_RE = re.compile(r"^(?P<sport>soccer|football)_game_(?:(?P<mid>[a-z_]+?)_)?(?:btts|both_teams_score_points)$")
+
+
+def _special(stype):
+    if stype == "baseball_team_first_inning_run":       # "any run in the 1st inning" = 1st-inning total > 0.5
+        return "baseball", "I1", "TOTAL", 0.5
+    m = BTTS_RE.match(stype)
+    if m:
+        period = PERIOD_WORDS.get(m["mid"] or "")
+        return (m["sport"], period, "BTTS", 0.5) if period else None
+    return None
+
+
 def parse_market(m):
     slug = m.get("slug") or ""
     sm = SLUG_RE.match(slug)
@@ -74,6 +88,19 @@ def parse_market(m):
     stype = m.get("sportsMarketType") or ""
     rest = sm["rest"] or ""
     team_total = re.match(r"^tt(?:1h|2h)?-([a-z0-9]+)-", rest)
+    special = _special(stype)
+    if special:
+        sport, period, kind_c, line = special
+        pm = PMMarket(
+            slug=slug, league=sm["league"], sport=sport, date=sm["date"], t1=sm["t1"], t2=sm["t2"],
+            kind=kind_c, period=period, team=None, op=">", line=line, tie_half=False,
+            title=m.get("question") or slug, rules=m.get("description") or "",
+            start_time=m.get("gameStartTime") or m.get("endDate") or "",
+            fee_coef=float(m.get("feeCoefficient") or config.POLYMARKET_DEFAULT_COEF), team_names={},
+            tick=float(m.get("orderPriceMinTickSize") or 0.01),
+        )
+        set_quotes(pm, m)
+        return pm
 
     # Special-cased names that don't follow sport_scope_period_kind.
     if stype == "football_team_points_full_game_total":

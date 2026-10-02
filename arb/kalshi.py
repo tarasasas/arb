@@ -16,7 +16,7 @@ from .kalshi_auth import load_signer
 DEFAULT_TOKEN_COST = 10   # all market-data GETs; see GET /account/endpoint_costs
 
 PERIODS = ("1H", "2H", "1Q", "2Q", "3Q", "4Q", "1P", "2P", "3P", "F5")
-SERIES_REST_RE = re.compile(r"^(?P<period>1H|2H|1Q|2Q|3Q|4Q|1P|2P|3P|F5)?(?P<kind>GAME|SPREAD|TOTAL|TEAMTOTAL|INNINGTOTAL)?$")
+SERIES_REST_RE = re.compile(r"^(?P<period>1H|2H|1Q|2Q|3Q|4Q|1P|2P|3P|F5)?(?P<kind>GAME|SPREAD|TOTAL|TEAMTOTAL|INNINGTOTAL|RFI|BTTS)?$")
 TEAM_STRIKE_RE = re.compile(r"^(?P<team>[A-Z0-9]*?[A-Z])(?P<num>\d+)$")
 
 # Kalshi league code -> (Polymarket league code, sport); longest code first so that
@@ -97,7 +97,7 @@ def _f(v):
 def parse_market(m, series_info, fee_coef):
     code, pm_code, sport, period, kind = series_info
     ev = m["event_ticker"]
-    if "-" not in ev or not m["ticker"].startswith(ev + "-"):
+    if "-" not in ev or not (m["ticker"].startswith(ev + "-") or m["ticker"] == ev):   # KXMLBRFI: ticker = event
         return None
     body = ev.split("-", 1)[1]
     date_code, teams_str = body[:7], re.sub(r"^\d{4}", "", body[7:])
@@ -110,6 +110,12 @@ def parse_market(m, series_info, fee_coef):
             return None
         team = suffix
         op, line = ("==", 0.0) if suffix == "TIE" else (">", 0.0)
+    elif kind == "RFI":                     # "1st inning: Over 0.5 runs" = 1st-inning total of 1 or more
+        if strike_type != "greater_or_equal" or _f(m.get("floor_strike")) is None:
+            return None
+        period, kind, op, line = "I1", "TOTAL", ">", _f(m.get("floor_strike")) - 0.5
+    elif kind == "BTTS":                    # both teams score (in the period): a yes/no event
+        op, line = ">", 0.5
     elif kind == "INNINGTOTAL":
         mm = re.match(r"^(\d+)-\d+$", suffix)
         if not mm or strike_type != "greater":
