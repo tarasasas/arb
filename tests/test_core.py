@@ -135,6 +135,20 @@ class ParsingTests(unittest.TestCase):
         self.assertTrue(matching.name_matches("Jacksonville St.", {"Jacksonville State Gamecocks"}))
         self.assertFalse(matching.name_matches("Los Angeles C", {"Los Angeles Rams"}))
 
+    def test_names_written_differently_on_each_site(self):
+        same = [("Lanus", "CA Lanús"), ("Tucuman", "CA Tucumán"), ("Instituto Cordoba", "Instituto AC Córdoba"),
+                ("Gimnasia La Plata", "Gimnasia y Esgrima de La Plata"), ("Rivadavia", "CS Independiente Rivadavia"),
+                ("Roanne Chorale", "Roanne"), ("Nanterre 92", "Nanterre"), ("Levallois Basketball", "Levallois"),
+                ("Asc Denain Voltaire Ph", "ASC Denain-Voltaire"), ("Jaguares", "Jaguares de Córdoba FC"),
+                ("Aguilas Doradas Rionegro", "Águilas Doradas Rionegro"), ("Cali", "AD Cali"),
+                ("Defensa y Justicia", "CSyD Defensa y Justicia")]
+        for k, p in same:
+            self.assertTrue(matching.name_matches(k, {p}), (k, p))
+        different = [("Independiente Avellaneda", "CS Independiente Rivadavia"), ("Champagne Basketball", "Chalons-Reims"),
+                     ("Stade Rochelais Basket", "La Rochelle"), ("Boca Juniors", "Argentinos Juniors")]
+        for k, p in different:
+            self.assertFalse(matching.name_matches(k, {p}), (k, p))
+
 
 if __name__ == "__main__":
     unittest.main()

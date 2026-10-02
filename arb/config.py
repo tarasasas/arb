@@ -155,6 +155,33 @@ LEAGUES = {
     "brb": ("BRASILEIROB", "soccer"),
     "brc": ("BRASILEIROC", "soccer"),
     "uwcl": ("UCLW", "soccer"),
+    # Added after matching real games on both sites (Polymarket code -> Kalshi code).
+    "epl": ("EPL", "soccer"),
+    "lal": ("LALIGA", "soccer"),
+    "bun": ("BUNDESLIGA", "soccer"),
+    "sea": ("SERIEA", "soccer"),
+    "lg1": ("LIGUE1", "soccer"),
+    "ligpor": ("LIGAPORTUGAL", "soccer"),
+    "j1": ("JLEAGUE", "soccer"),
+    "wsl": ("EWSL", "soccer"),
+    "cnl": ("CONCACAFNL", "soccer"),
+    "uru1": ("URYPD", "soccer"),
+    "svk2": ("SVK2L", "soccer"),
+    "par1": ("APFDDH", "soccer"),
+    "arg2": ("ARGNACB", "soccer"),
+    "lpa": ("ARGPREMDIV", "soccer"),
+    "lco": ("DIMAYOR", "soccer"),
+    "serca": ("SERIEC", "soccer"),        # Serie C's three groups are one league on Kalshi
+    "sercb": ("SERIEC", "soccer"),
+    "sercc": ("SERIEC", "soccer"),
+    "ahl": ("AHL", "hockey"),
+    "snhl": ("NL", "hockey"),             # Swiss National League
+    "ita2": ("BBSERIEA2", "basketball"),
+    "lba": ("BBSERIEA", "basketball"),
+    "autbl": ("AUTBSL", "basketball"),
+    "lnb": ("LNBELITE", "basketball"),
+    "fra2": ("LNBELITE2", "basketball"),
+    "acb": ("ACB", "basketball"),
 }
 
 # Fees (taker). Kalshi: 0.07 x series fee_multiplier x C x P x (1-P), rounded up to the cent.

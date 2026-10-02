@@ -1,6 +1,7 @@
 """Match Polymarket games to Kalshi games and build comparable contracts."""
 
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import date
 
@@ -20,10 +21,34 @@ def _tokens(name):
     return ["state" if t == "st" else t for t in toks]
 
 
+# Club-name filler that one site writes and the other doesn't ("CA Lanús" / "Lanus", "Levallois" /
+# "Levallois Basketball", "Gimnasia y Esgrima de La Plata" / "Gimnasia La Plata").
+FILLER = {"fc", "cf", "sc", "ac", "ad", "ca", "cs", "csyd", "cd", "club", "de", "del", "da", "do", "y", "e",
+          "the", "basketball", "basket", "bc", "afc"}
+
+
+def _plain_tokens(name):
+    """Lowercase words without accents, punctuation or club filler."""
+    name = unicodedata.normalize("NFKD", name)
+    name = "".join(ch for ch in name if not unicodedata.combining(ch)).lower()
+    return [t for t in re.sub(r"[^a-z0-9 ]", " ", name).split() if t not in FILLER]
+
+
+def _same_word(a, b):
+    return a == b or (min(len(a), len(b)) >= 4 and (a.startswith(b) or b.startswith(a)))
+
+
+def _words_within(small, big):
+    return bool(small) and all(any(_same_word(a, b) for b in big) for a in small)
+
+
 def name_matches(kalshi_name, pm_names):
     """Kalshi short names ("Los Angeles R", "Jacksonville St.") vs Polymarket full names
     ("Los Angeles Rams"): every Kalshi token must equal the Polymarket token in the same
-    position, except the last which may be a prefix."""
+    position, except the last which may be a prefix. Failing that, one name's words (accents,
+    punctuation and club filler ignored) must all be in the other's: "Lanus" / "CA Lanús",
+    "Roanne Chorale" / "Roanne". The game matcher still needs both teams of one game to match, each
+    to a different team, on the same date, so a loose name can't pair two different games."""
     kt = _tokens(kalshi_name)
     if not kt:
         return False
@@ -32,6 +57,11 @@ def name_matches(kalshi_name, pm_names):
         if len(pt) < len(kt):
             continue
         if all(a == b for a, b in zip(kt[:-1], pt)) and pt[len(kt) - 1].startswith(kt[-1]):
+            return True
+    kw = _plain_tokens(kalshi_name)
+    for n in pm_names:
+        pw = _plain_tokens(n)
+        if _words_within(kw, pw) or _words_within(pw, kw):
             return True
     return False
 
