@@ -103,11 +103,41 @@ AUTO_TRADE_MAX_DAILY_LOSS = _env_num("AUTO_TRADE_MAX_DAILY_LOSS", 5)            
 # after this many misses in a row on one site (rejections, unfilled orders, unhedged second legs).
 AUTO_TRADE_HEDGE_DEPTH = _env_num("AUTO_TRADE_HEDGE_DEPTH", 2)
 AUTO_TRADE_MAX_MISSES = int(_env_num("AUTO_TRADE_MAX_MISSES", 3))
-# How Auto-trade's two orders go out (same choices as TRADE_ORDER). thinner_first: the book with less
+# How Auto-trade's two orders go out (same choices as TRADE_ORDER, plus smart). smart (default), per
+# trade: the stale side first when the live streams show one site just moved and the other hasn't (the
+# stale one is about to reprice); both at once in fast markets (crypto windows, games in progress) or
+# where second legs keep missing; otherwise the thinner book first. thinner_first: the book with less
 # depth first (a miss there trades nothing), then the other site for exactly what filled.
-AUTO_TRADE_ORDER = os.environ.get("AUTO_TRADE_ORDER", "").strip().lower() or "thinner_first"
-if AUTO_TRADE_ORDER not in ("polymarket_first", "together", "thinner_first"):
-    AUTO_TRADE_ORDER = "thinner_first"
+AUTO_TRADE_ORDER = os.environ.get("AUTO_TRADE_ORDER", "").strip().lower() or "smart"
+if AUTO_TRADE_ORDER not in ("smart", "polymarket_first", "together", "thinner_first"):
+    AUTO_TRADE_ORDER = "smart"
+STALE_FRESH_SECS = 2.0      # "just moved": a streamed price that changed within this many seconds
+STALE_GAP_SECS = 3.0        # "stale": the other site's price unchanged for at least this much longer
+
+
+def _env_on(name, default):
+    return os.environ.get(name, "1" if default else "0").strip().lower() not in ("0", "false", "no", "off")
+
+
+# Edge Auto-trade needs, per pair: fast markets (crypto windows, games in progress) move between the two
+# orders, so they need AUTO_TRADE_FAST_EDGE (cents). With AUTO_TRADE_LEARN_BUFFER every market type also
+# needs the typical price move its own trades met while the orders went out.
+AUTO_TRADE_FAST_EDGE = _env_num("AUTO_TRADE_FAST_EDGE", 2) / 100
+AUTO_TRADE_LEARN_BUFFER = _env_on("AUTO_TRADE_LEARN_BUFFER", True)
+# Pause a market type whose recent real trades mostly miss or lose: over its last AUTO_TRADE_THROTTLE_MIN_TRIES,
+# fewer than AUTO_TRADE_THROTTLE_MIN_FILL (%) filled on both sites, or a net loss.
+AUTO_TRADE_THROTTLE = _env_on("AUTO_TRADE_THROTTLE", True)
+AUTO_TRADE_THROTTLE_MIN_FILL = _env_num("AUTO_TRADE_THROTTLE_MIN_FILL", 40) / 100
+AUTO_TRADE_THROTTLE_MIN_TRIES = int(_env_num("AUTO_TRADE_THROTTLE_MIN_TRIES", 5))
+AUTO_TRADE_THROTTLE_HOURS = _env_num("AUTO_TRADE_THROTTLE_HOURS", 2)
+AUTO_TRADE_STATS_KEEP = 30                 # results kept per market type
+EXEC_STATS_FILE = PROJECT_ROOT / "cache" / "exec_stats.json"
+# Take at most this share (%) of the shares each book shows at the prices paid: shown shares are often
+# gone, or pulled, by the time an order lands.
+AUTO_TRADE_BOOK_SHARE = _env_num("AUTO_TRADE_BOOK_SHARE", 50) / 100
+# Paper trading: Auto-trade does everything but send the orders, then checks the real books at the moments
+# they would have landed to see what would have filled. Results go to paper_trades.jsonl.
+AUTO_TRADE_DRY_RUN = _env_on("AUTO_TRADE_DRY_RUN", False)
 # Fast lane: the pairs Auto-trade could take (paying out within FAST_MAX_HOURS) get their own price check
 # every FAST_LANE_PAUSE_SECS and go first on the live streams, instead of waiting for the full sweep.
 # auto = while Auto-trade or Auto maker is on; always; off.
@@ -115,6 +145,10 @@ FAST_LANE = os.environ.get("FAST_LANE", "").strip().lower() or "auto"
 if FAST_LANE not in ("auto", "always", "off"):
     FAST_LANE = "auto"
 FAST_LANE_PAUSE_SECS = _env_num("FAST_LANE_PAUSE_SECS", 0.5)
+# Paper trading (AUTO_TRADE_DRY_RUN): how long each site's order takes to land, in seconds, when no
+# real trades have been timed yet.
+PAPER_LATENCY = {"kalshi": 0.15, "polymarket": 0.7}
+PAPER_LOG = PROJECT_ROOT / "paper_trades.jsonl"
 # Unhedged first-leg shares may be hedged up to this far ($/share) above break-even when that loses less
 # than selling them back. 0 = always sell back.
 CLOSE_OUT_MAX_LOSS = _env_num("CLOSE_OUT_MAX_LOSS", 0.05)

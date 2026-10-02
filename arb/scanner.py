@@ -59,7 +59,7 @@ class Scanner:
         self.trader, self.trading_status = self._make_trader()
         self.load_focus()               # scan only markets settling soon, if you set Focus
         from .autotrade import AutoTrader
-        self.autotrader = AutoTrader(self)  # off until you turn it on in the dashboard
+        self.autotrader = AutoTrader(self, stats_path=config.EXEC_STATS_FILE)   # off until you turn it on
         from .maker import MakerBot
         self.makerbot = MakerBot(self)      # Auto maker: off until you turn it on in Maker mode
         from .balance import Balancer

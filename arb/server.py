@@ -230,6 +230,8 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     return self._json(200, scanner.set_focus(body.get("days") or 0))
                 if path == "/api/autotrade":
                     return self._json(200, scanner.autotrader.set(bool(body.get("on"))))
+                if path == "/api/autotrade/resume":
+                    return self._json(200, scanner.autotrader.resume(body.get("category") or None))
                 if path == "/api/maker":
                     return self._json(200, scanner.makerbot.set(bool(body.get("on"))))
                 if path == "/api/maker/cancel":

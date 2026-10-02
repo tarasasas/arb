@@ -86,6 +86,7 @@ class _Stream(threading.Thread):
         self.on_update, self.log = on_update, log
         self._connect = connect             # injectable for tests: connect(url, headers) -> ws
         self.wanted, self.subscribed = set(), set()
+        self.first_seen = {}                        # market -> time of its first message (the snapshot)
         self.lock, self.stop_event = threading.Lock(), threading.Event()
         self.ws, self.connected, self.last_msg, self.updates = None, False, 0.0, 0
         self.seen = set()                   # markets with a live book since the last (re)connect
@@ -146,7 +147,7 @@ class _Stream(threading.Thread):
             try:
                 self.ws = self._open()
                 self.connected, self.error, backoff = True, None, 1
-                self.subscribed, self.seen, self.updated_at = set(), set(), {}
+                self.subscribed, self.seen, self.updated_at, self.first_seen = set(), set(), {}, {}
                 self.last_msg = time.time()
                 self._on_connect()
                 self._sync_subscriptions(self.ws)
@@ -190,8 +191,11 @@ class _Stream(threading.Thread):
 
     def _updated(self, market_id):
         self.updates += 1
+        now = time.time()
+        if market_id not in self.seen:
+            self.first_seen[market_id] = now        # the snapshot after subscribing: not a price move
         self.seen.add(market_id)
-        self.updated_at[market_id] = time.time()
+        self.updated_at[market_id] = now
         self.on_update(self.exchange, market_id)
 
     def _on_connect(self):

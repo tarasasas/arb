@@ -7,7 +7,8 @@ import threading
 
 from . import config
 
-# (key, kind, label, help, default). kind: bool | money | number | int | percent | choice:<a>,<b>,...
+# (key, kind, label, help, default). kind: bool | money | number | int | percent | cents | choice:<a>,<b>,...
+# percent and cents are stored in config as fractions / dollars (shown x100).
 GROUPS = [
     ("What Auto-trade and Fast trade may take", [
         ("FAST_MAX_HOURS", "number", "Only arbs that pay out within (hours)",
@@ -36,9 +37,28 @@ GROUPS = [
         ("AUTO_TRADE_MAX_MISSES", "int", "Turn off after misses in a row", "On one site: rejected, unfilled or unhedged.", 3),
         ("AUTO_TRADE_HEDGE_DEPTH", "number", "Second leg's book must hold (x the shares)",
          "Within break-even; a thin book is what makes the second leg miss.", 2),
-        ("AUTO_TRADE_ORDER", "choice:thinner_first,together,polymarket_first", "Order of the two legs",
-         "thinner_first: the thinner book first, the other for what filled. together: both at once. "
-         "polymarket_first: Polymarket first.", "thinner_first"),
+    ]),
+    ("How Auto-trade trades", [
+        ("AUTO_TRADE_DRY_RUN", "bool", "Paper trading: no real orders",
+         "Auto-trade does everything but send the orders, then checks the real books at the moments they would have "
+         "landed. Results show in the Auto-trade bar and paper_trades.jsonl; nothing is spent.", False),
+        ("AUTO_TRADE_ORDER", "choice:smart,thinner_first,together,polymarket_first", "Order of the two legs",
+         "smart: the stale side first when one site just moved and the other hasn't (it's about to reprice); both at "
+         "once in fast markets or where second legs keep missing; else the thinner book first. thinner_first: the "
+         "thinner book first, the other for what filled. together: both at once. polymarket_first: Polymarket first.",
+         "smart"),
+        ("AUTO_TRADE_FAST_EDGE", "cents", "Minimum edge in fast markets (¢ per pair)",
+         "Crypto windows and games in progress move between the two orders.", 2),
+        ("AUTO_TRADE_LEARN_BUFFER", "bool", "Learn each market type's buffer",
+         "Also require the typical price move that type's trades met while the orders went out.", True),
+        ("AUTO_TRADE_THROTTLE", "bool", "Pause market types that keep failing",
+         "When most of a type's last trades missed on a site, or they lost money in total.", True),
+        ("AUTO_TRADE_THROTTLE_MIN_FILL", "percent", "Pause below this fill rate (%)",
+         "Share of its last 5 trades that filled on both sites.", 40),
+        ("AUTO_TRADE_THROTTLE_HOURS", "number", "Pause for (hours)", "", 2),
+        ("AUTO_TRADE_BOOK_SHARE", "percent", "Take at most this share of each book (%)",
+         "Of the shares shown at the prices paid; shown shares are often gone by the time an order lands. 100 = all.",
+         50),
     ]),
     ("Every trade", [
         ("MAX_TRADE_DOLLARS", "money", "Hard cap per trade", "Make trade, Fast trade and Auto-trade, both legs together.", 100),
@@ -65,7 +85,7 @@ _lock = threading.Lock()
 def _shown(key):
     """config's value in the units the dashboard and .env use."""
     kind, v = SPEC[key][0], getattr(config, key)
-    return round(v * 100, 4) if kind == "percent" else v
+    return round(v * 100, 4) if kind in ("percent", "cents") else v
 
 
 def current():
@@ -109,7 +129,7 @@ def _env_text(v):
 
 
 def _apply(key, v):
-    setattr(config, key, v / 100 if SPEC[key][0] == "percent" else v)
+    setattr(config, key, v / 100 if SPEC[key][0] in ("percent", "cents") else v)
     if key == "TRADE_ORDER":
         config.TRADE_LEGS_TOGETHER = v == "together"
     os.environ[key] = _env_text(v)

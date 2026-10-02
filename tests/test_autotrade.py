@@ -66,9 +66,9 @@ class FakeTrader:
         self.result = result or {"status": "ok", "plan": {"payout": 1.0}, "hedged_pairs": 20, "net": 1.0, "unhedged_shares": 0,
                                  "legs_filled": {"kalshi": {"paid": 9.0}, "polymarket": {"paid": 10.5}}}
 
-    def prepare(self, legs, cap, timeline=None, hedge_depth=1.0, order=None):
+    def prepare(self, legs, cap, timeline=None, hedge_depth=1.0, order=None, **kw):
         self.calls.append(("prepare", cap))
-        self.hedge_depth, self.order = hedge_depth, order
+        self.hedge_depth, self.order, self.kw = hedge_depth, order, kw
         if self.fail:
             raise TradeError(self.fail)
         self.plans["p1"] = 1
@@ -164,10 +164,13 @@ class SafetyTests(unittest.TestCase):
         return s, a
 
     def test_games_in_play_are_skipped(self):
-        live = row(warnings=["Game already started: prices move fast, and the quotes may be seconds apart."])
+        live = row(warnings=["Game already started: prices move fast, and the quotes may be seconds apart."],
+                   edge_per_contract=0.01)
         s, a = self.make([live])
         self.assertIsNone(a.check(s.state["opportunities"]))
         with mock.patch.object(config, "AUTO_TRADE_LIVE_GAMES", True):
+            self.assertIsNone(a.check(s.state["opportunities"]))      # 1c: a game in progress needs 2c
+            live["edge_per_contract"] = 0.03
             self.assertIsNotNone(a.check(s.state["opportunities"]))
 
     def test_a_miss_pauses_the_whole_game(self):
@@ -243,6 +246,7 @@ class CircuitBreakerTests(unittest.TestCase):
     def test_auto_trade_sends_thinner_leg_first_by_default(self):
         s, a = self.make(1)
         a.check(s.state["opportunities"])
-        self.assertEqual(config.AUTO_TRADE_ORDER, "thinner_first")
-        self.assertEqual(s.trader.order, "thinner_first")
+        self.assertEqual(config.AUTO_TRADE_ORDER, "smart")           # nothing stale, not a fast market:
+        self.assertEqual(s.trader.order, "thinner_first")            # the thinner book first
+        self.assertEqual(s.trader.kw["book_share"], config.AUTO_TRADE_BOOK_SHARE)
 

@@ -175,19 +175,24 @@ class Trader:
 
     # ---- planning ----------------------------------------------------------------------
 
-    def prepare(self, legs, max_invest=None, timeline=None, hedge_depth=1.0, order=None):
+    def prepare(self, legs, max_invest=None, timeline=None, hedge_depth=1.0, order=None, first=None, dry=False,
+                book_share=None):
         """hedge_depth > 1: shrink the size until the second leg's book holds that many times the shares
         at or below break-even, so a small move between the two orders can't leave the first leg unhedged.
-        order: how the two orders go out (ORDER_MODES); TRADE_ORDER if not given."""
+        order: how the two orders go out (ORDER_MODES); TRADE_ORDER if not given. first: which site goes
+        first in a one-after-the-other order (else the thinner book). dry: a paper trade (simulate()): no
+        cash limits, nothing moved between Kalshi shards. book_share: take at most this share of the shares
+        each book shows at the prices paid."""
         tl = dict(timeline or {})
         tl.setdefault("decided", time.time())      # Make trade: the click is the decision
         with priority():                   # trades go ahead of background market loads
-            plan = self._prepare(legs, max_invest, hedge_depth, order if order in ORDER_MODES else config.TRADE_ORDER)
+            plan = self._prepare(legs, max_invest, hedge_depth, order if order in ORDER_MODES else config.TRADE_ORDER,
+                                 first=first, dry=dry, book_share=book_share)
         tl["checks_done"] = time.time()
         plan["timeline"] = tl
         return plan
 
-    def _prepare(self, legs, max_invest=None, hedge_depth=1.0, mode=None):
+    def _prepare(self, legs, max_invest=None, hedge_depth=1.0, mode=None, first=None, dry=False, book_share=None):
         if not self.venues:
             raise TradeError("Trading needs both API keys. Add POLYMARKET_KEY_ID and POLYMARKET_SECRET_KEY to .env.")
         by_ex = {l["exchange"]: l for l in legs}
@@ -230,6 +235,8 @@ class Trader:
         for ex in EXCHANGES:
             if not info[ex]["open"]:
                 raise TradeError(f"The {NAMES[ex]} market isn't open for trading.")
+        if dry:                                    # paper trade: what the books allow, whatever the cash
+            balance = {ex: math.inf for ex in EXCHANGES}
 
         k, p = contracts["kalshi"], contracts["polymarket"]
         cand = {"k": SimpleNamespace(exchange="kalshi", fee_coef=k.fee_coef),
@@ -285,7 +292,7 @@ class Trader:
         # needs onto it from your other shards first (same account), then size against what arrived.
         shard = info["kalshi"].get("shard") or 0
         transfers, funding_error = [], ""
-        if config.KALSHI_AUTO_SHARD_FUNDING and hasattr(self.venues["kalshi"], "fund_shard"):   # any shard, 0 too
+        if config.KALSHI_AUTO_SHARD_FUNDING and not dry and hasattr(self.venues["kalshi"], "fund_shard"):   # any shard, 0 too
             want = largest(kalshi_cash=math.inf)
             c = cost_at(want)
             short = c["kalshi"]["amount"] + c["kalshi"]["fee"] - balance["kalshi"]
@@ -331,12 +338,34 @@ class Trader:
             limits = f"cap ${cap:.2f}, Kalshi cash{where} ${balance['kalshi']:.2f}, Polymarket buying power ${balance['polymarket']:.2f}"
             raise TradeError(f"Can't fit even one profitable pair within your limits ({limits}).")
 
+        if book_share and 0 < book_share < 1:
+            # Never the whole book: shares shown at a price are often gone (or pulled) by the time an order
+            # lands, so take at most this share of what each book shows at the prices being paid.
+            def within_share(n):
+                cn = cost_at(n)
+                return all(n <= book_share * sum(q for pr, q in levels[ex] if pr <= cn[ex]["limit"] + 1e-9) + 1e-9
+                           for ex in EXCHANGES)
+            if not within_share(n):
+                lo, hi = 0, int(n // step)
+                while lo < hi:
+                    mid = (lo + hi + 1) // 2
+                    lo, hi = (mid, hi) if within_share(mid * step) else (lo, mid - 1)
+                if lo <= 0:
+                    raise TradeError(f"The books are too thin: even one pair would take more than {book_share:.0%} of "
+                                     f"the shares shown at these prices. Nothing was traded.")
+                n = lo * step
         c = cost_at(n)
         spare = {ex: sum(q for pr, q in levels[ex] if pr <= c[ex]["limit"] + 1e-9) - n for ex in EXCHANGES}
         mode = mode or config.TRADE_ORDER
         # polymarket_first: the slower site goes first and Kalshi (fast) is bought for exactly what filled,
         # so a Polymarket miss trades nothing. thinner_first: the book with less spare depth goes first.
-        first = "polymarket" if mode == "polymarket_first" else min(EXCHANGES, key=lambda ex: spare[ex])
+        # first: the caller's pick (Auto-trade sends the stale side first: it's the one about to reprice).
+        if first in EXCHANGES and mode != "together":
+            pass
+        elif mode == "polymarket_first":
+            first = "polymarket"
+        else:
+            first = min(EXCHANGES, key=lambda ex: spare[ex])
         second = "kalshi" if first == "polymarket" else "polymarket"
 
         # Legs that may have to hedge the other: the second one, or either when both go out together.
@@ -376,6 +405,7 @@ class Trader:
         plan["checks"] = checks
         plan["together"] = mode == "together"
         plan["order_mode"] = mode
+        plan["dry"] = dry
         plan["expected_profit"] = payout * n - plan["capital"]
         plan["cap"] = cap
         self.plans[plan["id"]] = (plan, info)
@@ -675,15 +705,112 @@ class Trader:
                 steps.append(f"{NAMES[A['exchange']]}: sell-back failed ({e})")
         return extra, sold
 
+    # ---- paper trading ------------------------------------------------------------------------
+
+    def simulate(self, plan_id, latency=None, sleep=None):
+        """A paper trade: the plan's orders played against the real books, each read at the moment that
+        order would have landed (the site's typical order time after the one before), with the same
+        rules as a real trade: second leg at break-even with retries, leftovers closed the cheaper way.
+        Nothing is sent. Returns a result shaped like execute()'s, with "paper": True. It assumes the
+        shares shown were really there and that taking them wouldn't have moved anyone, so real fills
+        can only be the same or worse."""
+        with self.lock:
+            entry = self.plans.pop(plan_id, None)
+        if not entry:
+            raise TradeError("That plan was already used or doesn't exist.")
+        plan, info = entry
+        lat = {**config.PAPER_LATENCY, **(latency or {})}
+        sleep = sleep or time.sleep
+        steps, missed, payout = [], [], plan["payout"]
+
+        def book(leg):
+            live = self._live_book(leg["exchange"], leg["market_id"])
+            return live if live is not None else self.venues[leg["exchange"]].levels(leg["market_id"])
+
+        def take(leg, qty, limit, lv, kind):
+            fills = engine._take([(p, q) for p, q in lv[leg["side"]] if p <= limit + 1e-9], floor_to(qty, leg["min_qty"]))
+            f = Fill(qty=sum(q for _, q in fills), amount=sum(p * q for p, q in fills), order_id="paper")
+            f.fee = total_fee(leg["exchange"], fills, leg["fee_coef"]) if fills else 0.0
+            steps.append(f"{NAMES[leg['exchange']]}: would have bought {f.qty:g} {leg['side'].upper()} at ≤ ${limit:.3f} "
+                         f"for ${f.amount:.2f} + ${f.fee:.2f} fee ({kind})")
+            if f.qty + 1e-9 < qty:
+                best = lv[leg["side"]][0][0] if lv[leg["side"]] else None
+                missed.append({"exchange": NAMES[leg["exchange"]], "best": best,
+                               "gap": max(0.0, best - limit) if best is not None else None,
+                               "why": f"would have filled {f.qty:g} of {qty:g} at ≤ ${limit:.3f}" + (
+                                   f"; best price then ${best:.3f}" if best is not None else "; no sellers then")})
+            return f
+
+        legs = plan["legs"]
+        if plan["together"]:                       # both sent at once: each lands after its own site's time
+            order = sorted(EXCHANGES, key=lambda ex: lat[ex])
+            sleep(lat[order[0]])
+            lv0 = book(legs[order[0]])
+            sleep(max(0.0, lat[order[1]] - lat[order[0]]))
+            lv1 = book(legs[order[1]])
+            got = {order[0]: take(legs[order[0]], plan["size"], legs[order[0]]["limit"], lv0, "together"),
+                   order[1]: take(legs[order[1]], plan["size"], legs[order[1]]["limit"], lv1, "together")}
+            plan["first"] = max(EXCHANGES, key=lambda ex: got[ex].qty)
+        A = legs[plan["first"]]
+        B = legs["polymarket" if plan["first"] == "kalshi" else "kalshi"]
+        if plan["together"]:
+            fa, fills_b = got[A["exchange"]], [got[B["exchange"]]]
+            hedged, attempt = fills_b[0].qty, 1
+        else:
+            sleep(lat[A["exchange"]])
+            fa = take(A, plan["size"], A["limit"], book(A), "first")
+            fills_b, hedged, attempt = [], 0.0, 0
+        if fa.qty <= 0:
+            return {**self._result(plan, "no_fill", steps, fa, [], None, 0, "Paper: the first leg wouldn't have filled.",
+                                   missed), "paper": True}
+        a_cost = (fa.amount + fa.fee) / fa.qty
+        tick_b = info[B["exchange"]]["tick"]
+        for attempt in range(attempt, 1 + config.SECOND_LEG_RETRIES):
+            remaining = floor_to(fa.qty - hedged, B["min_qty"])
+            if remaining <= 0:
+                break
+            limit = break_even_price(B["exchange"], remaining, (payout - a_cost) * remaining, B["fee_coef"], tick_b)
+            if limit <= 0:
+                break
+            sleep(lat[B["exchange"]] + (config.SECOND_LEG_RETRY_PAUSE if attempt else 0.0))
+            fb = take(B, remaining, limit, book(B), "second" if attempt == 0 else f"retry {attempt}")
+            fills_b.append(fb)
+            hedged += fb.qty
+        missed = [m for m in missed if m["exchange"] == NAMES[B["exchange"]]] or missed
+        excess, sold, status = fa.qty - hedged, None, "ok"
+        if excess > 1e-9:                          # leftovers: hedge a little above break-even, or sell back
+            status = "partial"
+            lv_a, lv_b = book(A), book(B)
+            worst = payout - a_cost + config.CLOSE_OUT_MAX_LOSS
+            hedge = engine._take([(p, q) for p, q in lv_b[B["side"]] if p <= worst + 1e-9], floor_to(excess, B["min_qty"]))
+            other = "no" if A["side"] == YES else "yes"
+            sell = engine._take([(round(1 - p, 6), q) for p, q in lv_a[other]], floor_to(excess, A["min_qty"]))
+            hq, sq = sum(q for _, q in hedge), sum(q for _, q in sell)
+            hcost = sum(p * q for p, q in hedge) + (total_fee(B["exchange"], hedge, B["fee_coef"]) if hedge else 0)
+            h_per = (payout * hq - hcost) / hq if hq else -math.inf
+            s_per = ((sum(p * q for p, q in sell) - total_fee(A["exchange"], sell, A["fee_coef"])) / sq) if sq else -math.inf
+            if hq and h_per > s_per:
+                fb = Fill(qty=hq, amount=sum(p * q for p, q in hedge), order_id="paper")
+                fb.fee = hcost - fb.amount
+                fills_b.append(fb)
+                hedged += hq
+                steps.append(f"{NAMES[B['exchange']]}: would have hedged {hq:g} more above break-even")
+            elif sq:
+                sold = Fill(qty=sq, amount=sum(p * q for p, q in sell), order_id="paper")
+                sold.fee = total_fee(A["exchange"], sell, A["fee_coef"])
+                steps.append(f"{NAMES[A['exchange']]}: would have sold back {sq:g} for ${sold.amount:.2f}")
+        return {**self._result(plan, status, steps, fa, fills_b, sold, hedged, "", missed), "paper": True}
+
     def _miss(self, leg, qty, limit, error=None, filled=0.0):
         """Why an order didn't (fully) fill, for the Auto-trade fail-safe and history: the site's
         rejection, or the price on that book now next to the limit the order carried."""
-        why = f"rejected: {error}" if error else ""
+        why, gap_dollars, best = f"rejected: {error}" if error else "", None, None
         if not error:
             why = f"filled {filled:g} of {qty:g} at ≤ ${limit:.3f}"
             try:
                 lv = self.venues[leg["exchange"]].levels(leg["market_id"])[leg["side"]]
                 if lv:
+                    best, gap_dollars = lv[0][0], max(0.0, lv[0][0] - limit)
                     gap = (lv[0][0] - limit) * 100
                     why += (f"; best price there now ${lv[0][0]:.3f}" +
                             (f" ({gap:+.1f}¢ vs the limit: the price moved)" if gap > 0.05 else
@@ -692,7 +819,7 @@ class Trader:
                     why += "; no sellers there now"
             except Exception:
                 pass
-        return {"exchange": NAMES[leg["exchange"]], "why": why}
+        return {"exchange": NAMES[leg["exchange"]], "why": why, "gap": gap_dollars, "best": best}
 
     def _result(self, plan, status, steps, fa, fills_b, sold, hedged, note, missed=None):
         A = plan["legs"][plan["first"]]
@@ -706,13 +833,30 @@ class Trader:
         kept_a = fa.qty - sold_qty
         legs_filled = {A["exchange"]: {"shares": kept_a, "paid": round(a_per * kept_a, 2)},
                        B["exchange"]: {"shares": sum(f.qty for f in fills_b), "paid": round(b_spent, 2)}}
+        # How far prices moved against the plan while the orders went out ($/share): the second leg's average
+        # fill over its planned price, or, on an order that missed, the best price then over the planned one
+        # (not over the limit: that already includes the arb's edge). Auto-trade learns from this how much
+        # edge each kind of market needs.
+        slips, planned = [], {}
+        if plan.get("size"):
+            planned = {ex: leg["amount"] / plan["size"] for ex, leg in plan["legs"].items()}
+        by_name = {v: k for k, v in NAMES.items()}
+        for m in missed or []:
+            ex = by_name.get(m.get("exchange"))
+            if m.get("best") is not None and ex in planned:
+                slips.append(max(0.0, m["best"] - planned[ex]))
+        qb = sum(f.qty for f in fills_b)
+        if qb > 0 and planned:
+            slips.append(max(0.0, sum(f.amount for f in fills_b) / qb - planned[B["exchange"]]))
         return {"status": status, "steps": steps, "note": note, "hedged_pairs": hedged, "legs_filled": legs_filled,
                 "first": NAMES[A["exchange"]], "missed": missed or [],
                 "plan": {"payout": plan["payout"], "legs": plan["legs"]},
                 "locked_profit": round(locked, 2), "sellback_pnl": round(sellback_pnl, 2),
                 "net": round(locked + sellback_pnl, 2), "unhedged_shares": round(unhedged, 4),
                 "unhedged_exchange": NAMES[A["exchange"]] if unhedged > 1e-9 else None,
-                "unhedged_side": A["side"] if unhedged > 1e-9 else None, "payout": plan["payout"]}
+                "unhedged_side": A["side"] if unhedged > 1e-9 else None, "payout": plan["payout"],
+                "slip": round(max(slips), 4) if slips else None, "order_mode": plan.get("order_mode"),
+                "first_exchange": A["exchange"]}
 
     def _write(self, log, status):
         log["status"], log["finished"] = status, engine.now_utc().isoformat()

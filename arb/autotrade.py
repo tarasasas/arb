@@ -12,12 +12,13 @@ at a time, at most AUTO_TRADE_MAX_TRADE each and AUTO_TRADE_DAILY_LIMIT per day,
 off if a trade leaves shares unhedged or can't be confirmed.
 """
 
+import json
 import threading
 import time
 from collections import deque
 from datetime import datetime
 
-from . import config
+from . import config, execpolicy
 from .trader import TradeError
 
 
@@ -29,9 +30,7 @@ def pair_id(legs):
     return tuple(sorted(f"{l['exchange'].lower()}:{l['market_id']}:{l['side']}" for l in legs))
 
 
-def in_play(row):
-    """A game that has already started (the scanner flags it in the row's warnings)."""
-    return any(w.startswith("Game already started") for w in row.get("warnings") or [])
+in_play = execpolicy.in_play      # a game that has already started (the scanner flags it in the row's warnings)
 
 
 def row_info(row):
@@ -70,8 +69,9 @@ def current_row(scanner, legs):
 
 
 def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.0, min_roi=0.0, cap=None,
-               decided=None, hedge_depth=1.0, order=None):
-    """Plan and place a trade in one step, for an arb the scanner currently lists as fast."""
+               decided=None, hedge_depth=1.0, order=None, first=None, dry=False, book_share=None, min_edge=0.0):
+    """Plan and place a trade in one step, for an arb the scanner currently lists as fast.
+    dry: a paper trade (nothing is sent; see Trader.simulate). min_edge: profit per pair the plan needs."""
     decided = decided or time.time()
     row = current_row(scanner, legs)
     if row is None:
@@ -81,13 +81,28 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
         raise TradeError(f"{label} isn't allowed for this arb ({fast.get('why', 'not checked')}). Use Make trade.")
     cap = min(x for x in (cap or config.FAST_MAX_TRADE, max_invest) if x)
     trader = scanner.trader
+    extra = {k: v for k, v in (("first", first), ("dry", dry), ("book_share", book_share)) if v}
     plan = trader.prepare(legs, cap, timeline={"tick": row.get("tick_ts"), "detected": row.get("detected_ts"),
-                                               "decided": decided}, hedge_depth=hedge_depth, order=order)
+                                               "decided": decided}, hedge_depth=hedge_depth, order=order, **extra)
     roi = plan["expected_profit"] / plan["capital"] if plan["capital"] else 0
     if plan["expected_profit"] < min_profit or roi < min_roi:
         trader.plans.pop(plan["id"], None)
         raise TradeError(f"Only ${plan['expected_profit']:.2f} profit ({roi * 100:.2f}%) at live prices within "
                          f"${cap:.2f}. Nothing was traded.")
+    edge = plan["expected_profit"] / plan["size"] if plan.get("size") else None
+    if min_edge and edge is not None and edge < min_edge:
+        trader.plans.pop(plan["id"], None)
+        raise TradeError(f"{edge * 100:.1f}¢ a pair at live prices; this kind of market needs {min_edge * 100:.1f}¢ "
+                         f"(prices move between the two orders). Nothing was traded.")
+    if dry:
+        # each site's typical order time from your real trades (tick-to-trade timings), else the defaults
+        lat, timed = {}, (getattr(scanner, "latency_summary", None) or (lambda: None))() or {}
+        for ex, stage in (("kalshi", "Kalshi order"), ("polymarket", "Polymarket order")):
+            if (timed.get(stage) or {}).get("p50"):
+                lat[ex] = timed[stage]["p50"] / 1000
+        result = trader.simulate(plan["id"], latency=lat)
+        result["capital"] = round(plan["capital"], 2)
+        return result
     result = trader.execute(plan["id"])
     result["capital"] = round(plan["capital"], 2)
     record_trade(scanner, result, row_info(row), label)
@@ -95,8 +110,9 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
 
 
 class AutoTrader:
-    def __init__(self, scanner, run_async=True):
+    def __init__(self, scanner, run_async=True, stats_path=None):
         self.scanner, self.run_async = scanner, run_async
+        self.stats = execpolicy.ExecStats(stats_path)   # results per market type: buffers, pauses, leg order
         self.on, self.busy, self.halted = False, False, None
         self.lock = threading.Lock()
         self.spend = {}                 # local date -> dollars used by Auto-trade
@@ -136,7 +152,16 @@ class AutoTrader:
                 "allow_player_props": config.FAST_ALLOW_PLAYER_PROPS,
                 "misses": dict(self.misses), "max_misses": config.AUTO_TRADE_MAX_MISSES,
                 "hedge_depth": config.AUTO_TRADE_HEDGE_DEPTH, "order": config.AUTO_TRADE_ORDER,
+                "dry_run": config.AUTO_TRADE_DRY_RUN, "book_share": config.AUTO_TRADE_BOOK_SHARE,
+                "fast_edge": config.AUTO_TRADE_FAST_EDGE, "learn_buffer": config.AUTO_TRADE_LEARN_BUFFER,
+                "throttle": config.AUTO_TRADE_THROTTLE, "stats": self.stats.summary(),
                 "history": list(self.history)}
+
+    def resume(self, cat=None):
+        """Lift a market type's pause (all of them if cat is None)."""
+        self.stats.resume(cat)
+        self.scanner.log(f"Auto-trade: {cat or 'every market type'} resumed")
+        return self.status()
 
     def pick(self, rows, now=None):
         """The most profitable fast row worth trading that wasn't tried in the last cooldown."""
@@ -146,8 +171,17 @@ class AutoTrader:
               and (r.get("roi") or 0) >= config.AUTO_TRADE_MIN_ROI
               and (config.AUTO_TRADE_LIVE_GAMES or not in_play(r))
               and self.game_pause.get(r.get("game"), 0) <= now
-              and now - self.tried.get(pair_id(r["legs"]), 0) >= config.AUTO_TRADE_COOLDOWN_SECS]
+              and now - self.tried.get(pair_id(r["legs"]), 0) >= config.AUTO_TRADE_COOLDOWN_SECS
+              and self._type_ok(r)]
         return max(ok, key=lambda r: r["profit"], default=None)
+
+    def _type_ok(self, row):
+        """The row's market type isn't paused and the row has the edge that type needs."""
+        cat = execpolicy.category(row)
+        if self.stats.paused_why(cat):
+            return False
+        need, _ = self.stats.min_edge(cat)
+        return (row.get("edge_per_contract") or 0) >= need
 
     def check(self, rows):
         """Called after every price pass. Starts at most one trade; returns the row picked."""
@@ -170,12 +204,21 @@ class AutoTrader:
         return row
 
     def _run(self, row, cap, decided=None):
+        cat = execpolicy.category(row)
+        dry = config.AUTO_TRADE_DRY_RUN
+        mode, first, why = execpolicy.choose_order(self.scanner, row, self.stats, cat)
+        need, _ = self.stats.min_edge(cat)
         entry = {"time": datetime.now().isoformat(timespec="seconds"), "game": row.get("game"),
-                 "tab": row.get("tab"), "legs": [f"{l['exchange']} Buy {l['side'].upper()}" for l in row["legs"]]}
+                 "tab": row.get("tab"), "legs": [f"{l['exchange']} Buy {l['side'].upper()}" for l in row["legs"]],
+                 "category": cat, "order": why, "paper": dry}
         try:
             res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap, decided=decided,
                              min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI,
-                             hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH, order=config.AUTO_TRADE_ORDER)
+                             hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH, order=mode, first=first, dry=dry,
+                             book_share=config.AUTO_TRADE_BOOK_SHARE, min_edge=need)
+            if dry:
+                self._paper(row, cat, res, entry)
+                return
             used = spent(res)
             with self.lock:
                 self.spend[self._today()] = self.spend.get(self._today(), 0.0) + used
@@ -190,6 +233,11 @@ class AutoTrader:
             if missed:
                 entry["missed"] = "; ".join(f"{m['exchange']} {m['why']}" for m in missed)
             self._count_misses([m["exchange"] for m in missed], entry.get("missed"))
+            paused = self.stats.record(cat, res["status"], res["net"], res.get("slip"), res.get("order_mode") or mode)
+            if paused:
+                entry["paused"] = f"{cat} paused for {config.AUTO_TRADE_THROTTLE_HOURS:g}h: {paused}"
+                self.scanner.log(f"Auto-trade: {entry['paused']}")
+                self._notify(f"Auto-trade: {entry['paused']}")
             if self.net.get(self._today(), 0.0) <= -config.AUTO_TRADE_MAX_DAILY_LOSS:
                 self._halt(f"net loss today is ${-self.net[self._today()]:.2f} (limit ${config.AUTO_TRADE_MAX_DAILY_LOSS:g}): "
                            f"check what's happening before turning it back on", notify=False)
@@ -201,9 +249,10 @@ class AutoTrader:
                              f"${used:.2f} in, net ${res['net']:+.2f}" + (f"\n⚠ {self.halted}" if self.halted else ""))
         except TradeError as e:           # books moved, not enough cash, ...: nothing was traded
             entry.update({"status": "skipped", "note": str(e)})
-            if getattr(e, "exchange", None):       # an order was sent and that site refused it
+            if getattr(e, "exchange", None) and not dry:       # an order was sent and that site refused it
                 entry.update({"status": "rejected", "missed": f"{e.exchange} {e}"})
                 self._count_misses([e.exchange], str(e))
+                self.stats.record(cat, "rejected", 0.0, None, mode)
             if "Check that account" in str(e):
                 self._halt(str(e))
         except Exception as e:
@@ -212,6 +261,23 @@ class AutoTrader:
         finally:
             self.history.appendleft(entry)
             self.busy = False
+
+    def _paper(self, row, cat, res, entry):
+        """A paper trade's outcome: history, the market type's paper results, paper_trades.jsonl. Nothing
+        was spent, so no limits, misses or pauses."""
+        entry.update({"status": res["status"], "pairs": res["hedged_pairs"], "net": res["net"],
+                      "spent": res.get("capital"), "note": "; ".join(res.get("steps") or [])})
+        if res.get("missed"):
+            entry["missed"] = "; ".join(f"{m['exchange']} {m['why']}" for m in res["missed"])
+        self.stats.record(cat, res["status"], res["net"], res.get("slip"), res.get("order_mode"), paper=True)
+        try:
+            with open(config.PAPER_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps({**entry, "slip": res.get("slip"), "order_mode": res.get("order_mode"),
+                                    "first": res.get("first_exchange"), "steps": res.get("steps")}, default=str) + "\n")
+        except OSError:
+            pass
+        self.scanner.log(f"Paper trade {res['status']}: {row.get('game')}: {res['hedged_pairs']:g} pairs, "
+                         f"net ${res['net']:.2f} ({entry['order']})")
 
     def _count_misses(self, sites, why):
         """The circuit breaker: a run of misses on one site means something is wrong there (cash, a

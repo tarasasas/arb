@@ -243,6 +243,29 @@ require your check.
     (`AUTO_TRADE_MAX_MISSES`). `trade-report.bat` shows the same `MISSED` lines.
   - Every trade goes to My arbs and `trades.jsonl`.
 
+**How Auto-trade keeps failed trades down** (all in ⚙ Settings → How Auto-trade trades):
+
+- **Stale side first** (leg order `smart`, the default). A cross-site arb usually exists because one site
+  hasn't repriced yet, and it's about to. When the live streams show one site just moved (within 2s) and
+  the other hasn't changed for 3s more, the stale one goes first, before it reprices. Fast markets
+  (crypto windows, games in progress), and market types whose second legs keep missing, send both orders at
+  once instead; anything else sends the thinner book first. Each trade's history line says which and why.
+- **More edge where prices move fast.** Crypto windows and games in progress need `AUTO_TRADE_FAST_EDGE`
+  (2¢) a pair. Every market type also learns its own buffer: the typical (75th percentile) price move its
+  trades met while the orders went out (`AUTO_TRADE_LEARN_BUFFER`).
+- **Market types that keep failing pause themselves.** Results are kept per type (MLB, NFL live, Crypto
+  windows, Politics, ...). When fewer than 40% of a type's last 5 real trades filled on both sites, or they
+  lost money in total, that type pauses for 2 hours. **By market type** in the Auto-trade bar shows each
+  type's record, what edge it needs and why, and a Resume button. Kept in `cache/exec_stats.json`.
+- **Never the whole book.** A trade takes at most half of the shares each book shows at the prices paid
+  (`AUTO_TRADE_BOOK_SHARE`): shown shares are often gone, or pulled, by the time an order lands.
+- **Paper trading** (`AUTO_TRADE_DRY_RUN=1`). Auto-trade picks and plans trades as usual but sends
+  nothing. It reads the real books at the moments each order would have landed (your measured order
+  times, else 0.15s Kalshi and 0.7s Polymarket) and applies the same rules: second leg at break-even with
+  retries, leftovers closed the cheaper way. Results show as "paper" in the bar, in their own column
+  under By market type, and in `paper_trades.jsonl`. They teach the buffers but never pause a type.
+  Paper fills assume the shown shares were really there, so real fills can only be the same or worse.
+
 **Fast lane.** A full sweep of every market takes 30-90 seconds, too slow for arbs that last
 seconds. While Auto-trade or Auto maker is on, the pairs Auto-trade could take (paying out within
 `FAST_MAX_HOURS`, games in progress left out unless `AUTO_TRADE_LIVE_GAMES=1`) get their own price
@@ -271,7 +294,12 @@ AUTO_TRADE_DAILY_LIMIT=100
 AUTO_TRADE_MIN_PROFIT=0         # optional dollar floor; ROI minimum below is what counts
 AUTO_TRADE_MIN_ROI=0.5          # percent
 AUTO_TRADE_COOLDOWN_SECS=60
-AUTO_TRADE_ORDER=thinner_first  # or together / polymarket_first
+AUTO_TRADE_ORDER=smart          # or thinner_first / together / polymarket_first
+AUTO_TRADE_FAST_EDGE=2          # cents a pair in crypto windows and games in progress
+AUTO_TRADE_LEARN_BUFFER=1       # plus each market type's typical price move
+AUTO_TRADE_THROTTLE=1           # pause a type below 40% filled, or losing, over its last 5
+AUTO_TRADE_BOOK_SHARE=50        # percent of each book's shown shares a trade may take
+AUTO_TRADE_DRY_RUN=0            # 1 = paper trading
 CLOSE_OUT_MAX_LOSS=0.05         # $/share above break-even a leftover may be hedged at; 0 = sell back
 ```
 

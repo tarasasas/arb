@@ -326,6 +326,8 @@
   .set-row input[type=number], .set-row select { margin-left: 6px; }
   .set-row .muted { font-size: 12.5px; margin-top: 2px; }
   .modal h4 { margin: 16px 0 4px; font-size: 14px; }
+  .badge-paper { background: var(--warning); color: #000; font-size: 11px; font-weight: 700; padding: 1px 6px;
+                 border-radius: 6px; letter-spacing: .02em; }
   .bal-opt { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
   .bal-opt.best { border-color: var(--accent, #2f5fd0); }
   .bal-opt.off { opacity: .7; }
@@ -869,16 +871,26 @@ function renderAuto(s) {
   if (!a) { el.style.display = "none"; return; }
   const on = tradingOn();
   el.className = "autobar" + (a.on ? " on" : a.halted ? " halted" : "");
-  const hist = (a.history || []).map(h => `<li>${esc(h.time.slice(11))} · ${esc(h.game || "")} · <b>${esc(h.status)}</b>${
+  const hist = (a.history || []).map(h => `<li>${esc(h.time.slice(11))} · ${h.paper ? `<span class="badge-paper">paper</span> ` : ""}${
+    esc(h.game || "")}${h.category ? ` <span class="muted">(${esc(h.category)})</span>` : ""} · <b>${esc(h.status)}</b>${
     h.spent == null ? "" : h.status === "ok" ? ` · ${money(h.spent)} in, net ${money(h.net)}`
       : ` · ${h.pairs ? `${compact(h.pairs)} pairs kept, ` : ""}net ${money(h.net)}`}${h.unhedged ? ` · <span style="color:var(--critical)">${compact(h.unhedged)} unhedged</span>` : ""}${
     h.ms && h.ms["total (tick to done)"] != null ? ` · <span class="muted">${h.ms["total (tick to done)"]} ms tick to done</span>` : ""}${
     h.missed ? `<br><span style="color:var(--critical)">Missed: ${esc(h.missed)}</span>` : ""}${
+    h.order ? `<br><span class="muted">Order: ${esc(h.order)}</span>` : ""}${
+    h.paused ? `<br><span style="color:var(--critical)">${esc(h.paused)}</span>` : ""}${
     h.note ? ` <span class="muted">${esc(h.note)}</span>` : ""}</li>`).join("");
+  const types = (a.stats || []).map(t => `<tr><td>${esc(t.category)}${t.fast ? ' <span class="muted">fast</span>' : ""}</td>
+      <td class="num">${t.tries ? `${t.filled}/${t.tries} · ${money(t.net)}` : "–"}</td>
+      <td class="num">${t.paper_tries ? `${t.paper_filled}/${t.paper_tries} · ${money(t.paper_net)}` : "–"}</td>
+      <td class="num" title="${esc(t.min_edge_why || "")}">${t.min_edge > 0 ? cents(t.min_edge) : "–"}</td>
+      <td>${t.paused ? `<span style="color:var(--critical)">paused: ${esc(t.paused)}</span>
+        <button data-resume="${esc(t.category)}" style="margin:0 0 0 6px">Resume</button>` : "trading"}</td></tr>`).join("");
   const missRun = Object.entries(a.misses || {}).filter(([, n]) => n > 0).map(([x, n]) => `${esc(x)} ${n}`).join(", ");
   el.innerHTML = `<b>⚡ Auto-trade</b>
     <button id="auto-toggle" ${on || a.on ? "" : "disabled"} class="${a.on ? "" : "trade"}" style="margin:0">${a.on ? "Turn off" : "Turn on"}</button>
     <span>${a.on ? `<span style="color:var(--good)">●</span> ON${a.busy ? ": trading now…" : ""}` : "OFF"}</span>
+    ${a.dry_run ? `<span class="badge-paper" title="Paper trading (Settings): everything but the orders; fills checked against the real books">PAPER TRADING: no real orders</span>` : ""}
     ${s.lane?.active ? `<span class="muted" title="The pairs Auto-trade could take get their own price check and go first on the live streams (Settings: Fast lane)">Fast lane:
       ${compact(s.lane.pairs)} pairs paying out within ${s.lane.hours ?? a.fast_max_hours}h, checked every
       ${s.lane.every != null ? s.lane.every.toFixed(1) : s.lane.seconds.toFixed(1)}s</span>` : ""}
@@ -888,20 +900,35 @@ function renderAuto(s) {
       ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit (too-good-to-be-true rows included)" : ", never rows flagged too good to be true"} ·
       ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade${a.min_profit > 0 ? ` · profit ≥ ${money(a.min_profit)}` : ""} ·
       stops after ${money(a.max_daily_loss)} lost in a day or ${a.max_misses} misses in a row on one site${missRun ? ` (now: ${missRun})` : ""} ·
-      second leg needs ${a.hedge_depth}× the shares in its book · ${money(a.spent_today)} of ${money(a.daily_limit)} used today</div></details>
+      second leg needs ${a.hedge_depth}× the shares in its book · takes at most ${pct(a.book_share)} of each book ·
+      fast markets need ${cents(a.fast_edge)} a pair${a.learn_buffer ? ", every type its learned buffer" : ""} ·
+      legs: ${esc(a.order)}${a.throttle ? " · a market type that keeps failing pauses itself" : ""} ·
+      ${money(a.spent_today)} of ${money(a.daily_limit)} used today</div></details>
     ${a.spent_today > 0 && a.net_today != null ? `<span>Today: <b class="profit">${money(a.net_today)}</b> on ${money(a.spent_today)} =
       <b>${pct(a.net_today / a.spent_today)}</b></span>` : ""}
     ${a.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(a.halted)}</div>` : ""}
     ${!on && !a.on ? `<span class="muted">(trading ${esc(state?.stats?.trading || "is off")})</span>` : ""}
     ${hist ? `<details><summary class="muted">Last auto-trades</summary><ol>${hist}</ol></details>` : ""}
+    ${types ? `<details class="types"><summary class="muted">By market type</summary><div class="table-wrap" style="margin-top:6px">
+      <table><thead><tr><th>Market type</th><th class="num">Real: filled · net</th><th class="num">Paper: filled · net</th>
+      <th class="num" title="Edge per pair needed before Auto-trade tries one">Needs</th><th></th></tr></thead>
+      <tbody>${types}</tbody></table></div></details>` : ""}
     ${speedHtml(s.latency)}`;
   el.querySelectorAll("details").forEach((d, i) => {      // keep each section open across refreshes
-    const key = d.classList.contains("speed") ? "speed" : d.classList.contains("limits") ? "limits" : "history";
+    const key = d.classList.contains("speed") ? "speed" : d.classList.contains("limits") ? "limits"
+      : d.classList.contains("types") ? "types" : "history";
     d.open = !!autoOpenSet[key];
     d.addEventListener("toggle", () => { autoOpenSet[key] = d.open; });
   });
+  el.querySelectorAll("[data-resume]").forEach(b => b.onclick = async () => {
+    try { state.autotrade = await post("/api/autotrade/resume", { category: b.dataset.resume }); renderAuto(state); }
+    catch (e) { alert(e.message); }
+  });
   document.getElementById("auto-toggle").onclick = async () => {
-    if (!a.on && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
+    if (!a.on && a.dry_run && !confirm(`Turn on paper trading?\n\nAuto-trade will pick and plan trades as usual but send no orders: ` +
+        `it checks the real books when each order would have landed and records what would have filled. Turn paper ` +
+        `trading off in ⚙ Settings to trade for real.`)) return;
+    if (!a.on && !a.dry_run && !confirm(`Turn on Auto-trade?\n\nIt will place real orders on both sites without asking, up to ${money(a.max_trade)} per trade ` +
         `and ${money(a.daily_limit)} per day (${money(a.spent_today)} used so far), for arbs settling within ${a.fast_max_hours}h` +
         `${a.allow_auto_matched ? ", including auto-matched pairs you haven't checked (a wrong match can lose on both sides)" : ""}. ` +
         `It turns itself off if a trade leaves shares unhedged. Change what it may take in ⚙ Settings.`)) return;
@@ -1537,7 +1564,7 @@ async function openSettings() {
   }
   const items = cur.groups.flatMap(g => g.items);
   const shown = (it, v) => it.kind === "bool" ? (v ? "on" : "off") : it.kind === "money" ? money(v)
-    : it.kind === "percent" ? v + "%" : String(v);
+    : it.kind === "percent" ? v + "%" : it.kind === "cents" ? v + "¢" : String(v);
   const field = it => {
     const attrs = `data-set="${esc(it.key)}"`;
     const input = it.kind === "bool" ? `<input type="checkbox" ${attrs} ${it.value ? "checked" : ""}>`
