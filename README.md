@@ -188,17 +188,29 @@ dashboard header shows `Trading: on`. Clicking **Make trade** on an opportunity:
      "Max to invest", and at each account's cash.
 2. **Shows a confirm dialog** with both orders, limit prices, costs, and expected profit.
    The prices are valid for 20 seconds.
-3. **Places the first leg** on the thinner book, as an immediate-or-cancel limit order.
-4. **Places the second leg** for exactly the shares that filled, capped at the break-even
-   price. It retries twice on fresh prices.
-5. **Sells back** any first-leg shares that still aren't hedged, straight away.
-6. **Shows the result:**
+3. **Re-checks both books when you confirm.** If depth moved while the dialog was open, the
+   trade shrinks to what both books still hold at the limits you confirmed. If nothing is left,
+   it's cancelled with no order sent. This way the first leg never buys shares the second leg
+   can't cover.
+4. **Places the first leg** on the thinner book, as an immediate-or-cancel limit order.
+5. **Places the second leg** at once, for exactly the shares that filled. Its limit is the
+   break-even price. It can go up to 2¢ a share past break-even, but only when selling the
+   first leg back would lose more (`HEDGE_MAX_LOSS_PER_SHARE`; set it to 0 to never pass
+   break-even). An immediate-or-cancel order still fills at the best prices on the book, so
+   the higher limit costs more only if the book moved. If it falls short, it retries up to 3
+   times within 1.5 seconds, and each retry is sent only when the live book shows shares at
+   or under that limit.
+6. **Sells back** any first-leg shares that still aren't hedged, straight away.
+7. **Shows the result:**
    - hedged pairs;
    - locked profit;
    - sell-back gain or loss;
    - any shares left unhedged, in red.
 
 Every order and response is appended to `trades.jsonl` in this folder.
+
+Trade requests skip the scanner's rate-limit queue, so a background sweep never delays an
+order or a book check made during a trade.
 
 Trade requests need a token that only the dashboard page receives, so other websites can't
 trigger orders. The server listens on localhost only.

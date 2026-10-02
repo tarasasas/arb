@@ -216,10 +216,10 @@ class PolymarketClient:
                     if s not in seen:
                         by_slug[s].yes_ask = by_slug[s].no_ask = None
 
-    def live_levels(self, slug):
+    def live_levels(self, slug, priority=False):
         """Current depth for buying each side: {"yes": [...], "no": [...], "state": ...}.
         Buying YES lifts offers; buying NO = shorting into bids at cost (1 - bid)."""
-        d = self.http.get(f"/markets/{slug}/book").get("marketData") or {}
+        d = self.http.get(f"/markets/{slug}/book", priority=priority).get("marketData") or {}
         bids = [(_q(l.get("px")), float(l.get("qty") or 0)) for l in d.get("bids") or []]
         offers = [(_q(l.get("px")), float(l.get("qty") or 0)) for l in d.get("offers") or []]
         bids = sorted(((p, q) for p, q in bids if p is not None and q > 0), key=lambda t: -t[0])

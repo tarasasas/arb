@@ -34,22 +34,27 @@ class RateLimitedClient:
     def set_rate(self, rps):
         self.min_interval = 1.0 / rps
 
-    def _wait_turn(self):
+    def _wait_turn(self, priority=False):
         with self._lock:
             now = time.monotonic()
+            if priority:
+                # Trades go now, ahead of the scanner's queued reads, and push that queue back one
+                # slot so the average rate stays within budget.
+                self._next_slot = max(now, self._next_slot) + self.min_interval
+                return
             slot = max(now, self._next_slot)
             self._next_slot = slot + self.min_interval
         delay = slot - time.monotonic()
         if delay > 0:
             time.sleep(delay)
 
-    def post(self, path, body):
+    def post(self, path, body, priority=False):
         """POST JSON. Orders are not idempotent, so the only retry is on 429 (the request
         was refused before reaching the exchange). Other failures raise ApiError at once."""
         url = self.base_url + path
         data = json.dumps(body).encode()
         for attempt in range(self.max_retries):
-            self._wait_turn()
+            self._wait_turn(priority)
             self.request_count += 1
             headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Content-Type": "application/json"}
             if self.signer:
@@ -66,14 +71,14 @@ class RateLimitedClient:
                     continue
                 raise ApiError(e.code, detail) from e
 
-    def get(self, path, params=None):
+    def get(self, path, params=None, priority=False):
         """GET base_url + path. `params` may be a dict or a list of (key, value) pairs
-        (use the list form for repeated keys such as ?slug=a&slug=b)."""
+        (use the list form for repeated keys such as ?slug=a&slug=b). priority=True skips the queue."""
         url = self.base_url + path
         if params:
             url += "?" + urllib.parse.urlencode(params, doseq=True)
         for attempt in range(self.max_retries):
-            self._wait_turn()
+            self._wait_turn(priority)
             self.request_count += 1
             headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
             if self.signer:

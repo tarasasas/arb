@@ -386,6 +386,8 @@ function renderPlan(plan, r) {
       <td class="num">≤ $${l.limit.toFixed(3)}</td><td class="num">${money(l.amount)} + ${money(l.fee)}</td>
       <td class="num">${compact(l.available_at_limit)}</td><td class="num">${money(l.balance)}</td></tr>`; }).join("");
   const second = EXNAME[order[1]], first = EXNAME[order[0]];
+  const h = plan.hedge || {}, overBe = h.max_loss_per_share > 0
+    ? ` (or up to ${(h.max_loss_per_share * 100).toFixed(1).replace(/\.0$/, "")}¢ a share past it, only when that loses less than selling back)` : "";
   showModal(`<h3>Confirm trade: ${esc(r.game)} · ${esc(r.quantity)}</h3>
     ${r.warnings.length ? `<ul class="${r.pair?.auto ? "alert" : ""}" style="margin:0 0 8px 18px;padding:0">
       ${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
@@ -395,8 +397,10 @@ function renderPlan(plan, r) {
     <div class="eq">Total cost <b>${money(plan.capital)}</b> · guaranteed payout <b>${money(plan.payout * plan.size)}</b> ·
       expected profit <b class="profit">${money(plan.expected_profit)}</b>
       <span class="muted">(cap ${money(plan.cap)})</span></div>
-    <div class="policy">${first} goes first (thinner book). ${second} is then bought for exactly the shares that filled, never above
-      break-even, retried up to 2 more times at fresh prices. Any ${first} shares still unhedged are sold back immediately.
+    <div class="policy">When you confirm, both books are checked again: if depth moved, the trade shrinks to what's still there at these
+      limits, or is cancelled with nothing sent. ${first} goes first (thinner book). ${second} is then bought at once for exactly
+      the shares that filled, at up to break-even${overBe}, and retried for up to ${h.window_secs ?? 1.5}s whenever its book
+      shows shares under that price. Any ${first} shares still unhedged are sold back.
       Every order is logged to D:\\Projects\\arb\\trades.jsonl.</div>
     <div class="actions"><span class="muted" id="ttl"></span>
       <button onclick="closeModal()">Cancel</button>

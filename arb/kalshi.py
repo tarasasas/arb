@@ -251,9 +251,9 @@ class KalshiClient:
                 m.yes_ask, m.yes_ask_size = buy_yes[0] if buy_yes else (None, None)
                 m.no_ask, m.no_ask_size = buy_no[0] if buy_no else (None, None)
 
-    def live_levels(self, ticker):
+    def live_levels(self, ticker, priority=False):
         """Current depth for buying each side of one market: {"yes": [...], "no": [...]}."""
-        return buy_levels(self.http.get(f"/markets/{ticker}/orderbook").get("orderbook_fp") or {})
+        return buy_levels(self.http.get(f"/markets/{ticker}/orderbook", priority=priority).get("orderbook_fp") or {})
 
 
 def buy_levels(book):
