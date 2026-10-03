@@ -150,6 +150,30 @@ class BalanceTests(unittest.TestCase):
         self.assertIn("down", s.state["balances"]["error"])
 
 
+class SyncPositionsTests(unittest.TestCase):
+    def test_position_check_pairs_and_records(self):
+        """The My positions check (and its Sync button) end to end: read both accounts, pair, record."""
+        import threading
+        from unittest import mock
+        from arb import scanner
+
+        class Acc:
+            missing, kalshi_http = [], None
+
+            def positions(self):
+                return {"KXGAS-5.20": {"side": "yes", "shares": 10, "paid": 4.0}}, {}
+        s = scanner.Scanner.__new__(scanner.Scanner)
+        s.lock, s.state, s.accounts, s.logs = threading.Lock(), {}, Acc(), []
+        s.log = s.logs.append
+        s.kalshi = s.pm = None
+        s.find_matches = lambda ex, mid: []
+        s.my_arbs = mock.Mock(known_pairs=0, **{f"{m}.return_value": [] for m in
+                                                ("reconcile", "update_cost_basis", "verify")})
+        s.sync_positions()
+        self.assertEqual((s.my_arbs.sync_state["status"], s.my_arbs.sync_state["positions"]), ("ok", 1))
+        s.my_arbs.sync_from_accounts.assert_called_once()
+
+
 class HeldFeeTests(unittest.TestCase):
     """Kalshi's positions list gives lifetime fees for a market; the cost of what you hold uses only
     the fees on the contracts still held (what Kalshi's app shows as "includes fee of")."""

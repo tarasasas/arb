@@ -8,7 +8,7 @@ import traceback
 from collections import Counter, deque
 from datetime import timedelta
 
-from . import combos, config, crypto, engine, gctune, kalshi, matching, nonsports, warmcache
+from . import accounts, combos, config, crypto, engine, gctune, kalshi, matching, nonsports, warmcache
 from .http import LanePool, priority
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
@@ -411,7 +411,6 @@ class Scanner:
 
     def _make_accounts(self):
         """Signed reads of both accounts. Polymarket's go over the client its orders use (same host and key)."""
-        from . import accounts
         pv = ((getattr(self, "trader", None) and self.trader.venues) or {}).get("polymarket")
         return accounts.Accounts(self.kalshi, pm_http=getattr(pv, "http", None))
 
