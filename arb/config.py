@@ -326,6 +326,13 @@ MIN_PROFIT_DOLLARS = 0.01      # hide opportunities below this guaranteed profit
 NEAR_MISS_EDGE = -0.03         # also track pairs within 3 cents of breaking even (per contract)
 MAX_NEAR_MISSES = 50
 HOT_MAX_PAIRS = 400            # near-arb pairs re-checked between full sweeps (closest first)
+# Combos (Combos tab: 3-way dutches and same-site line arbs, see combos.py). The closest COMBO_HOT_MAX are
+# re-checked with the near-arb pairs; at most COMBO_MAX_ROWS are sized per pass, fetching at most
+# COMBO_BOOK_BUDGET Polymarket books for them; a combo a pass didn't re-check is shown this long at most.
+COMBO_HOT_MAX = 100
+COMBO_MAX_ROWS = 40
+COMBO_BOOK_BUDGET = 10
+COMBO_MAX_AGE_SECS = 120
 GIL_SWITCH_SECS = 0.001        # a busy thread hands over to the others (stream re-checks, trades) this often
 GC_FULL_EVERY_SECS = 1800      # full garbage collection at most this often (it pauses everything; see gctune)
 GC_GEN2_THRESHOLD = 1000       # Python's automatic full collections: every this many middle ones (default 10)

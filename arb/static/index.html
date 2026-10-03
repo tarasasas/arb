@@ -1144,6 +1144,7 @@ function checksHtml(r) {
 // ---- category tabs: Sports, Politics, Economics, ... (the row's "tab" comes from the scanner) ----------
 const TAB_ORDER = ["All", "Sports", "Politics", "Economics", "Crypto", "Culture", "Weather", "Tech & science", "Finance", "Other"];
 const MAKER = "Maker mode";
+const COMBOS = "Combos";
 let currentTab = "All";
 try { currentTab = localStorage.getItem("arb-tab") || "All"; } catch (e) {}
 if (currentTab === "My arbs") { currentTab = "All"; view = "positions"; setView(view); }
@@ -1155,7 +1156,9 @@ function renderTabs(rows) {
     .filter(t => t === "All" || counts[t] || t === currentTab || t === "Sports")
     .map(t => `<button role="tab" aria-selected="${t === currentTab}" class="${t === currentTab ? "on" : ""}${counts[t] ? "" : " zero"}" data-tab="${esc(t)}">${esc(t)}<span class="n">${counts[t] || 0}</span></button>`)
     .join("") + `<button role="tab" aria-selected="${currentTab === MAKER}" class="mine ${currentTab === MAKER ? "on" : ""}"
-      data-tab="${MAKER}" title="Near-misses that turn profitable when the Polymarket leg rests as a maker order">${MAKER}<span class="n">${(state?.maker || []).length}</span></button>`;
+      data-tab="${MAKER}" title="Near-misses that turn profitable when the Polymarket leg rests as a maker order">${MAKER}<span class="n">${(state?.maker || []).length}</span></button>`
+    + `<button role="tab" aria-selected="${currentTab === COMBOS}" class="${currentTab === COMBOS ? "on" : ""}"
+      data-tab="${COMBOS}" title="3-way dutches (every result of a game that can draw) and same-site line arbs">${COMBOS}<span class="n">${(state?.combos || []).length}</span></button>`;
 }
 document.getElementById("tabs-bar").addEventListener("click", e => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
@@ -1719,6 +1722,134 @@ document.getElementById("alert-test").addEventListener("click", async e => {
   b.disabled = false;
 });
 
+// ---- Combos: 3-way dutches and same-site line arbs (2-3 legs, either site) -----------------------
+const comboKey = r => "combo:" + r.key;
+let combosByKey = new Map();
+const feeOf = l => l.exchange === "Kalshi" ? kalshiFee : pmFee;
+function comboCalc(r, n) {
+  const legs = r.legs.map(l => { const f = take(l.fills || [], n);
+    return { n: f.reduce((a, [, q]) => a + q, 0), fills: f, cost: sum(f), fee: feeOf(l)(f, l.fee_coef) }; });
+  const capital = legs.reduce((a, l) => a + l.cost + l.fee, 0), payout = r.payout * n;
+  const days = r.closes ? Math.max((new Date(r.closes) - Date.now()) / 864e5, 0.25) : null;
+  const roi = capital ? (payout - capital) / capital : 0;
+  return { n, legs, capital, payout, profit: payout - capital, roi, annualized: days ? roi * 365 / days : null };
+}
+function comboSize(r, budget) {                  // your Max to invest, if set; Make trade checks cash live
+  const full = comboCalc(r, r.size);
+  if (!(budget > 0) || full.capital <= budget + 1e-9) return full;
+  let lo = 0, hi = r.size;
+  while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); comboCalc(r, mid).capital <= budget + 1e-9 ? lo = mid : hi = mid - 1; }
+  return { ...comboCalc(r, lo), limitedBy: ["budget"] };
+}
+function comboLegHtml(l, s) {
+  const cls = l.exchange === "Kalshi" ? "kalshi" : "poly", side = l.side === "yes" ? "Yes" : "No";
+  const lim = s && s.fills.length ? s.fills[s.fills.length - 1][0] : l.price;
+  return `<div class="leg"><span class="ex ${cls}">${esc(l.exchange.toUpperCase())}</span>
+    <span class="what"><b>Buy → ${side}</b>${s && s.n ? ` · <b>${s.n.toLocaleString()}</b> shares · limit <b>${cents(lim)}</b>
+      <span class="muted">= ${money(s.cost + s.fee)}</span>` : ` @ ${cents(l.price)}`}<span class="mkt" title="${esc(l.title)}">${esc(l.title)}</span></span></div>`;
+}
+const COMBO_HOW = {
+  "3-way": "Every result of the game is bought, each on whichever site is cheaper, so exactly one leg pays $1 (or, all NO, exactly two do) whatever happens.",
+  "same-site": "Two lines on the same site whose prices disagree: together they pay at least the guaranteed amount whatever happens, and both orders go to one exchange.",
+};
+function comboDetails(r, z) {
+  const head = r.legs.map(l => `<th class="num">${esc(l.exchange)} ${l.side.toUpperCase()}</th>`).join("");
+  const rows = r.scenarios.map(sc => { const pl = sc.total * z.n - z.capital;
+    return `<tr><td>${esc(sc.outcome)}</td>${sc.pays.map(v => `<td class="num">$${v.toFixed(2)}</td>`).join("")}
+      <td class="num"><b>$${sc.total.toFixed(2)}</b></td><td class="num ${pl >= 0 ? "profit" : ""}">${money(pl)}</td></tr>`; }).join("");
+  return `${r.warnings.length ? `<div class="callout"><b>Check before trading</b><ul>${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <div class="math"><div class="eq"><b>${esc(r.strategy_name)}.</b> ${esc(COMBO_HOW[r.strategy] || "")}</div>
+    <div class="eq">${z.n.toLocaleString()} sets cost ${money(z.capital)} and pay at least ${money(r.payout * z.n)}: profit <b class="profit">${money(z.profit)}</b> whatever the result.</div>
+    <table><thead><tr><th>Result</th>${head}<th class="num">Per set</th><th class="num">P/L at ${compact(z.n)}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function renderCombos(s, budget, minP, minR) {
+  const list = (s.combos || []).filter(passes).map(r => ({ r, z: comboSize(r, budget) }))
+    .filter(({ z }) => z.n > 0 && z.profit > 0 && z.profit >= minP && z.roi >= minR)
+    .sort((a, b) => sortCompare(a, b) || b.z.profit - a.z.profit);
+  combosByKey = new Map(list.map(o => [comboKey(o.r), o.r]));
+  document.getElementById("t-count").textContent = list.length;
+  document.getElementById("t-best").textContent = list[0] ? money(list[0].z.profit) : "–";
+  document.getElementById("t-best-note").textContent = list[0] ? `${pct(list[0].z.roi)} on ${money(list[0].z.capital)}` : "";
+  const on = tradingOn();
+  document.getElementById("opps").innerHTML = list.length ? list.map(({ r, z }) => {
+    const key = comboKey(r);
+    const row = `<tr class="row" data-key="${esc(key)}">
+      <td class="num profit c-profit" data-label="Profit">${money(z.profit)}</td><td class="num c-roi" data-label="ROI">${pct(z.roi)}</td>
+      <td class="num c-ann" data-label="Annualized">${pct(z.annualized)}</td>
+      <td class="num c-n" data-label="Sets">${compact(z.n)}${z.n < r.size ? `<div class="muted">of ${compact(r.size)}<br>limited by your Max to invest</div>` : ""}</td>
+      <td class="num c-cap" data-label="Capital">${money(z.capital)}</td>
+      <td class="c-game"><b>${esc(r.game)}</b> <span class="muted">${esc(r.league)}</span> <span class="pin">${esc(r.strategy_name)}</span>
+        <div class="secondary g-quantity">${esc(r.quantity)}</div>
+        <div class="muted g-when">result ${esc(localTime(r.closes))}${r.checked ? ` · prices checked ${ago(r.checked)}` : ""}</div></td>
+      <td class="c-legs">${r.legs.map((l, i) => comboLegHtml(l, z.legs[i])).join("")}</td>
+      <td class="c-checks"><div class="ck-buttons"><button class="trade" data-action="combo-trade" data-key="${esc(key)}" ${on ? "" : "disabled"}
+        title="${on ? "Check live prices, then confirm" : esc(s?.stats?.trading || "Trading is off")}">Make trade</button></div></td></tr>`;
+    const det = open.has(key) || document.getElementById("f-expand").checked
+      ? `<tr class="details"><td colspan="8">${comboDetails(r, z)}</td></tr>` : "";
+    return row + det;
+  }).join("") : `<tr><td colspan="8" class="empty">${s.last_prices ? "No combos right now: 3-way dutches and same-site line arbs show here when they appear. The scanner checks on every pass." : "Waiting for the first scan…"}</td></tr>`;
+}
+async function openComboTrade(key) {
+  const r = combosByKey.get(key); if (!r) return;
+  showModal(`<h3>Make trade</h3><div class="muted">Checking live order books and balances…</div>`);
+  const budget = +document.getElementById("f-budget").value || null;
+  try {
+    const plan = await post("/api/combo/prepare", {
+      legs: r.legs.map(l => ({ exchange: l.exchange.toLowerCase(), market_id: l.market_id, side: l.side })), max_invest: budget });
+    renderComboPlan(plan, r);
+  } catch (e) {
+    showModal(`<h3>Can't trade this right now</h3><div class="alert">${esc(e.message)}</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+}
+function renderComboPlan(plan, r) {
+  const rows = plan.legs.map((l, i) => `<tr><td>${i + 1}</td><td><b>${EXNAME[l.exchange]}</b>${l.shard ? ` <span class="muted">shard ${l.shard}</span>` : ""}</td>
+      <td>Buy <b>${plan.size.toLocaleString()} ${l.side.toUpperCase()}</b><div class="muted">${esc(l.title)}</div></td>
+      <td class="num">≤ $${l.limit.toFixed(3)}</td><td class="num">${money(l.amount)} + ${money(l.fee)}</td>
+      <td class="num">${compact(l.available_at_limit)}</td><td class="num">${money(l.balance)}</td></tr>`).join("");
+  showModal(`<h3>Confirm ${esc(r.strategy_name.toLowerCase())}: ${esc(r.game)} · ${esc(r.quantity)}</h3>
+    ${r.warnings.length ? `<ul style="margin:0 0 8px 18px;padding:0">${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+    <div class="muted">Live prices just now. Orders are immediate-or-cancel: they fill what's available at your limit and cancel the rest.</div>
+    <table><thead><tr><th>#</th><th>Exchange</th><th>Order</th><th class="num">Limit</th><th class="num">Est. cost + fee</th>
+      <th class="num">Available at limit</th><th class="num">Your cash</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="eq">Total cost <b>${money(plan.capital)}</b> · guaranteed payout <b>${money(plan.payout * plan.size)}</b> ·
+      expected profit <b class="profit">${money(plan.expected_profit)}</b> <span class="muted">(cap ${money(plan.cap)})</span></div>
+    <div class="policy">All ${plan.legs.length} orders are sent at the same moment. A leg that fills short is topped up, never above
+      break-even for a whole set, up to 2 more times; shares that still don't make a whole set are sold back. If you confirm after
+      a moment, the books are re-checked first: the trade can shrink, never grow, and nothing is sent if the combo is gone.
+      Every order is logged to trades.jsonl. Combos aren't added to My arbs (it tracks two-leg pairs).</div>
+    <div class="actions"><span class="muted" id="ttl"></span>
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" id="confirm-btn">Confirm – place orders</button></div>`);
+  let left = 20;
+  const tick = () => { const el = document.getElementById("ttl"); if (!el) return;
+    el.textContent = left > 0 ? `Prices valid for ${left}s` : "Expired: close and press Make trade again";
+    if (left <= 0) { document.getElementById("confirm-btn").disabled = true; clearInterval(countdown); } left--; };
+  tick(); countdown = setInterval(tick, 1000);
+  document.getElementById("confirm-btn").onclick = () => executeCombo(plan, r);
+}
+async function executeCombo(plan, r) {
+  clearInterval(countdown);
+  showModal(`<h3>Placing orders…</h3><div class="muted">Don't close this window.</div>`);
+  try {
+    const res = await post("/api/combo/execute", { plan_id: plan.id, row: { game: r.game, tab: r.tab, closes: r.closes } });
+    showModal(`<h3>${res.status === "ok" ? "Trade complete" : res.status === "no_fill" || res.status === "moved" ? "Nothing traded" : "Trade partly completed"}</h3>
+      <ol>${res.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+      ${res.note ? `<div class="muted">${esc(res.note)}</div>` : ""}
+      <div class="eq">Whole sets: <b>${compact(res.hedged_sets)}</b> · locked profit <b class="profit">${money(res.locked_profit)}</b>
+        ${res.sellback_pnl ? ` · sell-back ${res.sellback_pnl >= 0 ? "+" : ""}${money(res.sellback_pnl)}` : ""} · net <b>${money(res.net)}</b></div>
+      ${res.unhedged_shares > 0 ? `<div class="alert">⚠ Still unmatched: ${res.unhedged.map(u => `${compact(u.shares)} ${esc(u.exchange)}
+        ${esc(u.side.toUpperCase())} ${esc(u.market_id)}`).join(", ")}. Sell them or complete the set manually.</div>` : ""}
+      ${res.timeline?.stages ? `<div class="policy">Timing: ${Object.entries(res.timeline.stages).map(([k, v]) => `${esc(k)} ${v} ms`).join(" · ")}</div>` : ""}
+      <div class="policy">Check your accounts to confirm. Details are in trades.jsonl.</div>
+      <div class="actions"><button class="primary" onclick="closeModal()">Done</button></div>`);
+  } catch (e) {
+    showModal(`<h3>Trade failed</h3><div class="alert">${esc(e.message)}</div>
+      <div class="policy">Check both accounts before trying again.</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+}
+
 function render(force) {
   if (!state) return;
   const s = state, st = s.stats || {};
@@ -1805,6 +1936,7 @@ function render(force) {
   // Don't rebuild the table while you're typing in it (it would wipe the cursor).
   const body = document.getElementById("opps"), ae = document.activeElement;
   if (!force && ae && body.contains(ae) && /INPUT|SELECT/.test(ae.tagName)) return renderRest(s);
+  if (currentTab === COMBOS) { renderCombos(s, budget, minP, minR); return renderRest(s); }
   const all = [...opps.map(o => ({ ...o, stale: false })), ...pinnedRows];
   body.innerHTML = all.length ? all.map(({ r, z, stale }) => {
     const key = rowKey(r), isPinned = pinned.has(key);
@@ -1865,6 +1997,7 @@ opps.addEventListener("click", e => {
     const k = btn.dataset.key;
     if (btn.dataset.action === "live") checkLive(k);
     if (btn.dataset.action === "trade") openTrade(k);
+    if (btn.dataset.action === "combo-trade") openComboTrade(k);
     if (btn.dataset.action === "fast") fastTrade(k);
     if (btn.dataset.action === "track") openTrack(rowsByKey.get(k));
     if (btn.dataset.action === "verify" || btn.dataset.action === "wrong") verifyMatch(k, btn);

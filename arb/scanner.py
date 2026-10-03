@@ -8,7 +8,7 @@ import traceback
 from collections import Counter, deque
 from datetime import timedelta
 
-from . import config, crypto, engine, gctune, kalshi, matching, nonsports, warmcache
+from . import combos, config, crypto, engine, gctune, kalshi, matching, nonsports, warmcache
 from .http import LanePool, priority
 from .kalshi import KalshiClient
 from .matchstore import MatchStore
@@ -57,6 +57,8 @@ class Scanner:
         self.auto_pairs = []            # confident non-sports matches scanned without your approval
         self.crypto_cat = ([], {})      # crypto price markets on both sites, grouped by settlement instant
         self.trader, self.trading_status = self._make_trader()
+        from .combotrade import ComboTrader
+        self.combo_trader = ComboTrader(self.trader)      # Make trade for the Combos tab
         self.load_focus()               # scan only markets settling soon, if you set Focus
         from .autotrade import AutoTrader
         self.autotrader = AutoTrader(self, stats_path=config.EXEC_STATS_FILE)   # off until you turn it on
@@ -769,12 +771,18 @@ class Scanner:
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
         self._prefetch_trade_info(cands)
+        # Combos (3-way dutches, same-site line arbs) on full sweeps and near-arb passes; see combos.py.
+        with_combos = stream_groups is None and not lane
+        combo_cands = combos.screen(groups, config.NEAR_MISS_EDGE, engine.now_utc()) if with_combos else []
         if not hot:
             # The closest pairs only: a long hot list re-checks slowly, and arbs come from the closest.
             hot_map = {}
             for c in cands[:config.HOT_MAX_PAIRS]:
                 ids = hot_map.setdefault((c["k"].game_key, c["k"].var), set())
                 ids.update({("kalshi", c["k"].market_id), ("polymarket", c["p"].market_id)})
+            for cc in combo_cands[:config.COMBO_HOT_MAX]:          # near combos are re-checked with them
+                for c, _ in cc["legs"]:
+                    hot_map.setdefault((c.game_key, c.var), set()).add((c.exchange, c.market_id))
             with self.lock:
                 self.hot_groups = hot_map
             self._stream_wanted(cands)
@@ -856,6 +864,8 @@ class Scanner:
                 near.append(engine.to_row(cand, None, now))
 
         maker = self._maker_rows(cands, source, now) if stream_groups is None and not lane else None
+        combo_rows = (self._combo_rows(combo_cands, source, streamed | {("polymarket", sl) for sl in fetched}
+                                       | {("kalshi", t) for t in want_k}, now) if with_combos else None)
 
         # A pass only replaces the rows it actually re-checked. The hot pass covers a few markets and
         # fetches at most 15 books, so without this the table dropped from ~50 rows to 15 between sweeps.
@@ -890,6 +900,8 @@ class Scanner:
             elif stream_groups is None:
                 self.state.update({"near_misses": near, "hot_seconds" if hot else "scan_seconds": secs,
                                    "maker": maker})
+            if combo_rows is not None:
+                self.state["combos"] = self._merge_combos(combo_rows, covered, index, now)
             if not hot:
                 self.state["last_full"] = now.isoformat()
                 self._warm_ready = complete
@@ -919,6 +931,58 @@ class Scanner:
                     break
         if ids:
             trader.prefetch_info(ids)
+
+    def _combo_rows(self, cands, source, have_books, now):
+        """Rows for the combos with a top-of-book edge: their books fetched (Kalshi in one batch, Polymarket up
+        to COMBO_BOOK_BUDGET), then sized on real depth across every leg. have_books: (exchange, market id)
+        whose book is already current this pass (streamed, or fetched for a pair)."""
+        pos = [c for c in cands if c["edge"] > 0][:config.COMBO_MAX_ROWS]
+        if not pos:
+            return []
+        legs = {(c.exchange, c.market_id) for cand in pos for c, _ in cand["legs"]} - have_books
+        want_k = [source[k] for k in legs if k[0] == "kalshi" and k in source]
+        want_p = [source[k] for k in legs if k[0] == "polymarket" and k in source][:config.COMBO_BOOK_BUDGET]
+
+        def pm_book(pm):
+            try:
+                self.pm.refresh_book(pm)
+            except Exception:
+                pm.levels = {}                 # no current book: that combo isn't sized this pass
+        with LanePool(min(8, len(want_p)) + 1) as pool:
+            k_job = pool.submit(self.kalshi.refresh_books, want_k) if want_k else None
+            list(pool.map(pm_book, want_p))
+            if k_job:
+                k_job.result()
+        rows = []
+        for cand in pos:
+            levels = [((getattr(source.get((c.exchange, c.market_id)), "levels", None) or {}).get(s) or [])
+                      for c, s in cand["legs"]]
+            if any(not lv for lv in levels):
+                continue
+            # prices from the books just read, not from the screen's quotes
+            asks = [lv[0][0] for lv in levels]
+            edge = cand["payout"] - sum(a + engine.fee_per_contract(c.fee_coef, a) for a, (c, _) in zip(asks, cand["legs"]))
+            sizing = combos.size(cand["legs"], levels, cand["payout"]) if edge > 0 else None
+            if sizing and sizing["profit"] >= config.MIN_PROFIT_DOLLARS:
+                shards = {c.market_id: getattr(source.get(("kalshi", c.market_id)), "shard", 0)
+                          for c, _ in cand["legs"] if c.exchange == "kalshi"}
+                rows.append(combos.to_row({**cand, "asks": asks, "edge": edge}, sizing, now, shards))
+        rows.sort(key=lambda r: -r["profit"])
+        return rows
+
+    def _merge_combos(self, rows, covered, index, now):
+        """This pass's combos, plus earlier ones it didn't re-check (not all their markets were in this pass),
+        while their markets are still listed and they're no older than COMBO_MAX_AGE_SECS."""
+        found = {r["key"] for r in rows}
+        out = list(rows)
+        for r in self.state.get("combos") or []:
+            legs = {(l["exchange"].lower(), l["market_id"]) for l in r["legs"]}
+            age = (now - engine._parse_time(r["checked"])).total_seconds() if r.get("checked") else math.inf
+            if (r["key"] not in found and not legs <= covered and all(leg in index for leg in legs)
+                    and age <= config.COMBO_MAX_AGE_SECS):
+                out.append(r)
+        out.sort(key=lambda r: -r["profit"])
+        return out
 
     def _maker_rows(self, cands, source, now):
         """Near-misses that become profitable with the Polymarket leg resting as a maker order."""
@@ -1180,6 +1244,7 @@ class Scanner:
         s["logs"] = list(self.logs)[-30:]
         s["autotrade"] = self.autotrader.status()
         s["makerbot"] = self.makerbot.status()
+        s["combo_history"] = list(getattr(getattr(self, "combo_trader", None), "history", []))
         s["focus"] = {"days": getattr(self, "focus_days", 0), "contracts": len(self.contracts)}
         s["latency"] = self.latency_summary()
         return s

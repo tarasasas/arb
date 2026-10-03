@@ -224,6 +224,16 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     result = scanner.trader.execute(body.get("plan_id", ""))
                     record_trade(scanner, result, body.get("row"))
                     return self._json(200, result)
+                if path == "/api/combo/prepare":
+                    plan = scanner.combo_trader.prepare(body.get("legs") or [], body.get("max_invest") or None)
+                    scanner.log(f"Combo plan: {plan['size']:g} sets, ${plan['capital']:.2f}, "
+                                f"expected +${plan['expected_profit']:.2f}")
+                    return self._json(200, plan)
+                if path == "/api/combo/execute":
+                    from .combotrade import record_combo
+                    result = scanner.combo_trader.execute(body.get("plan_id", ""))
+                    record_combo(scanner, result, body.get("row"))
+                    return self._json(200, result)
                 if path == "/api/trade/fast":
                     return self._json(200, fast_trade(scanner, body.get("legs") or [], body.get("max_invest") or None))
                 if path == "/api/focus":

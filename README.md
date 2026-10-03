@@ -691,6 +691,32 @@ Only the matching is reused. Every price is fetched live before anything is show
 closed in the meantime just drop out. A cache more than 12 hours old is ignored. To force a completely
 fresh start, delete the `cache` folder.
 
+## Combos: 3-way dutches and same-site line arbs
+
+The **Combos** tab (next to Maker mode) lists two kinds of risk-free sports trades the pair scan can't
+see, because they aren't one Kalshi leg plus one Polymarket leg:
+
+- **3-way dutch.** A game that can end in a draw (soccer, and periods of most sports) has three results.
+  Buying each result's YES, each on whichever site is cheaper, pays $1 whatever happens; buying each
+  result's NO pays $2 (two of the three always win). It's an arb when the three cost less than that after
+  fees. Full games that can't be tied (basketball, hockey with OT, MLB, tennis) are left out: two results
+  are what the pairs already cover.
+- **Same-site line arb.** Two lines on ONE site whose prices disagree, e.g. Kalshi Over 4.5 YES at 40¢ and
+  Kalshi Over 5.5 NO at 50¢: a total of 5 pays both, anything else pays one, so $1 is guaranteed for 90¢
+  plus fees. Both orders go to the same exchange, so there's no cross-site timing gap. Spreads, totals,
+  team totals, moneylines and player props of matched games are all checked.
+
+Combos are found on every full sweep and near-arb re-check (the closest ones join the near-arb list, so
+they're re-checked every couple of seconds), and sized on real depth across every leg. Each row's details
+show what every leg pays for every result. Auto-trade and Fast trade don't take them.
+
+**Make trade** on a combo checks live books, market details and cash (Kalshi: on each leg's shard), then
+shows the plan. On confirm, every leg is sent at once (immediate-or-cancel, each limit raised by its share
+of the profit like `TOGETHER_HEADROOM`). A leg that fills short is topped up to the leg that filled most,
+never above break-even for a whole set, up to 2 more times; shares that still don't make a whole set are
+sold back. Orders go to `trades.jsonl` with `"kind": "combo"`. Combo trades aren't added to My arbs
+(it tracks two-leg pairs), so My positions lists their legs as unpaired positions.
+
 ## Maker mode
 
 The **Maker mode** tab lists pairs that aren't arbs when you take both prices, but become profitable
