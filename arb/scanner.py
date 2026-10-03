@@ -64,6 +64,8 @@ class Scanner:
         self.autotrader = AutoTrader(self, stats_path=config.EXEC_STATS_FILE)   # off until you turn it on
         from .maker import MakerBot
         self.makerbot = MakerBot(self)      # Auto maker: off until you turn it on in Maker mode
+        from .evbot import EVBot
+        self.evbot = EVBot(self, path=config.EV_BETS_FILE)   # EV bot: off until you turn it on
         from .balance import Balancer
         self.balancer = Balancer(self)      # "Balance" in My arbs: even up legs with different share counts
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
@@ -543,6 +545,15 @@ class Scanner:
                     self.log(f"Position check error: {e!r}")
             time.sleep(config.POSITIONS_REFRESH_SECS)
 
+    def _evbot_loop(self, stop_event):
+        """The EV bot's open bets: their results, once their games are over."""
+        while not (stop_event and stop_event.is_set()):
+            try:
+                self.evbot.settle()
+            except Exception as e:
+                self.log(f"EV bot: settling failed ({e!r})")
+            time.sleep(30)
+
     def _crypto_loop(self, stop_event):
         while not (stop_event and stop_event.is_set()):
             if self.auto_mode() and not config.AUTO_TRADE_CRYPTO_WINDOWS:
@@ -660,7 +671,8 @@ class Scanner:
         mode = getattr(config, "FAST_LANE", "auto")
         if mode == "always":
             return True
-        return mode == "auto" and bool(getattr(self.autotrader, "on", False) or getattr(self.makerbot, "on", False))
+        return mode == "auto" and bool(getattr(self.autotrader, "on", False) or getattr(self.makerbot, "on", False)
+                                       or getattr(getattr(self, "evbot", None), "on", False))
 
     def lane_groups(self, now=None):
         """The pair groups Auto-trade could take: result known within FAST_MAX_HOURS, soonest first. Games
@@ -771,6 +783,12 @@ class Scanner:
 
         cands = engine.screen(groups, config.NEAR_MISS_EDGE)
         self._prefetch_trade_info(cands)
+        evbot = getattr(self, "evbot", None)
+        if evbot is not None:
+            try:
+                evbot.observe(groups, source)
+            except Exception as e:
+                self.log(f"EV bot error: {e!r}")
         # Combos (3-way dutches, same-site line arbs) on full sweeps and near-arb passes; see combos.py.
         with_combos = stream_groups is None and not lane
         combo_cands = combos.screen(groups, config.NEAR_MISS_EDGE, engine.now_utc()) if with_combos else []
@@ -1208,6 +1226,7 @@ class Scanner:
         threading.Thread(target=self._crypto_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._positions_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._balances_loop, args=(stop_event,), daemon=True).start()
+        threading.Thread(target=self._evbot_loop, args=(stop_event,), daemon=True).start()
         while not self.contracts and not (stop_event and stop_event.is_set()):
             time.sleep(1)               # first catalog load
         from . import streams
@@ -1245,6 +1264,7 @@ class Scanner:
         s["autotrade"] = self.autotrader.status()
         s["makerbot"] = self.makerbot.status()
         s["combo_history"] = list(getattr(getattr(self, "combo_trader", None), "history", []))
+        s["evbot"] = self.evbot.status() if getattr(self, "evbot", None) else None
         s["focus"] = {"days": getattr(self, "focus_days", 0), "contracts": len(self.contracts)}
         s["latency"] = self.latency_summary()
         return s

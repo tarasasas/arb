@@ -180,6 +180,24 @@ AUTO_TRADE_FOCUS = os.environ.get("AUTO_TRADE_FOCUS", "1").strip().lower() not i
 # real trades have been timed yet.
 PAPER_LATENCY = {"kalshi": 0.15, "polymarket": 0.7}
 PAPER_LOG = PROJECT_ROOT / "paper_trades.jsonl"
+# EV bot (see evbot.py): single, UNHEDGED bets priced below the two exchanges' consensus. Each bet can lose.
+# Off every time the scanner starts; paper trading (no real orders) unless EV_BOT_PAPER=0.
+EV_BOT_PAPER = _env_on("EV_BOT_PAPER", True)
+EV_BOT_MIN_EDGE = _env_num("EV_BOT_MIN_EDGE", 2) / 100          # $/share below fair, after the fee
+EV_BOT_MIN_ROI = _env_num("EV_BOT_MIN_ROI", 4) / 100            # and this share of what the bet costs
+EV_BOT_MAX_BET = _env_num("EV_BOT_MAX_BET", 10)                 # $ per bet
+EV_BOT_DAILY_LIMIT = _env_num("EV_BOT_DAILY_LIMIT", 50)         # $ staked per day
+EV_BOT_BANKROLL = _env_num("EV_BOT_BANKROLL", 200)              # $ the Kelly stake is sized on (at most your cash)
+EV_BOT_KELLY = _env_num("EV_BOT_KELLY", 0.25)                   # fraction of the Kelly stake
+EV_BOT_MAX_OPEN = int(_env_num("EV_BOT_MAX_OPEN", 10))          # open bets at once (one per game)
+EV_BOT_MAX_HOURS = _env_num("EV_BOT_MAX_HOURS", 24)             # result known within this
+EV_BOT_MAX_SPREAD = _env_num("EV_BOT_MAX_SPREAD", 4) / 100      # a wider book's mid isn't a price estimate
+EV_BOT_MAX_DISAGREE = _env_num("EV_BOT_MAX_DISAGREE", 8) / 100  # mids further apart: stale quote or wrong match
+EV_BOT_MIN_LEAD_SECS = _env_num("EV_BOT_MIN_LEAD_SECS", 300)    # no bets this close to the start (or after)
+EV_BOT_MAX_QUOTE_AGE = 10.0        # a polled quote counts as current this long (a live feed's always does)
+EV_BOT_COOLDOWN_SECS = 600         # per market, after a bet attempt
+EV_BOT_SETTLE_SECS = 300           # open bets' results are read this often
+EV_BETS_FILE = PROJECT_ROOT / "cache" / "ev_bets.json"
 # Unhedged first-leg shares may be hedged up to this far ($/share) above break-even when that loses less
 # than selling them back. 0 = always sell back.
 CLOSE_OUT_MAX_LOSS = _env_num("CLOSE_OUT_MAX_LOSS", 0.05)

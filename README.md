@@ -717,6 +717,42 @@ never above break-even for a whole set, up to 2 more times; shares that still do
 sold back. Orders go to `trades.jsonl` with `"kind": "combo"`. Combo trades aren't added to My arbs
 (it tracks two-leg pairs), so My positions lists their legs as unpaired positions.
 
+## EV bot (single bets, not hedged)
+
+The **EV bot** bar (under Auto-trade) places single bets that cost less than they're worth at a fair price.
+Unlike everything else here, **its bets are not hedged: each one can lose.** It's off every time the
+scanner starts and paper trades by default (`EV_BOT_PAPER=1`): everything but the orders, filled against the
+real books, with results tracked the same way.
+
+**The fair price.** Only where both sites list the exact same question (same line, no push possible):
+- when one site just repriced and the other hasn't (the live feeds show it, the same signal Auto-trade's leg
+  order uses), the fresh site's mid is the fair price, and the stale quote is the bet: it's about to move;
+- otherwise both books' mids, weighted by how tight each book is.
+
+Books wider than 4¢ (`EV_BOT_MAX_SPREAD`) or mids more than 8¢ apart (`EV_BOT_MAX_DISAGREE`: a wrong match,
+or a move too big to call) give no price. **What to expect:** with both books tight, a gap big enough for a
+2¢ edge is already an arb, and arbs are left to Auto-trade (hedged is better). So the consensus price almost
+never produces a bet; nearly all bets will be stale quotes, and the edge there is small (about the fresh
+book's half-spread plus the fee the missing hedge leg would have cost). A sharper fair price would need an
+outside source, such as a sharp sportsbook's odds.
+
+**What it bets:** one side of one market when price + fee is at least `EV_BOT_MIN_EDGE` (2¢) and
+`EV_BOT_MIN_ROI` (4%) below that side's fair price; sports games (spreads, totals, moneylines, team totals)
+not yet started (not within 5 minutes of the start), result known within `EV_BOT_MAX_HOURS` (24). Size:
+`EV_BOT_KELLY` (¼) of the Kelly stake on `EV_BOT_BANKROLL` ($200, or your cash on that site if less), at most
+`EV_BOT_MAX_BET` ($10) a bet and `EV_BOT_DAILY_LIMIT` ($50) a day, `EV_BOT_MAX_OPEN` (10) open bets and one
+per game, never more than the book shows within the edge. Real orders are immediate-or-cancel at the highest
+price that keeps the edge, and wait for any arb trade in flight. It stops after 3 refused orders in a row.
+
+**How it judges itself** (shown in the bar, kept in `cache/ev_bets.json`):
+- **Closing value:** each bet's fair price just before its game starts, minus what a share cost. Positive on
+  average means the bets had an edge; it's known hours after a bet, long before enough results are in.
+- **Results:** once a market settles, what the bet actually paid, and the P&L against what was expected.
+
+Give paper trading a few hundred bets: if closing value isn't clearly positive, real money won't do better.
+Turn on real orders with `EV_BOT_PAPER=0` (you're asked to confirm). EV bets aren't added to My arbs, so My
+positions lists them as unpaired positions.
+
 ## Maker mode
 
 The **Maker mode** tab lists pairs that aren't arbs when you take both prices, but become profitable

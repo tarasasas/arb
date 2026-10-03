@@ -388,6 +388,7 @@
 
   <div class="tabs" id="tabs-bar" role="tablist"></div>
   <div class="autobar" id="makerbar" style="display:none"></div>
+  <div class="autobar" id="evbar" style="display:none"></div>
   <div id="opps-wrap">
   <div class="caveat" id="cash-note" style="margin:0 0 6px"></div>
   <div class="table-wrap opps-wrap">
@@ -856,6 +857,56 @@ function renderMaker(s) {
     b.disabled = true;
     try { await post("/api/maker/cancel", { id: b.dataset.mcancel }); } catch (e) { alert(e.message); }
   });
+}
+// EV bot: single, unhedged bets priced below the fair price (see the README). Paper unless EV_BOT_PAPER=0.
+function evResults(r, label) {
+  if (!r || !r.bets) return "";
+  const clv = r.clv_n ? `closing value <b class="${r.clv_avg >= 0 ? "profit" : ""}">${r.clv_avg >= 0 ? "+" : ""}${(r.clv_avg * 100).toFixed(1)}¢</b>
+    a share avg, ${pct(r.clv_positive)} beat the close (${r.clv_n})` : "closing value: none yet";
+  const settled = r.settled ? `settled ${r.won}–${r.lost}: <b class="${r.pnl >= 0 ? "profit" : ""}">${money(r.pnl)}</b>
+    (${pct(r.roi)}; expected ${money(r.expected)})` : "none settled yet";
+  return `<span title="Closing value: the fair price just before each game started, minus what a share cost. Positive on average
+    means the bets had an edge, long before enough results are in to tell.">${label}: ${r.open} open (${money(r.open_staked)},
+    +${money(r.open_ev)} expected) · ${settled} · ${clv}</span>`;
+}
+function renderEV(s) {
+  const el = document.getElementById("evbar"), e = s.evbot;
+  if (!e) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.className = "autobar" + (e.on ? " on" : e.halted ? " halted" : "");
+  const live = !e.paper, canLive = tradingOn();
+  const top = (e.top || []).map(t => `<li>${esc(t.game)} · ${esc(t.quantity)} · ${esc(t.exchange)} <b>Buy ${t.side.toUpperCase()}</b>
+      @ ${cents(t.ask)} · fair ${cents(t.fair)} (${esc(t.source)}) · <b class="profit">+${(t.ev * 100).toFixed(1)}¢</b> a share</li>`).join("");
+  const hist = (e.history || []).map(h => `<li>${esc((h.time || "").slice(5, 16).replace("T", " "))} · ${h.paper ? `<span class="badge-paper">paper</span> ` : ""}${
+      esc(h.game || "")} · ${esc(EXNAME[h.exchange] || h.exchange)} ${esc((h.side || "").toUpperCase())} ${compact(h.qty)} @ ${cents(h.avg)}
+      · fair ${cents(h.fair)}${h.fair_source ? ` <span class="muted">(${esc(h.fair_source)})</span>` : ""} · <b>${esc(h.status)}</b>${
+      h.pnl != null ? ` ${money(h.pnl)}` : ""}${h.clv != null ? ` · close ${h.clv >= 0 ? "+" : ""}${(h.clv * 100).toFixed(1)}¢` : ""}</li>`).join("");
+  el.innerHTML = `<b>EV bot</b>
+    <button id="ev-toggle" ${live && !canLive && !e.on ? "disabled" : ""} class="${e.on ? "" : "trade"}" style="margin:0">${e.on ? "Turn off" : "Turn on"}</button>
+    <span>${e.on ? `<span style="color:var(--good)">●</span> ON` : "OFF"}</span>
+    ${e.paper ? `<span class="badge-paper" title="EV_BOT_PAPER=1: everything but the orders, filled against the real books">PAPER: no real orders</span>`
+      : `<span style="color:var(--critical)"><b>LIVE</b>: real, unhedged bets</span>`}
+    <span>Today ${money(e.spent_today)} of ${money(e.daily_limit)}</span>
+    <span>${evResults(e.paper ? e.paper_results : e.real, e.paper ? "Paper" : "Real")}</span>
+    <details class="limits"><summary class="muted">How it bets</summary><div class="rules-text">Single bets, NOT hedged: each one can lose.
+      It buys one side of a market both sites list when its price + fee is at least ${(e.min_edge * 100).toFixed(1)}¢ and ${pct(e.min_roi)}
+      below the fair price: the price of the site that just moved while the other hasn't (the stale quote is the bet), else both books'
+      mids weighted by how tight they are. Pairs that are arbs are left to Auto-trade. Sports games not yet started, result within
+      ${e.max_hours}h · ${e.kelly}× Kelly on ${money(e.bankroll)}, at most ${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day,
+      ${e.max_open} open (one per game). It keeps each bet's closing value and settles it from the market's result.</div></details>
+    ${e.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(e.halted)}</div>` : ""}
+    ${top ? `<details class="evtop"><summary class="muted">Best bets now (${(e.top || []).length})</summary><ol>${top}</ol></details>` : ""}
+    ${hist ? `<details class="mhist"><summary class="muted">Last bets</summary><ol>${hist}</ol></details>` : ""}`;
+  el.querySelectorAll("details").forEach(d => {
+    const key = "ev-" + (d.classList.contains("limits") ? "limits" : d.classList.contains("evtop") ? "top" : "history");
+    d.open = !!autoOpenSet[key];
+    d.addEventListener("toggle", () => { autoOpenSet[key] = d.open; });
+  });
+  document.getElementById("ev-toggle").onclick = async () => {
+    if (!e.on && live && !confirm(`Turn on the EV bot with REAL orders?\n\nIts bets are not hedged: each one can lose. Up to ` +
+        `${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day. Paper trading (EV_BOT_PAPER=1) shows how it does first.`)) return;
+    try { state.evbot = await post("/api/evbot", { on: !e.on }); renderEV(state); } catch (err) { alert(err.message); }
+  };
 }
 // Tick-to-trade: typical (p50) and slow-case (p95) milliseconds per stage over the last 50 trades.
 function speedHtml(lat) {
@@ -1872,6 +1923,7 @@ function render(force) {
     : "";
   renderAuto(s);
   renderMaker(s);
+  renderEV(s);
   const fsel = document.getElementById("f-focus");
   if (s.focus && document.activeElement !== fsel) fsel.value = String(s.focus.days || 0);
   const feeds = Object.entries(s.streams || {});

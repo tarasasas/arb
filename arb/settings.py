@@ -69,6 +69,21 @@ GROUPS = [
          "Of the shares shown at the prices paid; shown shares are often gone by the time an order lands. 100 = all.",
          50),
     ]),
+    ("EV bot (single bets, not hedged)", [
+        ("EV_BOT_PAPER", "bool", "Paper trading: no real orders",
+         "Everything but the orders, filled against the real books; results show in the EV bot bar. Each real bet "
+         "can lose: give paper trading a few hundred bets and check its closing value first.", True),
+        ("EV_BOT_MIN_EDGE", "cents", "Minimum edge (¢ per share, after the fee)", "Below the fair price.", 2),
+        ("EV_BOT_MIN_ROI", "percent", "Minimum edge (% of what the bet costs)", "", 4),
+        ("EV_BOT_MAX_BET", "money", "Per bet", "", 10),
+        ("EV_BOT_DAILY_LIMIT", "money", "Per day", "Money staked each day.", 50),
+        ("EV_BOT_BANKROLL", "money", "Bankroll for sizing", "Bets are a fraction of the Kelly stake on this (or your "
+         "cash on that site, if less).", 200),
+        ("EV_BOT_KELLY", "number", "Fraction of the Kelly stake", "0.25 = quarter Kelly. Full Kelly swings hard when "
+         "the fair price is off.", 0.25),
+        ("EV_BOT_MAX_OPEN", "int", "Open bets at most", "One per game.", 10),
+        ("EV_BOT_MAX_HOURS", "number", "Only games whose result is known within (hours)", "", 24),
+    ]),
     ("Every trade", [
         ("MAX_TRADE_DOLLARS", "money", "Hard cap per trade", "Make trade, Fast trade and Auto-trade, both legs together.", 100),
         ("FAST_MAX_TRADE", "money", "Fast trade, per click", "Both legs together.", 50),
