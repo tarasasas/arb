@@ -17,8 +17,8 @@ side (hedged is better). Sports games whose result is known within EV_BOT_MAX_HO
 (EV_BOT_LIVE_GAMES) with EV_BOT_LIVE_EXTRA_EDGE more edge and quotes under EV_BOT_LIVE_QUOTE_AGE old.
 
 Size: EV_BOT_KELLY x the Kelly stake for that edge on EV_BOT_BANKROLL, at most EV_BOT_MAX_BET a bet and
-EV_BOT_DAILY_LIMIT a day, EV_BOT_MAX_OPEN open bets, one open bet per game; never more than the book
-shows within the edge.
+EV_BOT_DAILY_LIMIT a day, EV_BOT_MAX_OPEN open bets, EV_BOT_PER_GAME per game; never more than the book
+shows within the edge. settings.EV_PROFILES bundles these into careful / normal / aggressive.
 
 How it judges itself: every bet keeps the last fair price before its game started (closing value: the
 standard early test of whether bets have an edge, known hours before the results) and, once its market
@@ -321,6 +321,7 @@ class EVBot:
                 "max_bet": config.EV_BOT_MAX_BET, "min_edge": config.EV_BOT_MIN_EDGE, "min_roi": config.EV_BOT_MIN_ROI,
                 "kelly": config.EV_BOT_KELLY, "bankroll": config.EV_BOT_BANKROLL, "max_open": config.EV_BOT_MAX_OPEN,
                 "max_hours": config.EV_BOT_MAX_HOURS, "live_games": config.EV_BOT_LIVE_GAMES,
+                "per_game": config.EV_BOT_PER_GAME, "profile": self._profile(),
                 "live_extra_edge": config.EV_BOT_LIVE_EXTRA_EDGE, "live_mark_secs": config.EV_BOT_LIVE_MARK_SECS,
                 "real": self.summary(False), "paper_results": self.summary(True),
                 "history": [{k: b.get(k) for k in ("time", "paper", "game", "quantity", "exchange", "side", "title",
@@ -331,6 +332,14 @@ class EVBot:
                 "why": {"since": self.why_since, "passes": self.passes, "counts": dict(self.funnel),
                         "checked": sum(v for k, v in self.funnel.items() if k not in ("moves", "live")), "best": self.best,
                         "blocked": dict(self.blocked)}}
+
+    @staticmethod
+    def _profile():
+        try:
+            from .settings import ev_profile
+            return ev_profile()
+        except Exception:
+            return None
 
     # ---- every price pass -------------------------------------------------------------------------
 
@@ -402,14 +411,16 @@ class EVBot:
         if config.EV_BOT_DAILY_LIMIT - self.spent_today(config.EV_BOT_PAPER) < 1:
             self._block("daily limit reached")
             return None
-        busy_games = {b["game_key"] for b in opened}
+        per_game = {}
+        for b in opened:
+            per_game[b["game_key"]] = per_game.get(b["game_key"], 0) + 1
         t = time.time()
         for b in cands:
-            if b["game"] in busy_games:
-                self._block("already a bet on that game")
+            if per_game.get(b["game"], 0) >= config.EV_BOT_PER_GAME:
+                self._block(f"already {config.EV_BOT_PER_GAME} bet{'s' if config.EV_BOT_PER_GAME > 1 else ''} on that game")
                 continue
             if t - self.tried.get(b["contract"].market_id, 0) < config.EV_BOT_COOLDOWN_SECS:
-                self._block("tried that market in the last 10 min")
+                self._block(f"tried that market in the last {config.EV_BOT_COOLDOWN_SECS / 60:g} min")
                 continue
             return b
         return None

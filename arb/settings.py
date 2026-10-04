@@ -70,6 +70,12 @@ GROUPS = [
          50),
     ]),
     ("EV bot (single bets, not hedged)", [
+        ("EV_BOT_PROFILE", "choice:careful,normal,aggressive,custom", "Aggressiveness",
+         "Fills in the settings below (you can still change any of them; it then shows custom). careful: bigger "
+         "edges only, small bets, no games in progress. normal: the defaults. aggressive: smaller edges (1c), "
+         "wider books, half-Kelly stakes up to $25 a bet and $200 a day, up to 3 bets per game, games in progress "
+         "with little extra edge. More bets and bigger swings: smaller edges are likelier to be a wrong fair price.",
+         "normal"),
         ("EV_BOT_PAPER", "bool", "Paper trading: no real orders",
          "Everything but the orders, filled against the real books; results show in the EV bot bar. Each real bet "
          "can lose: give paper trading a few hundred bets and check its closing value first.", True),
@@ -81,13 +87,21 @@ GROUPS = [
          "cash on that site, if less).", 200),
         ("EV_BOT_KELLY", "number", "Fraction of the Kelly stake", "0.25 = quarter Kelly. Full Kelly swings hard when "
          "the fair price is off.", 0.25),
-        ("EV_BOT_MAX_OPEN", "int", "Open bets at most", "One per game.", 10),
+        ("EV_BOT_MAX_OPEN", "int", "Open bets at most", "Across all games (see bets per game below).", 10),
         ("EV_BOT_MAX_HOURS", "number", "Only games whose result is known within (hours)", "", 24),
         ("EV_BOT_LIVE_GAMES", "bool", "Games in progress too",
          "Stale quotes are most common in play, but prices jump and Polymarket can hold in-play orders a moment. Live "
          "bets need the extra edge below and quotes under 3 seconds old.", True),
         ("EV_BOT_LIVE_EXTRA_EDGE", "cents", "Extra edge for games in progress (¢ per share)",
          "On top of the minimum edge.", 1),
+        ("EV_BOT_PER_GAME", "int", "Bets per game at most", "Open bets on one game.", 1),
+        ("EV_BOT_MAX_SPREAD", "cents", "Widest book used for a fair price (¢)",
+         "Between a market's YES ask and 1 - its NO ask. A wider book's middle isn't much of a price.", 4),
+        ("EV_BOT_MAX_DISAGREE", "cents", "Most the two sites' prices may differ (¢)",
+         "Further apart usually means a wrong match, or a move too big to call.", 8),
+        ("EV_BOT_COOLDOWN_SECS", "number", "Wait before betting the same market again (seconds)", "", 600),
+        ("EV_BOT_MIN_LEAD_SECS", "number", "No bets this close to the start (seconds)",
+         "Prices jump at lineups and kickoff.", 300),
     ]),
     ("Every trade", [
         ("MAX_TRADE_DOLLARS", "money", "Hard cap per trade", "Make trade, Fast trade and Auto-trade, both legs together.", 100),
@@ -111,17 +125,44 @@ GROUPS = [
     ]),
 ]
 SPEC = {key: (kind, label, help_, default) for _, items in GROUPS for key, kind, label, help_, default in items}
+
+# What each EV bot aggressiveness sets, in the units the dashboard shows (cents, percent, dollars, seconds).
+# The bankroll isn't part of it: that's your money, not a style.
+EV_PROFILES = {
+    "careful": {"EV_BOT_MIN_EDGE": 3, "EV_BOT_MIN_ROI": 6, "EV_BOT_MAX_BET": 5, "EV_BOT_DAILY_LIMIT": 25,
+                "EV_BOT_KELLY": 0.15, "EV_BOT_MAX_OPEN": 5, "EV_BOT_MAX_HOURS": 24, "EV_BOT_LIVE_GAMES": False,
+                "EV_BOT_LIVE_EXTRA_EDGE": 2, "EV_BOT_PER_GAME": 1, "EV_BOT_MAX_SPREAD": 3, "EV_BOT_MAX_DISAGREE": 6,
+                "EV_BOT_COOLDOWN_SECS": 900, "EV_BOT_MIN_LEAD_SECS": 600},
+    "normal": {"EV_BOT_MIN_EDGE": 2, "EV_BOT_MIN_ROI": 4, "EV_BOT_MAX_BET": 10, "EV_BOT_DAILY_LIMIT": 50,
+               "EV_BOT_KELLY": 0.25, "EV_BOT_MAX_OPEN": 10, "EV_BOT_MAX_HOURS": 24, "EV_BOT_LIVE_GAMES": True,
+               "EV_BOT_LIVE_EXTRA_EDGE": 1, "EV_BOT_PER_GAME": 1, "EV_BOT_MAX_SPREAD": 4, "EV_BOT_MAX_DISAGREE": 8,
+               "EV_BOT_COOLDOWN_SECS": 600, "EV_BOT_MIN_LEAD_SECS": 300},
+    "aggressive": {"EV_BOT_MIN_EDGE": 1, "EV_BOT_MIN_ROI": 2, "EV_BOT_MAX_BET": 25, "EV_BOT_DAILY_LIMIT": 200,
+                   "EV_BOT_KELLY": 0.5, "EV_BOT_MAX_OPEN": 25, "EV_BOT_MAX_HOURS": 48, "EV_BOT_LIVE_GAMES": True,
+                   "EV_BOT_LIVE_EXTRA_EDGE": 0.5, "EV_BOT_PER_GAME": 3, "EV_BOT_MAX_SPREAD": 6, "EV_BOT_MAX_DISAGREE": 12,
+                   "EV_BOT_COOLDOWN_SECS": 120, "EV_BOT_MIN_LEAD_SECS": 60},
+}
+
+
+def ev_profile():
+    """The aggressiveness the EV bot's settings match right now, or "custom"."""
+    for name, values in EV_PROFILES.items():
+        if all(abs(float(_shown(k)) - float(v)) < 1e-9 for k, v in values.items()):
+            return name
+    return "custom"
 _lock = threading.Lock()
 
 
 def _shown(key):
     """config's value in the units the dashboard and .env use."""
+    if key == "EV_BOT_PROFILE":
+        return ev_profile()                # whatever the settings themselves add up to
     kind, v = SPEC[key][0], getattr(config, key)
     return round(v * 100, 4) if kind in ("percent", "cents") else v
 
 
 def current():
-    return {"groups": [{"title": title, "items": [
+    return {"profiles": {"EV_BOT_PROFILE": EV_PROFILES}, "groups": [{"title": title, "items": [
         {"key": key, "kind": kind.split(":")[0], "label": label, "help": help_, "default": default,
          "value": _shown(key), "options": kind.split(":", 1)[1].split(",") if kind.startswith("choice:") else None}
         for key, kind, label, help_, default in items]} for title, items in GROUPS]}
@@ -201,6 +242,9 @@ def update(changes, path=None):
         if key not in SPEC:
             raise ValueError(f"Unknown setting {key}")
         parsed[key] = _parse(key, raw)
+    profile = parsed.get("EV_BOT_PROFILE")
+    if profile in EV_PROFILES:             # the profile's values, then anything set alongside it on top
+        parsed = {**{k: _parse(k, v) for k, v in EV_PROFILES[profile].items()}, **parsed}
     if not parsed:
         return current()
     with _lock:

@@ -65,5 +65,46 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(hasattr(config, key), key)
 
 
+class EVProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.env = Path(self.dir.name) / ".env"
+        self.saved = {k: getattr(config, k) for k in settings.SPEC if k.startswith("EV_BOT_")}
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(config, k, v)
+        self.dir.cleanup()
+
+    def test_defaults_are_normal(self):
+        self.assertEqual(settings.ev_profile(), "normal")
+        for k, v in settings.EV_PROFILES["normal"].items():           # the profile is the shipped defaults
+            self.assertEqual(settings.SPEC[k][3], v, k)
+
+    def test_aggressive_sets_its_bundle_and_shows_custom_once_edited(self):
+        with mock.patch.dict("os.environ", {}):
+            settings.update({"EV_BOT_PROFILE": "aggressive"}, self.env)
+            self.assertEqual((config.EV_BOT_MIN_EDGE, config.EV_BOT_KELLY, config.EV_BOT_PER_GAME, config.EV_BOT_MAX_BET),
+                             (0.01, 0.5, 3, 25.0))
+            self.assertEqual(settings.ev_profile(), "aggressive")
+            text = self.env.read_text(encoding="utf-8")
+            self.assertIn("EV_BOT_MIN_EDGE=1\n", text)
+            self.assertIn("EV_BOT_PER_GAME=3\n", text)
+            settings.update({"EV_BOT_MAX_BET": 15}, self.env)
+            self.assertEqual(settings.ev_profile(), "custom")
+            settings.update({"EV_BOT_PROFILE": "normal"}, self.env)
+            self.assertEqual((settings.ev_profile(), config.EV_BOT_MAX_BET), ("normal", 10.0))
+
+    def test_a_value_set_alongside_the_profile_wins(self):
+        with mock.patch.dict("os.environ", {}):
+            settings.update({"EV_BOT_PROFILE": "aggressive", "EV_BOT_MAX_BET": 12}, self.env)
+        self.assertEqual((config.EV_BOT_MAX_BET, config.EV_BOT_KELLY), (12.0, 0.5))
+
+    def test_the_bankroll_is_never_part_of_a_profile(self):
+        for values in settings.EV_PROFILES.values():
+            self.assertNotIn("EV_BOT_BANKROLL", values)
+            self.assertNotIn("EV_BOT_PAPER", values)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -921,6 +921,7 @@ function renderEV(s) {
     <span>${e.on ? `<span style="color:var(--good)">●</span> ON` : "OFF"}</span>
     ${e.paper ? `<span class="badge-paper" title="EV_BOT_PAPER=1: everything but the orders, filled against the real books">PAPER: no real orders</span>`
       : `<span style="color:var(--critical)"><b>LIVE</b>: real, unhedged bets</span>`}
+    ${e.profile ? `<span class="pin settings-link" style="cursor:pointer" title="Aggressiveness (⚙ Settings → EV bot)">${esc(e.profile)}</span>` : ""}
     <span>Today ${money(e.spent_today)} of ${money(e.daily_limit)}</span>
     <span>${evResults(e.paper ? e.paper_results : e.real, e.paper ? "Paper" : "Real")}</span>
     <details class="limits"><summary class="muted">How it bets</summary><div class="rules-text">Single bets, NOT hedged: each one can lose.
@@ -929,7 +930,8 @@ function renderEV(s) {
       mids weighted by how tight they are. Pairs that are arbs are left to Auto-trade. Sports games with the result within
       ${e.max_hours}h${e.live_games ? `, games in progress too (they need ${(e.live_extra_edge * 100).toFixed(1)}¢ more edge and quotes
       under 3 seconds old)` : ", not yet started (games in progress: off in Settings)"} · ${e.kelly}× Kelly on ${money(e.bankroll)},
-      at most ${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day, ${e.max_open} open (one per game). It keeps each bet's closing
+      at most ${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day, ${e.max_open} open (${e.per_game > 1 ? `up to ${e.per_game}` : "one"}
+      per game). It keeps each bet's closing
       value (live bets: the fair price ${Math.round(e.live_mark_secs || 60)}s later) and settles it from the market's result.</div></details>
     ${e.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(e.halted)}</div>` : ""}
     ${evWhy(e)}
@@ -1673,6 +1675,16 @@ async function openSettings() {
     ${cur.groups.map(g => `<h4>${esc(g.title)}</h4>${g.items.map(field).join("")}`).join("")}
     <div class="actions"><span class="muted" id="set-msg"></span><button onclick="closeModal()">Close</button>
       <button class="primary" id="set-save">Save</button></div>`);
+  document.querySelectorAll("select[data-set]").forEach(sel => {
+    const presets = (cur.profiles || {})[sel.dataset.set];
+    if (!presets) return;
+    sel.addEventListener("change", () => {
+      for (const [k, v] of Object.entries(presets[sel.value] || {})) {
+        const el = document.querySelector(`[data-set="${k}"]`);
+        if (el) el.type === "checkbox" ? el.checked = !!v : el.value = v;
+      }
+    });
+  });
   document.getElementById("set-save").onclick = async () => {
     const changes = {};
     document.querySelectorAll("[data-set]").forEach(el => {

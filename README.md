@@ -750,9 +750,27 @@ stale quotes it bought did catch up. Its result settles like any other bet.
 
 Size:
 `EV_BOT_KELLY` (¼) of the Kelly stake on `EV_BOT_BANKROLL` ($200, or your cash on that site if less), at most
-`EV_BOT_MAX_BET` ($10) a bet and `EV_BOT_DAILY_LIMIT` ($50) a day, `EV_BOT_MAX_OPEN` (10) open bets and one
-per game, never more than the book shows within the edge. Real orders are immediate-or-cancel at the highest
+`EV_BOT_MAX_BET` ($10) a bet and `EV_BOT_DAILY_LIMIT` ($50) a day, `EV_BOT_MAX_OPEN` (10) open bets and
+`EV_BOT_PER_GAME` (1) per game, never more than the book shows within the edge. Real orders are immediate-or-cancel at the highest
 price that keeps the edge, and wait for any arb trade in flight. It stops after 3 refused orders in a row.
+
+**Aggressiveness** (⚙ Settings → EV bot) fills in the settings below it in one go; any of them can still be
+changed after (it then shows "custom"), and the bar shows which one is set. Paper trading and your bankroll
+are never changed by it.
+
+| | careful | normal (default) | aggressive |
+| - | - | - | - |
+| Minimum edge | 3¢ and 6% | 2¢ and 4% | 1¢ and 2% |
+| Games in progress | off | on, +1¢ edge | on, +0.5¢ edge |
+| Stake | ⅙ Kelly (0.15), $5 a bet, $25 a day | ¼ Kelly, $10 a bet, $50 a day | ½ Kelly, $25 a bet, $200 a day |
+| Open bets | 5, one per game | 10, one per game | 25, up to 3 per game |
+| Books used | up to 3¢ wide, prices within 6¢ | 4¢, 8¢ | 6¢, 12¢ |
+| Same market again after | 15 min | 10 min | 2 min |
+| No bets before the start | 10 min | 5 min | 1 min |
+| Result known within | 24h | 24h | 48h |
+
+Aggressive bets more often and bigger, on smaller edges: those are likelier to be a fair price that's off
+rather than a real edge, so expect bigger swings, and watch closing value (and live bets' 1-minute value).
 
 **How it judges itself** (shown in the bar, kept in `cache/ev_bets.json`):
 - **Closing value:** each bet's fair price just before its game starts, minus what a share cost. Positive on

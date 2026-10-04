@@ -217,6 +217,20 @@ class PaperBotTests(unittest.TestCase):
         with mock.patch.object(config, "EV_BOT_DAILY_LIMIT", 0.5):
             self.assertIsNone(b2.observe(*pair(), NOW))
 
+    def test_bets_per_game(self):
+        b = bot()
+        b.set(True)
+        g, src = pair()
+        with mock.patch.object(config, "EV_BOT_COOLDOWN_SECS", 0):
+            b.observe(g, src, NOW)
+            self.assertIsNone(b.observe(g, src, NOW))                     # one per game by default
+            self.assertEqual(b.status()["why"]["blocked"], {"already 1 bet on that game": 1})
+            with mock.patch.object(config, "EV_BOT_PER_GAME", 3):
+                b.observe(g, src, NOW)
+                b.observe(g, src, NOW)
+                self.assertIsNone(b.observe(g, src, NOW))
+        self.assertEqual(len(b.bets), 3)
+
     def test_closing_value_is_the_last_fair_price_before_the_start(self):
         b = bot()
         b.set(True)
