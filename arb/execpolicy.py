@@ -188,11 +188,13 @@ class ExecStats:
         return out
 
 
-def stale_side(scanner, legs, now=None):
+def stale_side(scanner, legs, now=None, fresh_secs=None, gap_secs=None):
     """The site whose price is stale while the other just moved, from the live streams: the other site
-    changed within STALE_FRESH_SECS and this one not for STALE_GAP_SECS longer. None if unclear (either
-    market not streamed, or both moved / both quiet)."""
+    changed within fresh_secs (STALE_FRESH_SECS) and this one not for gap_secs (STALE_GAP_SECS) longer. None
+    if unclear (either market not streamed, or both moved / both quiet)."""
     now = now or time.time()
+    fresh_secs = config.STALE_FRESH_SECS if fresh_secs is None else fresh_secs
+    gap_secs = config.STALE_GAP_SECS if gap_secs is None else gap_secs
     t = {}
     for leg in legs:
         ex, mid = leg["exchange"].lower(), leg["market_id"]
@@ -212,7 +214,7 @@ def stale_side(scanner, legs, now=None):
     mid = next(l["market_id"] for l in legs if l["exchange"].lower() == fresh)
     if (getattr(s, "first_seen", {}).get(mid) or 0) >= t[fresh]:
         return None                               # its only message is the snapshot after subscribing
-    if now - t[fresh] <= config.STALE_FRESH_SECS and t[fresh] - t[stale] >= config.STALE_GAP_SECS:
+    if now - t[fresh] <= fresh_secs and t[fresh] - t[stale] >= gap_secs:
         return stale
     return None
 

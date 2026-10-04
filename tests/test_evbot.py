@@ -107,9 +107,42 @@ class CandidateTests(unittest.TestCase):
         g, src = pair()
         self.assertEqual(evbot.candidates(g, src, NOW, fresh=lambda ex, mid, age=None: ex != "kalshi", moved=POLY_MOVED)[0], [])
 
-    def test_props_and_non_sports_are_left_alone(self):
+    def test_player_props_unless_turned_off(self):
         g, src = pair(var=("player", "pyd", "patrick mahomes"))
+        self.assertEqual(len(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0]), 1)
+        with mock.patch.object(config, "EV_BOT_PROPS", False):
+            self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
+
+    def test_non_sports_are_left_alone(self):
+        g, src = pair(var=("event", "x"))
         self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
+
+    def test_an_arbs_cheap_side_when_auto_trade_wont_take_it(self):
+        g, src = pair(p_no=0.40, p_yes=0.62)                    # an arb: Kalshi YES 0.55 + Polymarket NO 0.40
+        st = {}
+        cands, _ = evbot.candidates(g, src, NOW, moved=POLY_MOVED, stats=st, arbs_ok=lambda live: True)
+        self.assertEqual([(b["contract"].exchange, b["side"], b["arb"]) for b in cands], [("kalshi", YES, True)])
+        self.assertEqual(st["arb taken"], 1)
+        b = bot()
+        b.scanner.autotrader = SimpleNamespace(on=False)
+        with mock.patch.object(config, "EV_BOT_TAKE_ARBS", True):
+            self.assertTrue(b._arbs_ok(False))                   # Auto-trade off
+            b.scanner.autotrader.on = True
+            self.assertFalse(b._arbs_ok(False))                  # Auto-trade takes it hedged
+            with mock.patch.object(config, "AUTO_TRADE_LIVE_GAMES", False):
+                self.assertTrue(b._arbs_ok(True))                # ...but skips games in progress
+        self.assertFalse(b._arbs_ok(True))                       # setting off: never
+
+    def test_the_ev_bot_has_its_own_stale_quote_window(self):
+        from arb import execpolicy
+        b = bot()
+        del b._moved                                            # the real one
+        seen = {}
+        with mock.patch.object(execpolicy, "stale_side", lambda sc, legs, now=None, fresh_secs=None, gap_secs=None:
+                               seen.update(fresh=fresh_secs, gap=gap_secs)), \
+                mock.patch.object(config, "EV_BOT_STALE_FRESH_SECS", 5), mock.patch.object(config, "EV_BOT_STALE_GAP_SECS", 1):
+            b._moved("KO45", "pm-o45")
+        self.assertEqual(seen, {"fresh": 5, "gap": 1})
 
 
 class WhyNoBetsTests(unittest.TestCase):

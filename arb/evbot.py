@@ -41,7 +41,7 @@ from .model import NO, YES, fee_per_contract, total_fee
 from .venues import floor_to
 
 SIDES = (YES, NO)
-GAME_VARS = ("margin", "total", "tt", "btts")        # game quantities; props settle oddly if a player sits out
+GAME_VARS = ("margin", "total", "tt", "btts")        # game quantities; player props too with EV_BOT_PROPS
 NAMES = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
 
 
@@ -134,19 +134,22 @@ def _closeness(ev, cost, min_edge=None):
                (ev / cost) / config.EV_BOT_MIN_ROI if config.EV_BOT_MIN_ROI > 0 else math.inf)
 
 
-def candidates(groups, source, now, fresh=lambda ex, mid, age=None: True, moved=lambda k, p: None, stats=None):
+def candidates(groups, source, now, fresh=lambda ex, mid, age=None: True, moved=lambda k, p: None, stats=None,
+               arbs_ok=lambda live: False):
     """(bets worth taking now, best edge first; {(k id, p id): fair YES of k} for every pair priced).
     fresh(exchange, market id, max age in seconds): whether that market's quote is current. moved(k id, p id):
     the site that just repriced while the other didn't, or None. stats: a dict that gets, per same-question
     pair in the window, the reason it was passed over (or "qualified"), "moves" (stale-quote moments), "live"
-    (pairs whose game is in progress) and "best" (the bet that came closest to qualifying)."""
+    (pairs whose game is in progress) and "best" (the bet that came closest to qualifying). arbs_ok(live):
+    whether an arb's cheap side may be bet (else arbs are left to Auto-trade)."""
     out, fairs = [], {}
     st = stats if stats is not None else {}
     count = lambda why: st.__setitem__(why, st.get(why, 0) + 1)
     horizon = now + timedelta(hours=config.EV_BOT_MAX_HOURS)
     lead = now + timedelta(seconds=config.EV_BOT_MIN_LEAD_SECS)
+    kinds = GAME_VARS + (("player",) if config.EV_BOT_PROPS else ())
     for (_gk, var), g in groups.items():
-        if var[0] not in GAME_VARS:
+        if var[0] not in kinds:
             continue
         for k in g.get("kalshi") or []:
             if engine._ended(k, now):
@@ -179,9 +182,12 @@ def candidates(groups, source, now, fresh=lambda ex, mid, age=None: True, moved=
                 if not live and start <= lead:
                     count("starting soon")
                     continue
-                if _hedged_arb(k, p, rel):
+                arb = _hedged_arb(k, p, rel)
+                if arb and not arbs_ok(live):
                     count("arb")                                  # take it hedged instead
                     continue
+                if arb:
+                    count("arb taken")                            # Auto-trade won't: its cheap side is the bet
                 if fv["source"] != "consensus":
                     count("moves")
                 if live:
@@ -215,6 +221,7 @@ def candidates(groups, source, now, fresh=lambda ex, mid, age=None: True, moved=
                                     "game": k.game_key, "label": k.game_label or k.game_key.split(":", 1)[1],
                                     "quantity": engine.describe_var(k.var), "start": start.isoformat(),
                                     "decided": decided.isoformat(), "market": m, "live": live, "min_edge": min_edge,
+                                    "arb": arb,
                                     "levels": list(((getattr(m, "levels", None) or {}).get(side)) or [])
                                     or ([(a, getattr(m, f"{side}_ask_size", None))]
                                         if getattr(m, f"{side}_ask_size", None) else [])})
@@ -321,16 +328,18 @@ class EVBot:
                 "max_bet": config.EV_BOT_MAX_BET, "min_edge": config.EV_BOT_MIN_EDGE, "min_roi": config.EV_BOT_MIN_ROI,
                 "kelly": config.EV_BOT_KELLY, "bankroll": config.EV_BOT_BANKROLL, "max_open": config.EV_BOT_MAX_OPEN,
                 "max_hours": config.EV_BOT_MAX_HOURS, "live_games": config.EV_BOT_LIVE_GAMES,
-                "per_game": config.EV_BOT_PER_GAME, "profile": self._profile(),
+                "per_game": config.EV_BOT_PER_GAME, "profile": self._profile(), "take_arbs": config.EV_BOT_TAKE_ARBS,
+                "props": config.EV_BOT_PROPS,
                 "live_extra_edge": config.EV_BOT_LIVE_EXTRA_EDGE, "live_mark_secs": config.EV_BOT_LIVE_MARK_SECS,
                 "real": self.summary(False), "paper_results": self.summary(True),
                 "history": [{k: b.get(k) for k in ("time", "paper", "game", "quantity", "exchange", "side", "title",
                                                    "qty", "avg", "cost", "fair", "fair_source", "ev", "status", "pnl", "clv",
-                                                   "live")}
+                                                   "live", "from_arb")}
                             for b in reversed(self.bets[-20:])],
                 "top": self.top if self.on else [],
                 "why": {"since": self.why_since, "passes": self.passes, "counts": dict(self.funnel),
-                        "checked": sum(v for k, v in self.funnel.items() if k not in ("moves", "live")), "best": self.best,
+                        "checked": sum(v for k, v in self.funnel.items() if k not in ("moves", "live", "arb taken")),
+                        "best": self.best,
                         "blocked": dict(self.blocked)}}
 
     @staticmethod
@@ -358,8 +367,17 @@ class EVBot:
     def _moved(self, k, p):
         """The site that just repriced while the other hasn't (execpolicy.stale_side), or None."""
         from .execpolicy import stale_side
-        stale = stale_side(self.scanner, [{"exchange": "kalshi", "market_id": k}, {"exchange": "polymarket", "market_id": p}])
+        stale = stale_side(self.scanner, [{"exchange": "kalshi", "market_id": k}, {"exchange": "polymarket", "market_id": p}],
+                           fresh_secs=config.EV_BOT_STALE_FRESH_SECS, gap_secs=config.EV_BOT_STALE_GAP_SECS)
         return None if stale is None else "polymarket" if stale == "kalshi" else "kalshi"
+
+    def _arbs_ok(self, live):
+        """An arb's cheap side may be bet (EV_BOT_TAKE_ARBS) when Auto-trade won't take it: Auto-trade is off, or the
+        game is in progress and Auto-trade skips those."""
+        if not config.EV_BOT_TAKE_ARBS:
+            return False
+        auto = getattr(self.scanner, "autotrader", None)
+        return not getattr(auto, "on", False) or (live and not config.AUTO_TRADE_LIVE_GAMES)
 
     def observe(self, groups, source, now=None):
         """After a price pass: keep each open bet's latest pre-game fair price (its closing value once the game
@@ -371,7 +389,7 @@ class EVBot:
             groups = {g: v for g, v in groups.items() if g[0] in games}
         now = now or engine.now_utc()
         stats = {}
-        cands, fairs = candidates(groups, source, now, self._fresh, self._moved, stats)
+        cands, fairs = candidates(groups, source, now, self._fresh, self._moved, stats, self._arbs_ok)
         self._track_closing(fairs, now)
         if self.on:
             with self.lock:
@@ -561,7 +579,8 @@ class EVBot:
                  "k": b["k"], "p": b["p"], "yes_is_k": c.exchange == "kalshi" or b["rel"] > 0,
                  "mids": {"kalshi": round(b["fv"]["k_mid"], 4), "polymarket": round(b["fv"]["p_mid"], 4)},
                  "start": b["start"], "decided": b["decided"], "status": "open", "pnl": None, "clv": None,
-                 "live": bool(b.get("live")), "placed": (b.get("now") or engine.now_utc()).isoformat()}
+                 "live": bool(b.get("live")), "placed": (b.get("now") or engine.now_utc()).isoformat(),
+                 "from_arb": bool(b.get("arb"))}
         with self.lock:
             self.bets.append(entry)
             self._save()

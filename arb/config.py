@@ -204,6 +204,16 @@ EV_BOT_LIVE_QUOTE_AGE = 3.0
 EV_BOT_LIVE_MARK_SECS = 60.0
 EV_BOT_COOLDOWN_SECS = _env_num("EV_BOT_COOLDOWN_SECS", 600)   # per market, after a bet attempt
 EV_BOT_PER_GAME = int(_env_num("EV_BOT_PER_GAME", 1))           # open bets on one game at most
+# Arbs are left to Auto-trade (hedged is better). With this on, when Auto-trade won't take one (it's off, or the
+# game is in progress and Auto-trade skips those), the EV bot bets its cheap side instead.
+EV_BOT_TAKE_ARBS = _env_on("EV_BOT_TAKE_ARBS", False)
+# Player props: a player who sits out settles at a fair price on each site. That breaks a two-leg arb's $1, but
+# a single bet settled near its price is about even, so the EV bot may take them.
+EV_BOT_PROPS = _env_on("EV_BOT_PROPS", True)
+# A stale quote, for the EV bot: the other site's price moved within EV_BOT_STALE_FRESH_SECS and this one hadn't
+# for EV_BOT_STALE_GAP_SECS longer (Auto-trade's leg order keeps STALE_FRESH_SECS / STALE_GAP_SECS).
+EV_BOT_STALE_FRESH_SECS = _env_num("EV_BOT_STALE_FRESH_SECS", 2)
+EV_BOT_STALE_GAP_SECS = _env_num("EV_BOT_STALE_GAP_SECS", 3)
 EV_BOT_PROFILE = os.environ.get("EV_BOT_PROFILE", "normal").strip().lower() or "normal"   # see settings.EV_PROFILES
 EV_BOT_SETTLE_SECS = 300           # open bets' results are read this often
 EV_BETS_FILE = PROJECT_ROOT / "cache" / "ev_bets.json"

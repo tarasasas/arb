@@ -768,6 +768,9 @@ are never changed by it.
 | Same market again after | 15 min | 10 min | 2 min |
 | No bets before the start | 10 min | 5 min | 1 min |
 | Result known within | 24h | 24h | 48h |
+| Cheap side of arbs Auto-trade won't take | no | no | yes |
+| Player props | no | yes | yes |
+| Stale quote: other site moved within / this one quiet for | 2s / 3s | 2s / 3s | 5s / 1s |
 
 Aggressive bets more often and bigger, on smaller edges: those are likelier to be a fair price that's off
 rather than a real edge, so expect bigger swings, and watch closing value (and live bets' 1-minute value).
@@ -779,6 +782,11 @@ rather than a real edge, so expect bigger swings, and watch closing value (and l
 
 **No bets for a while?** That's normal with the defaults: a bet needs a stale quote whose gap lands in a band
 often under a cent wide (a smaller gap has no edge after the fee, a bigger one is an arb and goes to Auto-trade).
+The biggest lever is the arbs: with Auto-trade on they're taken hedged (risk-free); with **Bet the cheap side of
+arbs Auto-trade won't take** (`EV_BOT_TAKE_ARBS`, on in aggressive) the EV bot bets their cheap side when
+Auto-trade is off, or skips the game because it's in progress. Others: player props (`EV_BOT_PROPS`, on: a player
+who sits out settles near the price, about even for a single bet), a looser stale-quote window
+(`EV_BOT_STALE_FRESH_SECS` / `EV_BOT_STALE_GAP_SECS`, 2s / 3s; aggressive 5s / 1s), more bets per game.
 The bar shows, since you turned it on, how many pair checks it ran, how many stale-quote moments there were and
 the closest any bet came to qualifying; **Why no bets?** breaks down why pairs were passed over (book too wide,
 prices too far apart, quotes not current, game started, an arb, edge too small) and what stopped bets that did

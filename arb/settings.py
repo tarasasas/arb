@@ -74,7 +74,8 @@ GROUPS = [
          "Fills in the settings below (you can still change any of them; it then shows custom). careful: bigger "
          "edges only, small bets, no games in progress. normal: the defaults. aggressive: smaller edges (1c), "
          "wider books, half-Kelly stakes up to $25 a bet and $200 a day, up to 3 bets per game, games in progress "
-         "with little extra edge. More bets and bigger swings: smaller edges are likelier to be a wrong fair price.",
+         "with little extra edge, a looser stale-quote window, and the cheap side of arbs Auto-trade won't take. "
+         "More bets and bigger swings: smaller edges are likelier to be a wrong fair price.",
          "normal"),
         ("EV_BOT_PAPER", "bool", "Paper trading: no real orders",
          "Everything but the orders, filled against the real books; results show in the EV bot bar. Each real bet "
@@ -95,6 +96,14 @@ GROUPS = [
         ("EV_BOT_LIVE_EXTRA_EDGE", "cents", "Extra edge for games in progress (¢ per share)",
          "On top of the minimum edge.", 1),
         ("EV_BOT_PER_GAME", "int", "Bets per game at most", "Open bets on one game.", 1),
+        ("EV_BOT_TAKE_ARBS", "bool", "Bet the cheap side of arbs Auto-trade won't take",
+         "When Auto-trade is off (or the game is in progress and Auto-trade skips those), an arb's cheap side is "
+         "the biggest edge there is. Hedged by Auto-trade it's risk-free: turning Auto-trade on is better.", False),
+        ("EV_BOT_PROPS", "bool", "Player props",
+         "A player who sits out settles at a fair price on each site: about even for a single bet.", True),
+        ("EV_BOT_STALE_FRESH_SECS", "number", "Stale quote: the other site moved within (seconds)", "", 2),
+        ("EV_BOT_STALE_GAP_SECS", "number", "...and this site hadn't moved for at least (seconds) longer",
+         "Smaller numbers catch more stale quotes, and more that weren't really stale.", 3),
         ("EV_BOT_MAX_SPREAD", "cents", "Widest book used for a fair price (¢)",
          "Between a market's YES ask and 1 - its NO ask. A wider book's middle isn't much of a price.", 4),
         ("EV_BOT_MAX_DISAGREE", "cents", "Most the two sites' prices may differ (¢)",
@@ -132,15 +141,18 @@ EV_PROFILES = {
     "careful": {"EV_BOT_MIN_EDGE": 3, "EV_BOT_MIN_ROI": 6, "EV_BOT_MAX_BET": 5, "EV_BOT_DAILY_LIMIT": 25,
                 "EV_BOT_KELLY": 0.15, "EV_BOT_MAX_OPEN": 5, "EV_BOT_MAX_HOURS": 24, "EV_BOT_LIVE_GAMES": False,
                 "EV_BOT_LIVE_EXTRA_EDGE": 2, "EV_BOT_PER_GAME": 1, "EV_BOT_MAX_SPREAD": 3, "EV_BOT_MAX_DISAGREE": 6,
-                "EV_BOT_COOLDOWN_SECS": 900, "EV_BOT_MIN_LEAD_SECS": 600},
+                "EV_BOT_COOLDOWN_SECS": 900, "EV_BOT_MIN_LEAD_SECS": 600, "EV_BOT_TAKE_ARBS": False,
+                "EV_BOT_PROPS": False, "EV_BOT_STALE_FRESH_SECS": 2, "EV_BOT_STALE_GAP_SECS": 3},
     "normal": {"EV_BOT_MIN_EDGE": 2, "EV_BOT_MIN_ROI": 4, "EV_BOT_MAX_BET": 10, "EV_BOT_DAILY_LIMIT": 50,
                "EV_BOT_KELLY": 0.25, "EV_BOT_MAX_OPEN": 10, "EV_BOT_MAX_HOURS": 24, "EV_BOT_LIVE_GAMES": True,
                "EV_BOT_LIVE_EXTRA_EDGE": 1, "EV_BOT_PER_GAME": 1, "EV_BOT_MAX_SPREAD": 4, "EV_BOT_MAX_DISAGREE": 8,
-               "EV_BOT_COOLDOWN_SECS": 600, "EV_BOT_MIN_LEAD_SECS": 300},
+               "EV_BOT_COOLDOWN_SECS": 600, "EV_BOT_MIN_LEAD_SECS": 300, "EV_BOT_TAKE_ARBS": False,
+               "EV_BOT_PROPS": True, "EV_BOT_STALE_FRESH_SECS": 2, "EV_BOT_STALE_GAP_SECS": 3},
     "aggressive": {"EV_BOT_MIN_EDGE": 1, "EV_BOT_MIN_ROI": 2, "EV_BOT_MAX_BET": 25, "EV_BOT_DAILY_LIMIT": 200,
                    "EV_BOT_KELLY": 0.5, "EV_BOT_MAX_OPEN": 25, "EV_BOT_MAX_HOURS": 48, "EV_BOT_LIVE_GAMES": True,
                    "EV_BOT_LIVE_EXTRA_EDGE": 0.5, "EV_BOT_PER_GAME": 3, "EV_BOT_MAX_SPREAD": 6, "EV_BOT_MAX_DISAGREE": 12,
-                   "EV_BOT_COOLDOWN_SECS": 120, "EV_BOT_MIN_LEAD_SECS": 60},
+                   "EV_BOT_COOLDOWN_SECS": 120, "EV_BOT_MIN_LEAD_SECS": 60, "EV_BOT_TAKE_ARBS": True,
+                   "EV_BOT_PROPS": True, "EV_BOT_STALE_FRESH_SECS": 5, "EV_BOT_STALE_GAP_SECS": 1},
 }
 
 

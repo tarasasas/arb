@@ -71,6 +71,10 @@ class StaleSideTests(unittest.TestCase):
         now = time.time()
         self.assertIsNone(execpolicy.stale_side(self.scanner(1, 0.5, now), self.legs(), now))      # both just moved
         self.assertIsNone(execpolicy.stale_side(self.scanner(60, 30, now), self.legs(), now))      # both quiet
+        # a looser window (the EV bot's) catches a move Auto-trade's would call unclear
+        self.assertIsNone(execpolicy.stale_side(self.scanner(4, 1.5, now), self.legs(), now))
+        self.assertEqual(execpolicy.stale_side(self.scanner(4, 1.5, now), self.legs(), now, fresh_secs=5, gap_secs=1),
+                         "kalshi")
         s = self.scanner(20, 0.5, now)
         s.streams["kalshi"].seen = set()                                                           # no book yet
         self.assertIsNone(execpolicy.stale_side(s, self.legs(), now))
