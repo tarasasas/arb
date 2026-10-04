@@ -195,6 +195,13 @@ EV_BOT_MAX_SPREAD = _env_num("EV_BOT_MAX_SPREAD", 4) / 100      # a wider book's
 EV_BOT_MAX_DISAGREE = _env_num("EV_BOT_MAX_DISAGREE", 8) / 100  # mids further apart: stale quote or wrong match
 EV_BOT_MIN_LEAD_SECS = _env_num("EV_BOT_MIN_LEAD_SECS", 300)    # no bets this close to the start (or after)
 EV_BOT_MAX_QUOTE_AGE = 10.0        # a polled quote counts as current this long (a live feed's always does)
+# Games in progress: prices jump and a fair price is less sure, so a live bet needs EV_BOT_LIVE_EXTRA_EDGE more
+# edge and quotes no older than EV_BOT_LIVE_QUOTE_AGE. "Closing value" means nothing once a game is under way,
+# so a live bet is scored by the fair price EV_BOT_LIVE_MARK_SECS after it (did the stale site catch up?).
+EV_BOT_LIVE_GAMES = _env_on("EV_BOT_LIVE_GAMES", True)
+EV_BOT_LIVE_EXTRA_EDGE = _env_num("EV_BOT_LIVE_EXTRA_EDGE", 1) / 100
+EV_BOT_LIVE_QUOTE_AGE = 3.0
+EV_BOT_LIVE_MARK_SECS = 60.0
 EV_BOT_COOLDOWN_SECS = 600         # per market, after a bet attempt
 EV_BOT_SETTLE_SECS = 300           # open bets' results are read this often
 EV_BETS_FILE = PROJECT_ROOT / "cache" / "ev_bets.json"

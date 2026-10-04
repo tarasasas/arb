@@ -83,6 +83,11 @@ GROUPS = [
          "the fair price is off.", 0.25),
         ("EV_BOT_MAX_OPEN", "int", "Open bets at most", "One per game.", 10),
         ("EV_BOT_MAX_HOURS", "number", "Only games whose result is known within (hours)", "", 24),
+        ("EV_BOT_LIVE_GAMES", "bool", "Games in progress too",
+         "Stale quotes are most common in play, but prices jump and Polymarket can hold in-play orders a moment. Live "
+         "bets need the extra edge below and quotes under 3 seconds old.", True),
+        ("EV_BOT_LIVE_EXTRA_EDGE", "cents", "Extra edge for games in progress (¢ per share)",
+         "On top of the minimum edge.", 1),
     ]),
     ("Every trade", [
         ("MAX_TRADE_DOLLARS", "money", "Hard cap per trade", "Make trade, Fast trade and Auto-trade, both legs together.", 100),

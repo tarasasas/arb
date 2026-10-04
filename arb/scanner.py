@@ -681,7 +681,10 @@ class Scanner:
         with self.lock:
             groups = self.groups
         skip_windows = config.FAST_LANE == "auto" and not config.AUTO_TRADE_CRYPTO_WINDOWS
-        key = (id(groups), config.FAST_MAX_HOURS, config.AUTO_TRADE_LIVE_GAMES, skip_windows)
+        # games in progress: when Auto-trade takes them, or the EV bot is on and takes them
+        live_ok = bool(config.AUTO_TRADE_LIVE_GAMES or (config.EV_BOT_LIVE_GAMES
+                                                       and getattr(getattr(self, "evbot", None), "on", False)))
+        key = (id(groups), config.FAST_MAX_HOURS, live_ok, skip_windows)
         hit = getattr(self, "_lane_cache", None)
         if hit and hit[0] == key and time.time() - hit[1] < 30:
             return hit[2]
@@ -697,9 +700,9 @@ class Scanner:
             close = min((t for t in (k_close, p_close) if t), default=None) if g[1][0] == "event" else k_close
             if close is None or close > cutoff:
                 continue
-            if (g[1][0] not in ("event", "price") and not config.AUTO_TRADE_LIVE_GAMES
+            if (g[1][0] not in ("event", "price") and not live_ok
                     and p_close is not None and p_close <= now):
-                continue                    # in play: Auto-trade won't take it
+                continue                    # in play: nothing here takes it
             if skip_windows and g[1][0] == "price":
                 continue                    # crypto Up/Down windows: Auto-trade leaves them alone
             picked.append((close, g))

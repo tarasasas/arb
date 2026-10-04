@@ -76,15 +76,36 @@ class CandidateTests(unittest.TestCase):
         g, src = pair(p_no=0.40, p_yes=0.62)                    # 0.55 + 0.40 + fees < $1
         self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
 
-    def test_started_or_far_off_games_are_skipped(self):
+    def test_about_to_start_or_far_off_games_are_skipped(self):
         g, src = pair(start_in=0.05)                            # starts in 3 minutes
         self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
         g, src = pair(decided_in=60)
         self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
 
+    def test_games_in_progress_need_the_extra_edge(self):
+        g, src = pair(start_in=-0.5)                            # kicked off 30 min ago; 3.3c edge on the stale quote
+        with mock.patch.object(config, "EV_BOT_LIVE_GAMES", False):
+            self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
+        cands = evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0]
+        self.assertEqual([(b["contract"].exchange, b["side"], b["live"]) for b in cands], [("kalshi", YES, True)])
+        self.assertAlmostEqual(cands[0]["min_edge"], 0.03)
+        with mock.patch.object(config, "EV_BOT_LIVE_EXTRA_EDGE", 0.02):     # 4c needed: 3.3c isn't enough live...
+            self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
+            g2, src2 = pair()                                               # ...but is before the game
+            self.assertEqual(len(evbot.candidates(g2, src2, NOW, moved=POLY_MOVED)[0]), 1)
+
+    def test_live_quotes_must_be_seconds_old(self):
+        ages = []
+        g, src = pair(start_in=-0.5)
+        evbot.candidates(g, src, NOW, fresh=lambda ex, mid, age=None: ages.append(age) or True, moved=POLY_MOVED)
+        self.assertEqual(set(ages), {config.EV_BOT_LIVE_QUOTE_AGE})
+        ages.clear()
+        evbot.candidates(*pair(), NOW, fresh=lambda ex, mid, age=None: ages.append(age) or True, moved=POLY_MOVED)
+        self.assertEqual(set(ages), {config.EV_BOT_MAX_QUOTE_AGE})
+
     def test_stale_quotes_are_never_trusted(self):
         g, src = pair()
-        self.assertEqual(evbot.candidates(g, src, NOW, fresh=lambda ex, mid: ex != "kalshi", moved=POLY_MOVED)[0], [])
+        self.assertEqual(evbot.candidates(g, src, NOW, fresh=lambda ex, mid, age=None: ex != "kalshi", moved=POLY_MOVED)[0], [])
 
     def test_props_and_non_sports_are_left_alone(self):
         g, src = pair(var=("player", "pyd", "patrick mahomes"))
@@ -92,7 +113,7 @@ class CandidateTests(unittest.TestCase):
 
 
 class WhyNoBetsTests(unittest.TestCase):
-    def why(self, moved=lambda k, p: None, fresh=lambda ex, mid: True, **kw):
+    def why(self, moved=lambda k, p: None, fresh=lambda ex, mid, age=None: True, **kw):
         g, src = pair(**kw)
         st = {}
         evbot.candidates(g, src, NOW, fresh=fresh, moved=moved, stats=st)
@@ -102,8 +123,10 @@ class WhyNoBetsTests(unittest.TestCase):
         self.assertEqual(self.why()["below edge"], 1)                        # tight books, consensus: no edge
         self.assertEqual(self.why(k_yes=0.58, k_no=0.48)["wide"], 1)        # Kalshi 6c wide
         self.assertEqual(self.why(p_yes=0.68, p_no=0.34)["apart"], 1)       # both 2c wide, mids 13c apart
-        self.assertEqual(self.why(fresh=lambda ex, mid: ex != "kalshi")["not current"], 1)
-        self.assertEqual(self.why(start_in=-1)["started"], 1)
+        self.assertEqual(self.why(fresh=lambda ex, mid, age=None: ex != "kalshi")["not current"], 1)
+        with mock.patch.object(config, "EV_BOT_LIVE_GAMES", False):
+            self.assertEqual(self.why(start_in=-1)["started"], 1)
+        self.assertEqual(self.why(start_in=-1)["live"], 1)                   # live games on: priced, not skipped
         self.assertEqual(self.why(start_in=0.05)["starting soon"], 1)
         self.assertEqual(self.why(p_no=0.40)["arb"], 1)
         st = self.why(moved=POLY_MOVED)
@@ -162,7 +185,7 @@ def bot(trader=None, **cfg):
     path = Path(tempfile.mkdtemp()) / "ev_bets.json"
     b = evbot.EVBot(Scanner(trader), path=path, run_async=False)
     b._moved = POLY_MOVED
-    b._fresh = lambda ex, mid: True
+    b._fresh = lambda ex, mid, age=None: True
     return b
 
 
@@ -229,6 +252,24 @@ class PaperBotTests(unittest.TestCase):
         b.observe(*pair(k_yes=0.63, k_no=0.39, p_yes=0.63, p_no=0.39), NOW + timedelta(hours=2, minutes=58))
         b.observe(*pair(k_yes=0.63, k_no=0.39, p_yes=0.63, p_no=0.39), NOW + timedelta(hours=3, minutes=1))
         self.assertAlmostEqual(b.bets[0]["closing"], 0.62, 2)
+
+    def test_a_live_bet_is_scored_a_minute_later(self):
+        b = bot()
+        b.set(True)
+        b.observe(*pair(start_in=-0.5), NOW)
+        bet = b.bets[0]
+        self.assertTrue(bet["live"])
+        b.on = False
+        b._moved = lambda k, p: None
+        caught_up = dict(k_yes=0.61, k_no=0.41, p_yes=0.62, p_no=0.40, start_in=-0.5)   # Kalshi repriced to ~0.60
+        b.observe(*pair(**caught_up), NOW + timedelta(seconds=30))
+        self.assertIsNone(bet["clv"])                                       # not a minute yet
+        b.observe(*pair(**caught_up), NOW + timedelta(seconds=61))
+        self.assertTrue(bet["tracked"])
+        self.assertAlmostEqual(bet["clv"], round(bet["closing"] - bet["cost"] / bet["qty"], 4), 4)
+        s = b.status()["paper_results"]
+        self.assertEqual((s["live_bets"], s["mark_n"], s["clv_n"]), (1, 1, 0))   # kept apart from closing value
+        self.assertGreater(s["mark_avg"], 0)
 
     def test_results_are_settled_from_the_market(self):
         b = bot()

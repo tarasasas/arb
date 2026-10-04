@@ -738,7 +738,17 @@ outside source, such as a sharp sportsbook's odds.
 
 **What it bets:** one side of one market when price + fee is at least `EV_BOT_MIN_EDGE` (2¢) and
 `EV_BOT_MIN_ROI` (4%) below that side's fair price; sports games (spreads, totals, moneylines, team totals)
-not yet started (not within 5 minutes of the start), result known within `EV_BOT_MAX_HOURS` (24). Size:
+whose result is known within `EV_BOT_MAX_HOURS` (24), not in the 5 minutes before the start.
+
+**Games in progress** (`EV_BOT_LIVE_GAMES`, on; ⚙ Settings → EV bot). Stale quotes are most common in play,
+but prices jump, a fair price is less sure, and Polymarket can hold in-play orders a moment. So a live bet
+needs `EV_BOT_LIVE_EXTRA_EDGE` (1¢) more edge (3¢ by default) and both quotes under 3 seconds old (a polled
+quote; a live feed's always counts). While the EV bot is on, games in progress also join the fast lane and
+the live streams. "Closing value" means nothing once a game is under way, so a live bet is scored by the fair
+price 60 seconds after it, shown separately in the bar ("live bets 1 min later"): positive on average means the
+stale quotes it bought did catch up. Its result settles like any other bet.
+
+Size:
 `EV_BOT_KELLY` (¼) of the Kelly stake on `EV_BOT_BANKROLL` ($200, or your cash on that site if less), at most
 `EV_BOT_MAX_BET` ($10) a bet and `EV_BOT_DAILY_LIMIT` ($50) a day, `EV_BOT_MAX_OPEN` (10) open bets and one
 per game, never more than the book shows within the edge. Real orders are immediate-or-cancel at the highest

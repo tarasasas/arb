@@ -13,7 +13,8 @@ move too big to call), give no fair price.
 
 A bet: one side of one of the two markets whose price + taker fee is at least EV_BOT_MIN_EDGE below
 that side's fair price (and EV_BOT_MIN_ROI of what it costs). A pair that's an arb is left to the arb
-side (hedged is better). Sports games only, not yet started, whose result is known within EV_BOT_MAX_HOURS.
+side (hedged is better). Sports games whose result is known within EV_BOT_MAX_HOURS; games in progress too
+(EV_BOT_LIVE_GAMES) with EV_BOT_LIVE_EXTRA_EDGE more edge and quotes under EV_BOT_LIVE_QUOTE_AGE old.
 
 Size: EV_BOT_KELLY x the Kelly stake for that edge on EV_BOT_BANKROLL, at most EV_BOT_MAX_BET a bet and
 EV_BOT_DAILY_LIMIT a day, EV_BOT_MAX_OPEN open bets, one open bet per game; never more than the book
@@ -126,18 +127,19 @@ def _no_price_reason(k, p, rel):
     return None
 
 
-def _closeness(ev, cost):
+def _closeness(ev, cost, min_edge=None):
     """How close a bet is to qualifying: 1 = exactly at both minimums (edge and return), below 1 = short."""
-    return min(ev / config.EV_BOT_MIN_EDGE if config.EV_BOT_MIN_EDGE > 0 else math.inf,
+    min_edge = config.EV_BOT_MIN_EDGE if min_edge is None else min_edge
+    return min(ev / min_edge if min_edge > 0 else math.inf,
                (ev / cost) / config.EV_BOT_MIN_ROI if config.EV_BOT_MIN_ROI > 0 else math.inf)
 
 
-def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, p: None, stats=None):
+def candidates(groups, source, now, fresh=lambda ex, mid, age=None: True, moved=lambda k, p: None, stats=None):
     """(bets worth taking now, best edge first; {(k id, p id): fair YES of k} for every pair priced).
-    fresh(exchange, market id): whether that market's quote is current. moved(k id, p id): the site that just
-    repriced while the other didn't, or None. stats: a dict that gets, per same-question pair in the window,
-    the reason it was passed over (or "qualified"), "moves" (stale-quote moments) and "best" (the bet that
-    came closest to qualifying)."""
+    fresh(exchange, market id, max age in seconds): whether that market's quote is current. moved(k id, p id):
+    the site that just repriced while the other didn't, or None. stats: a dict that gets, per same-question
+    pair in the window, the reason it was passed over (or "qualified"), "moves" (stale-quote moments), "live"
+    (pairs whose game is in progress) and "best" (the bet that came closest to qualifying)."""
     out, fairs = [], {}
     st = stats if stats is not None else {}
     count = lambda why: st.__setitem__(why, st.get(why, 0) + 1)
@@ -157,10 +159,15 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                 if not rel:
                     continue
                 start = engine._parse_time(p.close_time)           # a Polymarket game's date is its start
-                if start is None or start <= now:
-                    count("started")                              # in play
+                if start is None:
+                    count("no start time")
                     continue
-                if not (fresh("kalshi", k.market_id) and fresh("polymarket", p.market_id)):
+                live = start <= now
+                if live and not config.EV_BOT_LIVE_GAMES:
+                    count("started")                              # in play, and live games are off
+                    continue
+                age = config.EV_BOT_LIVE_QUOTE_AGE if live else config.EV_BOT_MAX_QUOTE_AGE
+                if not (fresh("kalshi", k.market_id, age) and fresh("polymarket", p.market_id, age)):
                     count("not current")
                     continue
                 why = _no_price_reason(k, p, rel)
@@ -168,8 +175,8 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                     count(why)
                     continue
                 fv = fair_value(k, p, rel, moved(k.market_id, p.market_id))
-                fairs[(k.market_id, p.market_id)] = fv["fair"]       # tracked right up to the start (closing value)
-                if start <= lead:
+                fairs[(k.market_id, p.market_id)] = fv["fair"]       # for closing value and live marks
+                if not live and start <= lead:
                     count("starting soon")
                     continue
                 if _hedged_arb(k, p, rel):
@@ -177,6 +184,9 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                     continue
                 if fv["source"] != "consensus":
                     count("moves")
+                if live:
+                    count("live")
+                min_edge = config.EV_BOT_MIN_EDGE + (config.EV_BOT_LIVE_EXTRA_EDGE if live else 0.0)
                 found = False
                 for c, yes_q in ((k, fv["fair"]), (p, fv["fair"] if rel > 0 else 1 - fv["fair"])):
                     if fv["source"] != "consensus" and fv["source"].startswith(NAMES[c.exchange]):
@@ -188,12 +198,13 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                         q = yes_q if side == YES else 1 - yes_q
                         cost = a + fee_per_contract(c.fee_coef, a)
                         ev = q - cost
-                        close = _closeness(ev, cost)
+                        close = _closeness(ev, cost, min_edge)
                         if st.get("best") is None or close > st["best"]["closeness"]:
                             st["best"] = {"closeness": round(close, 3), "ev": round(ev, 4), "roi": round(ev / cost, 4),
                                           "game": k.game_label or k.game_key.split(":", 1)[1],
                                           "quantity": engine.describe_var(k.var), "exchange": NAMES[c.exchange],
                                           "side": side, "ask": a, "fair": round(q, 4), "source": fv["source"],
+                                          "live": live, "min_edge": round(min_edge, 4),
                                           "time": now.isoformat(timespec="seconds")}
                         if close < 1 - 1e-9:
                             continue
@@ -203,7 +214,7 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                                     "k": k.market_id, "p": p.market_id, "rel": rel, "fv": fv,
                                     "game": k.game_key, "label": k.game_label or k.game_key.split(":", 1)[1],
                                     "quantity": engine.describe_var(k.var), "start": start.isoformat(),
-                                    "decided": decided.isoformat(), "market": m,
+                                    "decided": decided.isoformat(), "market": m, "live": live, "min_edge": min_edge,
                                     "levels": list(((getattr(m, "levels", None) or {}).get(side)) or [])
                                     or ([(a, getattr(m, f"{side}_ask_size", None))]
                                         if getattr(m, f"{side}_ask_size", None) else [])})
@@ -289,7 +300,8 @@ class EVBot:
         settled = [b for b in mine if b["status"] in ("won", "lost", "void")]
         staked = sum(b["cost"] for b in settled)
         pnl = sum(b["pnl"] for b in settled)
-        clv = [b["clv"] for b in mine if b.get("clv") is not None]
+        clv = [b["clv"] for b in mine if b.get("clv") is not None and not b.get("live")]
+        mark = [b["clv"] for b in mine if b.get("clv") is not None and b.get("live")]
         opened = [b for b in mine if b["status"] == "open"]
         return {"bets": len(mine), "open": len(opened), "open_staked": round(sum(b["cost"] for b in opened), 2),
                 "open_ev": round(sum(b["ev"] * b["qty"] for b in opened), 2),
@@ -298,35 +310,41 @@ class EVBot:
                 "roi": round(pnl / staked, 4) if staked else None,
                 "expected": round(sum(b["ev"] * b["qty"] for b in settled), 2),
                 "clv_n": len(clv), "clv_avg": round(sum(clv) / len(clv), 4) if clv else None,
-                "clv_positive": round(sum(x > 0 for x in clv) / len(clv), 3) if clv else None}
+                "clv_positive": round(sum(x > 0 for x in clv) / len(clv), 3) if clv else None,
+                "live_bets": sum(bool(b.get("live")) for b in mine),
+                "mark_n": len(mark), "mark_avg": round(sum(mark) / len(mark), 4) if mark else None,
+                "mark_positive": round(sum(x > 0 for x in mark) / len(mark), 3) if mark else None}
 
     def status(self):
         return {"on": self.on, "busy": self.busy, "halted": self.halted, "paper": config.EV_BOT_PAPER,
                 "spent_today": self.spent_today(config.EV_BOT_PAPER), "daily_limit": config.EV_BOT_DAILY_LIMIT,
                 "max_bet": config.EV_BOT_MAX_BET, "min_edge": config.EV_BOT_MIN_EDGE, "min_roi": config.EV_BOT_MIN_ROI,
                 "kelly": config.EV_BOT_KELLY, "bankroll": config.EV_BOT_BANKROLL, "max_open": config.EV_BOT_MAX_OPEN,
-                "max_hours": config.EV_BOT_MAX_HOURS,
+                "max_hours": config.EV_BOT_MAX_HOURS, "live_games": config.EV_BOT_LIVE_GAMES,
+                "live_extra_edge": config.EV_BOT_LIVE_EXTRA_EDGE, "live_mark_secs": config.EV_BOT_LIVE_MARK_SECS,
                 "real": self.summary(False), "paper_results": self.summary(True),
                 "history": [{k: b.get(k) for k in ("time", "paper", "game", "quantity", "exchange", "side", "title",
-                                                   "qty", "avg", "cost", "fair", "fair_source", "ev", "status", "pnl", "clv")}
+                                                   "qty", "avg", "cost", "fair", "fair_source", "ev", "status", "pnl", "clv",
+                                                   "live")}
                             for b in reversed(self.bets[-20:])],
                 "top": self.top if self.on else [],
                 "why": {"since": self.why_since, "passes": self.passes, "counts": dict(self.funnel),
-                        "checked": sum(v for k, v in self.funnel.items() if k != "moves"), "best": self.best,
+                        "checked": sum(v for k, v in self.funnel.items() if k not in ("moves", "live")), "best": self.best,
                         "blocked": dict(self.blocked)}}
 
     # ---- every price pass -------------------------------------------------------------------------
 
-    def _fresh(self, ex, mid):
-        """A market's quote is current: its live feed is alive and holds it, or it was read within
-        EV_BOT_MAX_QUOTE_AGE."""
+    def _fresh(self, ex, mid, max_age=None):
+        """A market's quote is current: its live feed is alive and holds it, or it was read within max_age
+        seconds (EV_BOT_MAX_QUOTE_AGE if not given)."""
         s = (getattr(self.scanner, "streams", None) or {}).get(ex)
         now = time.time()
         if s and getattr(s, "connected", False) and now - (getattr(s, "last_msg", 0) or 0) <= config.LIVE_FEED_ALIVE_SECS \
                 and mid in getattr(s, "seen", ()):
             return True
         m = (getattr(self.scanner, "source", None) or {}).get((ex, mid))
-        return bool(m and now - (getattr(m, "quoted_at", 0) or 0) <= config.EV_BOT_MAX_QUOTE_AGE)
+        age = config.EV_BOT_MAX_QUOTE_AGE if max_age is None else max_age
+        return bool(m and now - (getattr(m, "quoted_at", 0) or 0) <= age)
 
     def _moved(self, k, p):
         """The site that just repriced while the other hasn't (execpolicy.stale_side), or None."""
@@ -367,6 +385,7 @@ class EVBot:
                 return None
             self.busy = True
             self.tried[pick["contract"].market_id] = time.time()
+            pick["now"] = now
         if self._worker:
             self._worker.submit(self._run, pick)
         else:
@@ -408,6 +427,19 @@ class EVBot:
                 continue
             start = engine._parse_time(b.get("start") or "")
             f = fairs.get((b["k"], b["p"]))
+            if b.get("live"):
+                # placed during the game: its score is the fair price a minute later (gave up after five)
+                placed = engine._parse_time(b.get("placed") or "")
+                if placed is None or now < placed + timedelta(seconds=config.EV_BOT_LIVE_MARK_SECS):
+                    continue
+                if f is not None:
+                    yes = f if b["yes_is_k"] else 1 - f
+                    q = yes if b["side"] == YES else 1 - yes
+                    b["closing"], b["clv"] = round(q, 4), round(q - b["cost"] / b["qty"], 4)
+                    b["tracked"] = changed = True
+                elif now >= placed + timedelta(seconds=5 * config.EV_BOT_LIVE_MARK_SECS):
+                    b["tracked"] = changed = True
+                continue
             if f is not None and (start is None or now < start):    # (this pass's bet is placed after this)
                 b["last_fair"] = f if b["yes_is_k"] else 1 - f
                 b["last_fair_at"] = now.isoformat()
@@ -424,7 +456,7 @@ class EVBot:
 
     def _size(self, b, bankroll):
         c = b["contract"]
-        limit = limit_for(b["q"], c.fee_coef, b["ask"], config.EV_BOT_MIN_EDGE, config.EV_BOT_MIN_ROI)
+        limit = limit_for(b["q"], c.fee_coef, b["ask"], b.get("min_edge", config.EV_BOT_MIN_EDGE), config.EV_BOT_MIN_ROI)
         if limit is None:
             return 0, None, []
         stake_cap = min(config.EV_BOT_MAX_BET, config.EV_BOT_DAILY_LIMIT - self.spent_today(config.EV_BOT_PAPER))
@@ -517,7 +549,8 @@ class EVBot:
                  "fair": round(b["q"], 4), "fair_source": b["fv"]["source"], "ev": round(b["q"] - (amount + fee) / qty, 4),
                  "k": b["k"], "p": b["p"], "yes_is_k": c.exchange == "kalshi" or b["rel"] > 0,
                  "mids": {"kalshi": round(b["fv"]["k_mid"], 4), "polymarket": round(b["fv"]["p_mid"], 4)},
-                 "start": b["start"], "decided": b["decided"], "status": "open", "pnl": None, "clv": None}
+                 "start": b["start"], "decided": b["decided"], "status": "open", "pnl": None, "clv": None,
+                 "live": bool(b.get("live")), "placed": (b.get("now") or engine.now_utc()).isoformat()}
         with self.lock:
             self.bets.append(entry)
             self._save()

@@ -225,6 +225,22 @@ class FastLaneTests(unittest.TestCase):
         self.assertEqual(self.s.state["near_misses"], ["from the full sweep"])   # a lane pass leaves these alone
         self.assertNotIn("hot_seconds", self.s.state)
 
+    def test_games_in_progress_join_the_lane_while_the_ev_bot_takes_them(self):
+        from datetime import timedelta
+        from types import SimpleNamespace
+        for c in self.s.contracts:                           # game A kicked off 10 minutes ago
+            if c.game_key.endswith("A") and c.exchange == "polymarket":
+                c.close_time = (self.now - timedelta(minutes=10)).isoformat()
+        self.s.groups = scanner.engine.group_pairs(self.s.contracts)
+        self.s.evbot = SimpleNamespace(on=False)
+        self.assertNotIn("T:A", self.lane_games())           # nothing takes games in progress
+        self.s.evbot.on = True
+        self.s._lane_cache = None
+        self.assertIn("T:A", self.lane_games())              # the EV bot does (EV_BOT_LIVE_GAMES)
+        self.s._lane_cache = None
+        with mock.patch.object(scanner.config, "EV_BOT_LIVE_GAMES", False):
+            self.assertNotIn("T:A", self.lane_games())
+
     def test_crypto_windows_stay_out_of_the_lane_while_auto_trade_skips_them(self):
         from datetime import timedelta
         when = (self.now + timedelta(minutes=10)).isoformat()
