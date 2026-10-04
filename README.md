@@ -749,6 +749,14 @@ price that keeps the edge, and wait for any arb trade in flight. It stops after 
   average means the bets had an edge; it's known hours after a bet, long before enough results are in.
 - **Results:** once a market settles, what the bet actually paid, and the P&L against what was expected.
 
+**No bets for a while?** That's normal with the defaults: a bet needs a stale quote whose gap lands in a band
+often under a cent wide (a smaller gap has no edge after the fee, a bigger one is an arb and goes to Auto-trade).
+The bar shows, since you turned it on, how many pair checks it ran, how many stale-quote moments there were and
+the closest any bet came to qualifying; **Why no bets?** breaks down why pairs were passed over (book too wide,
+prices too far apart, quotes not current, game started, an arb, edge too small) and what stopped bets that did
+qualify. If the closest misses sit just under the minimum, lowering `EV_BOT_MIN_EDGE` / `EV_BOT_MIN_ROI` is the
+lever, for smaller edges that are more sensitive to a wrong fair price.
+
 Give paper trading a few hundred bets: if closing value isn't clearly positive, real money won't do better.
 Turn on real orders with `EV_BOT_PAPER=0` (you're asked to confirm). EV bets aren't added to My arbs, so My
 positions lists them as unpaired positions.

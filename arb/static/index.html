@@ -869,6 +869,35 @@ function evResults(r, label) {
     means the bets had an edge, long before enough results are in to tell.">${label}: ${r.open} open (${money(r.open_staked)},
     +${money(r.open_ev)} expected) · ${settled} · ${clv}</span>`;
 }
+// "Why no bets?": since the bot was turned on, why each same-question pair was passed over, and how close
+// the best one came. Each pass re-checks every pair, so these are checks, not distinct pairs.
+const EV_WHY = [["started", "game already started"], ["not current", "a quote wasn't current"],
+  ["no quote", "a side had no seller"], ["wide", "a book wider than the max spread"],
+  ["apart", "the two sites' prices too far apart"], ["starting soon", "starting within 5 minutes"],
+  ["arb", "an arb: left to Auto-trade (hedged)"], ["below edge", "edge too small"], ["qualified", "worth a bet"]];
+function evWhy(e) {
+  const w = e.why;
+  if (!w || !w.since) return "";
+  const n = w.checked || 0, c = w.counts || {}, b = w.best;
+  const share = k => n ? (100 * (c[k] || 0) / n) : 0;
+  const best = b ? `closest: <b>${b.ev >= 0 ? "+" : ""}${(b.ev * 100).toFixed(1)}¢</b> a share (${pct(b.roi)}) on ${esc(b.game)} ·
+      ${esc(b.exchange)} ${b.side.toUpperCase()} @ ${cents(b.ask)}, fair ${cents(b.fair)} (${esc(b.source)}), ${esc(localTime(b.time))}
+      <span class="muted">· needs ${(e.min_edge * 100).toFixed(1)}¢ and ${pct(e.min_roi)}</span>` : "no pair got as far as an edge yet";
+  const rows = EV_WHY.filter(([k]) => c[k]).map(([k, label]) => `<tr><td>${esc(label)}</td><td class="num">${compact(c[k])}</td>
+      <td class="num">${share(k) < 0.1 && c[k] ? "<0.1" : share(k).toFixed(1)}%</td></tr>`).join("");
+  const blocked = Object.entries(w.blocked || {}).map(([k, v]) => `${esc(k)} ${compact(v)}`).join(" · ");
+  return `<div style="flex-basis:100%" class="muted">Since ${esc(localTime(w.since))}: ${compact(n)} pair checks over ${compact(w.passes)} passes
+      · ${compact(c.moves || 0)} stale-quote moments · ${best}</div>
+    <details class="evwhy"><summary class="muted">Why no bets?</summary>
+      <table><thead><tr><th>Passed over because</th><th class="num">Checks</th><th class="num">Share</th></tr></thead><tbody>${rows ||
+        `<tr><td colspan="3" class="empty">No same-question pairs within ${e.max_hours}h with current quotes yet: the scanner may still
+        be loading, or no games both sites list are in the window.</td></tr>`}</tbody></table>
+      ${blocked ? `<div class="muted">Bets that qualified but weren't placed: ${blocked}</div>` : ""}
+      <div class="rules-text">A bet needs a quote that's stale while the other site just moved, landing in a narrow band: a smaller
+        gap has no edge after the fee; a bigger one is an arb (risk-free, so it's left to Auto-trade). With tight books that band is
+        about the fresh book's half-spread plus the fee the hedge would have cost, often under a cent wide, so days with no bets are
+        normal. Lower the minimum edge in Settings for more (smaller-edge) bets.</div></details>`;
+}
 function renderEV(s) {
   const el = document.getElementById("evbar"), e = s.evbot;
   if (!e) { el.style.display = "none"; return; }
@@ -895,10 +924,12 @@ function renderEV(s) {
       ${e.max_hours}h · ${e.kelly}× Kelly on ${money(e.bankroll)}, at most ${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day,
       ${e.max_open} open (one per game). It keeps each bet's closing value and settles it from the market's result.</div></details>
     ${e.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(e.halted)}</div>` : ""}
+    ${evWhy(e)}
     ${top ? `<details class="evtop"><summary class="muted">Best bets now (${(e.top || []).length})</summary><ol>${top}</ol></details>` : ""}
     ${hist ? `<details class="mhist"><summary class="muted">Last bets</summary><ol>${hist}</ol></details>` : ""}`;
   el.querySelectorAll("details").forEach(d => {
-    const key = "ev-" + (d.classList.contains("limits") ? "limits" : d.classList.contains("evtop") ? "top" : "history");
+    const key = "ev-" + (d.classList.contains("limits") ? "limits" : d.classList.contains("evtop") ? "top"
+      : d.classList.contains("evwhy") ? "why" : "history");
     d.open = !!autoOpenSet[key];
     d.addEventListener("toggle", () => { autoOpenSet[key] = d.open; });
   });

@@ -113,11 +113,34 @@ def kelly_shares(q, cost, bankroll, fraction):
     return fraction * (q - cost) / (1 - cost) * bankroll / cost
 
 
-def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, p: None):
+def _no_price_reason(k, p, rel):
+    """Why a same-question pair has no fair price ("no quote" / "wide" / "apart"), or None if it has one."""
+    qk, qp = quote(k), quote(p)
+    if not qk or not qp:
+        return "no quote"
+    mp = qp[0] if rel > 0 else 1 - qp[0]
+    if max(qk[1], qp[1]) > config.EV_BOT_MAX_SPREAD + 1e-9:
+        return "wide"
+    if abs(qk[0] - mp) > config.EV_BOT_MAX_DISAGREE + 1e-9:
+        return "apart"
+    return None
+
+
+def _closeness(ev, cost):
+    """How close a bet is to qualifying: 1 = exactly at both minimums (edge and return), below 1 = short."""
+    return min(ev / config.EV_BOT_MIN_EDGE if config.EV_BOT_MIN_EDGE > 0 else math.inf,
+               (ev / cost) / config.EV_BOT_MIN_ROI if config.EV_BOT_MIN_ROI > 0 else math.inf)
+
+
+def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, p: None, stats=None):
     """(bets worth taking now, best edge first; {(k id, p id): fair YES of k} for every pair priced).
     fresh(exchange, market id): whether that market's quote is current. moved(k id, p id): the site that just
-    repriced while the other didn't, or None."""
+    repriced while the other didn't, or None. stats: a dict that gets, per same-question pair in the window,
+    the reason it was passed over (or "qualified"), "moves" (stale-quote moments) and "best" (the bet that
+    came closest to qualifying)."""
     out, fairs = [], {}
+    st = stats if stats is not None else {}
+    count = lambda why: st.__setitem__(why, st.get(why, 0) + 1)
     horizon = now + timedelta(hours=config.EV_BOT_MAX_HOURS)
     lead = now + timedelta(seconds=config.EV_BOT_MIN_LEAD_SECS)
     for (_gk, var), g in groups.items():
@@ -135,15 +158,26 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                     continue
                 start = engine._parse_time(p.close_time)           # a Polymarket game's date is its start
                 if start is None or start <= now:
-                    continue                                      # in play
+                    count("started")                              # in play
+                    continue
                 if not (fresh("kalshi", k.market_id) and fresh("polymarket", p.market_id)):
+                    count("not current")
+                    continue
+                why = _no_price_reason(k, p, rel)
+                if why:
+                    count(why)
                     continue
                 fv = fair_value(k, p, rel, moved(k.market_id, p.market_id))
-                if not fv:
-                    continue
                 fairs[(k.market_id, p.market_id)] = fv["fair"]       # tracked right up to the start (closing value)
-                if start <= lead or _hedged_arb(k, p, rel):
-                    continue                                      # about to start; or an arb: take it hedged instead
+                if start <= lead:
+                    count("starting soon")
+                    continue
+                if _hedged_arb(k, p, rel):
+                    count("arb")                                  # take it hedged instead
+                    continue
+                if fv["source"] != "consensus":
+                    count("moves")
+                found = False
                 for c, yes_q in ((k, fv["fair"]), (p, fv["fair"] if rel > 0 else 1 - fv["fair"])):
                     if fv["source"] != "consensus" and fv["source"].startswith(NAMES[c.exchange]):
                         continue                                  # the site that moved is the price, not the bet
@@ -154,8 +188,16 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                         q = yes_q if side == YES else 1 - yes_q
                         cost = a + fee_per_contract(c.fee_coef, a)
                         ev = q - cost
-                        if ev < config.EV_BOT_MIN_EDGE or ev / cost < config.EV_BOT_MIN_ROI:
+                        close = _closeness(ev, cost)
+                        if st.get("best") is None or close > st["best"]["closeness"]:
+                            st["best"] = {"closeness": round(close, 3), "ev": round(ev, 4), "roi": round(ev / cost, 4),
+                                          "game": k.game_label or k.game_key.split(":", 1)[1],
+                                          "quantity": engine.describe_var(k.var), "exchange": NAMES[c.exchange],
+                                          "side": side, "ask": a, "fair": round(q, 4), "source": fv["source"],
+                                          "time": now.isoformat(timespec="seconds")}
+                        if close < 1 - 1e-9:
                             continue
+                        found = True
                         m = source.get((c.exchange, c.market_id))
                         out.append({"contract": c, "side": side, "ask": a, "q": q, "ev": ev, "cost": cost,
                                     "k": k.market_id, "p": p.market_id, "rel": rel, "fv": fv,
@@ -165,6 +207,7 @@ def candidates(groups, source, now, fresh=lambda ex, mid: True, moved=lambda k, 
                                     "levels": list(((getattr(m, "levels", None) or {}).get(side)) or [])
                                     or ([(a, getattr(m, f"{side}_ask_size", None))]
                                         if getattr(m, f"{side}_ask_size", None) else [])})
+                count("qualified" if found else "below edge")
     out.sort(key=lambda b: -b["ev"])
     return out, fairs
 
@@ -178,6 +221,7 @@ class EVBot:
         self.tried = {}                    # market id -> time of the last bet attempt
         self.rejects = 0                   # orders refused in a row
         self.top = []                      # the best bets seen on the last pass, for the dashboard
+        self._reset_why()
         self._last_settle = 0.0
         self._worker = ThreadPoolExecutor(1, thread_name_prefix="ev-bot") if run_async else None
 
@@ -206,12 +250,24 @@ class EVBot:
     def _today():
         return datetime.now().strftime("%Y-%m-%d")
 
+    def _reset_why(self):
+        """'Why no bets?': since it was turned on, why each same-question pair was passed over, the bet that came
+        closest to qualifying, and why bets that did qualify weren't placed."""
+        self.funnel, self.blocked, self.best = {}, {}, None
+        self.why_since, self.passes = None, 0
+
+    def _block(self, why):
+        self.blocked[why] = self.blocked.get(why, 0) + 1
+
     def set(self, on):
         t = getattr(self.scanner, "trader", None)
         if on and not config.EV_BOT_PAPER and not (t and t.venues):
             raise ValueError(f"Trading is {getattr(self.scanner, 'trading_status', 'off')}; the EV bot can still "
                              f"paper trade (EV_BOT_PAPER=1).")
         with self.lock:
+            if on and not self.on:
+                self._reset_why()
+                self.why_since = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.on, self.halted = bool(on), None
             self.rejects = 0
         self.scanner.log(f"EV bot turned {'on' if on else 'off'}" + (
@@ -254,7 +310,10 @@ class EVBot:
                 "history": [{k: b.get(k) for k in ("time", "paper", "game", "quantity", "exchange", "side", "title",
                                                    "qty", "avg", "cost", "fair", "fair_source", "ev", "status", "pnl", "clv")}
                             for b in reversed(self.bets[-20:])],
-                "top": self.top if self.on else []}
+                "top": self.top if self.on else [],
+                "why": {"since": self.why_since, "passes": self.passes, "counts": dict(self.funnel),
+                        "checked": sum(v for k, v in self.funnel.items() if k != "moves"), "best": self.best,
+                        "blocked": dict(self.blocked)}}
 
     # ---- every price pass -------------------------------------------------------------------------
 
@@ -284,8 +343,17 @@ class EVBot:
                 return None
             groups = {g: v for g, v in groups.items() if g[0] in games}
         now = now or engine.now_utc()
-        cands, fairs = candidates(groups, source, now, self._fresh, self._moved)
+        stats = {}
+        cands, fairs = candidates(groups, source, now, self._fresh, self._moved, stats)
         self._track_closing(fairs, now)
+        if self.on:
+            with self.lock:
+                self.passes += 1
+                best = stats.pop("best", None)
+                for why, n in stats.items():
+                    self.funnel[why] = self.funnel.get(why, 0) + n
+                if best and (self.best is None or best["closeness"] > self.best["closeness"]):
+                    self.best = best
         self.top = [{"game": b["label"], "quantity": b["quantity"], "exchange": NAMES[b["contract"].exchange],
                      "side": b["side"], "title": b["contract"].title, "ask": b["ask"], "fair": round(b["q"], 4),
                      "source": b["fv"]["source"], "ev": round(b["ev"], 4)} for b in cands[:5]]
@@ -306,15 +374,23 @@ class EVBot:
         return pick
 
     def _pick(self, cands, now):
+        if not cands:
+            return None
         opened = self.open_bets(config.EV_BOT_PAPER)
         if len(opened) >= config.EV_BOT_MAX_OPEN:
+            self._block("open-bet limit reached")
             return None
         if config.EV_BOT_DAILY_LIMIT - self.spent_today(config.EV_BOT_PAPER) < 1:
+            self._block("daily limit reached")
             return None
         busy_games = {b["game_key"] for b in opened}
         t = time.time()
         for b in cands:
-            if b["game"] in busy_games or t - self.tried.get(b["contract"].market_id, 0) < config.EV_BOT_COOLDOWN_SECS:
+            if b["game"] in busy_games:
+                self._block("already a bet on that game")
+                continue
+            if t - self.tried.get(b["contract"].market_id, 0) < config.EV_BOT_COOLDOWN_SECS:
+                self._block("tried that market in the last 10 min")
                 continue
             return b
         return None
@@ -372,6 +448,7 @@ class EVBot:
             bankroll = min(config.EV_BOT_BANKROLL, cash) if cash is not None else config.EV_BOT_BANKROLL
             n, limit, fills = self._size(b, bankroll)
             if n < 1 or sum(p * q for p, q in fills) < 1:
+                self._block("under $1 at the edge (thin book, or a small Kelly stake)")
                 return
             if config.EV_BOT_PAPER:
                 qty, amount = sum(q for _, q in fills), sum(p * q for p, q in fills)
@@ -382,6 +459,7 @@ class EVBot:
                     return
                 qty, amount, fee, order_id = got.qty, got.amount, got.fee, got.order_id
                 if qty <= 0:
+                    self._block("order didn't fill (the price moved)")
                     self.scanner.log(f"EV bot: {NAMES[c.exchange]} {side.upper()} {c.market_id} didn't fill at ≤ ${limit:.2f}")
                     return
             entry = self._record(b, qty, amount, fee, limit, order_id)
@@ -396,22 +474,26 @@ class EVBot:
     def _place(self, t, c, side, n, limit, b):
         """A real IOC order. Returns its Fill, or None when nothing was sent / it was refused."""
         if not t.lock.acquire(blocking=False):
+            self._block("an arb trade was going out")
             return None                     # an arb trade is going out: it goes first
         try:
             with trading():
                 v = t.venues[c.exchange]
                 info = t._cached_info(c.exchange, c.market_id) or t._fetch_info(c.exchange, v, c.market_id)
                 if not info.get("open"):
+                    self._block("market not open")
                     return None
                 shard = info.get("shard") if c.exchange == "kalshi" else None
                 cash = t._cached_cash(c.exchange, shard)
                 cash = v.balance(shard) if cash is None else cash
                 n = floor_to(min(n, cash / (limit + fee_per_contract(c.fee_coef, limit))), info["min_qty"])
                 if n < info["min_qty"]:
+                    self._block("not enough cash on that site")
                     return None
                 try:
                     fill = v.buy(c.market_id, side, n, limit, c.fee_coef, expect=b["ask"])
                 except ApiError as e:
+                    self._block("order refused")
                     self.rejects += 1
                     self.scanner.log(f"EV bot: {NAMES[c.exchange]} refused the order ({e.detail})")
                     if self.rejects >= config.AUTO_TRADE_MAX_MISSES:

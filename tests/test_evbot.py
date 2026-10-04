@@ -91,6 +91,50 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(evbot.candidates(g, src, NOW, moved=POLY_MOVED)[0], [])
 
 
+class WhyNoBetsTests(unittest.TestCase):
+    def why(self, moved=lambda k, p: None, fresh=lambda ex, mid: True, **kw):
+        g, src = pair(**kw)
+        st = {}
+        evbot.candidates(g, src, NOW, fresh=fresh, moved=moved, stats=st)
+        return st
+
+    def test_each_pair_is_counted_once_with_its_reason(self):
+        self.assertEqual(self.why()["below edge"], 1)                        # tight books, consensus: no edge
+        self.assertEqual(self.why(k_yes=0.58, k_no=0.48)["wide"], 1)        # Kalshi 6c wide
+        self.assertEqual(self.why(p_yes=0.68, p_no=0.34)["apart"], 1)       # both 2c wide, mids 13c apart
+        self.assertEqual(self.why(fresh=lambda ex, mid: ex != "kalshi")["not current"], 1)
+        self.assertEqual(self.why(start_in=-1)["started"], 1)
+        self.assertEqual(self.why(start_in=0.05)["starting soon"], 1)
+        self.assertEqual(self.why(p_no=0.40)["arb"], 1)
+        st = self.why(moved=POLY_MOVED)
+        self.assertEqual((st["qualified"], st["moves"]), (1, 1))
+
+    def test_the_closest_miss_is_kept(self):
+        best = self.why()["best"]                      # consensus 0.56: Polymarket NO at 0.42 is worth 0.44
+        self.assertLess(best["closeness"], 1)
+        self.assertEqual((best["exchange"], best["side"], best["source"]), ("Polymarket", NO, "consensus"))
+        self.assertAlmostEqual(best["ev"], round(0.44 - 0.42 - fee_per_contract(0.0695, 0.42), 4), 4)
+        self.assertGreaterEqual(self.why(moved=POLY_MOVED)["best"]["closeness"], 1)
+
+    @mock.patch.object(config, "EV_BOT_PAPER", True)
+    def test_bot_adds_it_up_since_turned_on_and_says_what_blocked_a_bet(self):
+        b = bot()
+        b.set(True)
+        b._moved = lambda k, p: None
+        for _ in range(3):
+            b.observe(*pair(), NOW)
+        w = b.status()["why"]
+        self.assertEqual((w["passes"], w["checked"], w["counts"]["below edge"]), (3, 3, 3))
+        self.assertIsNotNone(w["since"])
+        b._moved = POLY_MOVED
+        with mock.patch.object(config, "EV_BOT_DAILY_LIMIT", 0.5):
+            b.observe(*pair(), NOW)
+        self.assertEqual(b.status()["why"]["blocked"], {"daily limit reached": 1})
+        b.set(False)
+        b.set(True)                                                          # a fresh count each time it's turned on
+        self.assertEqual(b.status()["why"]["checked"], 0)
+
+
 class MathTests(unittest.TestCase):
     def test_limit_keeps_the_edge(self):
         lim = evbot.limit_for(0.60, 0.07, 0.55, 0.02, 0.04)
