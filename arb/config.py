@@ -223,6 +223,24 @@ EV_BOT_STALE_FRESH_SECS = _env_num("EV_BOT_STALE_FRESH_SECS", 2)
 EV_BOT_STALE_GAP_SECS = _env_num("EV_BOT_STALE_GAP_SECS", 3)
 EV_BOT_PROFILE = os.environ.get("EV_BOT_PROFILE", "normal").strip().lower() or "normal"   # see settings.EV_PROFILES
 EV_BOT_SETTLE_SECS = 300           # open bets' results are read this often
+# Dip trades (games in progress): buy what scared sellers just dumped on one site, sell it when it bounces. A dip:
+# one site's price for an outcome fell EV_BOT_DIP_DROP or more within EV_BOT_DIP_WINDOW_SECS, while the other site
+# kept trading (its quotes changed) but moved at most EV_BOT_DIP_FOLLOW as far, and still hadn't followed
+# EV_BOT_DIP_CONFIRM_SECS later: a goal moves both sites within seconds, a panicked seller only the book they sell
+# into. The buy's price + fee must be EV_BOT_DIP_GAP or more under the other site's price. It sells once that
+# clears EV_BOT_DIP_TAKE_PROFIT a share after both fees; cuts it at EV_BOT_DIP_STOP_LOSS a share, or when the other
+# site follows it down (the drop was real); after EV_BOT_DIP_MAX_HOLD_SECS sells at the best price there. A game
+# that ends first settles it. Paper or real with EV_BOT_PAPER; open dip trades keep selling with the bot off.
+EV_BOT_DIPS = _env_on("EV_BOT_DIPS", True)
+EV_BOT_DIP_DROP = _env_num("EV_BOT_DIP_DROP", 8) / 100
+EV_BOT_DIP_WINDOW_SECS = _env_num("EV_BOT_DIP_WINDOW_SECS", 60)
+EV_BOT_DIP_FOLLOW = _env_num("EV_BOT_DIP_FOLLOW", 25) / 100
+EV_BOT_DIP_CONFIRM_SECS = _env_num("EV_BOT_DIP_CONFIRM_SECS", 10)
+EV_BOT_DIP_GAP = _env_num("EV_BOT_DIP_GAP", 6) / 100
+EV_BOT_DIP_TAKE_PROFIT = _env_num("EV_BOT_DIP_TAKE_PROFIT", 2) / 100
+EV_BOT_DIP_STOP_LOSS = _env_num("EV_BOT_DIP_STOP_LOSS", 6) / 100
+EV_BOT_DIP_MAX_HOLD_SECS = _env_num("EV_BOT_DIP_MAX_HOLD_SECS", 600)
+EV_BOT_DIP_MAX_BET = _env_num("EV_BOT_DIP_MAX_BET", 10)
 EV_BETS_FILE = PROJECT_ROOT / "cache" / "ev_bets.json"
 # Unhedged first-leg shares may be hedged up to this far ($/share) above break-even when that loses less
 # than selling them back. 0 = always sell back.

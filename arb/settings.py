@@ -119,6 +119,26 @@ GROUPS = [
         ("EV_BOT_MIN_LEAD_SECS", "number", "No bets this close to the start (seconds)",
          "Prices jump at lineups and kickoff.", 300),
     ]),
+    ("EV bot: dip trades (buy the scare, sell the bounce)", [
+        ("EV_BOT_DIPS", "bool", "Dip trades in games in progress",
+         "When one site's price drops fast but the other site keeps trading where it was, someone is dumping in a "
+         "panic: buy the drop there and sell it on the bounce. There's no score feed, so the other site is the "
+         "referee: a goal moves both. Paper or real with the setting above; open dip trades are still sold when the "
+         "bot is off. Shares the bot's daily limit, open bets and bets per game.", True),
+        ("EV_BOT_DIP_DROP", "cents", "A dip: the price fell at least (¢)", "", 8),
+        ("EV_BOT_DIP_WINDOW_SECS", "number", "...within (seconds)", "", 60),
+        ("EV_BOT_DIP_FOLLOW", "percent", "...while the other site moved at most (% as far)",
+         "And kept trading (its quotes changed), so it isn't just frozen or suspended.", 25),
+        ("EV_BOT_DIP_CONFIRM_SECS", "number", "...and still hadn't followed after (seconds)",
+         "Real news reaches both sites within seconds; Polymarket can be a little slower in play.", 10),
+        ("EV_BOT_DIP_GAP", "cents", "Buy only this far under the other site's price (¢, fee included)",
+         "Needs to cover the profit below plus the sell fee and spread.", 6),
+        ("EV_BOT_DIP_TAKE_PROFIT", "cents", "Sell on the bounce once it makes (¢ a share, after both fees)", "", 2),
+        ("EV_BOT_DIP_STOP_LOSS", "cents", "Cut it if it falls further, at (¢ a share lost)",
+         "Also cut at once if the other site follows it down: the drop was real.", 6),
+        ("EV_BOT_DIP_MAX_HOLD_SECS", "number", "No bounce after (seconds): sell at the best price there", "", 600),
+        ("EV_BOT_DIP_MAX_BET", "money", "Per dip trade", "", 10),
+    ]),
     ("Every trade", [
         ("MAX_TRADE_DOLLARS", "money", "Hard cap per trade", "Make trade, Fast trade and Auto-trade, both legs together.", 100),
         ("FAST_MAX_TRADE", "money", "Fast trade, per click", "Both legs together.", 50),

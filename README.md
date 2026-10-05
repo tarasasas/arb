@@ -763,6 +763,34 @@ the live streams. "Closing value" means nothing once a game is under way, so a l
 price 60 seconds after it, shown separately in the bar ("live bets 1 min later"): positive on average means the
 stale quotes it bought did catch up. Its result settles like any other bet.
 
+**Dip trades: buy the scare, sell the bounce** (`EV_BOT_DIPS`, on; ⚙ Settings → EV bot: dip trades). During a
+game, a scared fan dumping their position can knock one site's price down further than the game warrants, and
+it tends to come back. There's no score feed here, so the other site is the referee: a goal or a red card moves
+both sites within seconds; a panicked seller moves only the book they sell into. So a dip is when:
+- one site's price for an outcome falls 8¢ or more within 60 seconds (`EV_BOT_DIP_DROP`, `EV_BOT_DIP_WINDOW_SECS`),
+- the other site keeps trading (its quotes change, so it isn't frozen or suspended) but moves at most a quarter
+  as far (`EV_BOT_DIP_FOLLOW`), and still hasn't followed 10 seconds later (`EV_BOT_DIP_CONFIRM_SECS`; real news
+  reaches both within seconds, Polymarket a little slower in play),
+- and buying there costs, fee included, at least 6¢ under the other site's price (`EV_BOT_DIP_GAP`), whose book is
+  no wider than `EV_BOT_MAX_SPREAD`.
+
+It buys up to `EV_BOT_DIP_MAX_BET` ($10) there, then on every price check decides whether to sell on the same site:
+- **bounced:** selling makes at least 2¢ a share after both fees (`EV_BOT_DIP_TAKE_PROFIT`): it sells at the lowest
+  price that does;
+- **kept falling:** it's 6¢ a share down (`EV_BOT_DIP_STOP_LOSS`). A price that jumps past the stop sells where it
+  lands, so a loss can be bigger than that;
+- **the other site followed it down:** the drop was real, so it sells at once;
+- **no bounce in 10 minutes** (`EV_BOT_DIP_MAX_HOLD_SECS`): it sells at the best price there.
+
+A game that ends first settles what's left. Unsold leftovers stay open and are tried again on the next price
+check. Open dip trades keep being sold with the bot turned off. After a dip trade is cut at a loss, that game
+gets no new dip trades for `EV_BOT_COOLDOWN_SECS` (10 min): whatever caused it is likely still moving the game's
+other lines. Dip trades share the bot's daily limit, open-bet limit and bets per game, follow `EV_BOT_PAPER`, and
+show in the bar as "dip trades: N closed, M up, net $X" (apart from the value bets' results). Where the dip is
+also an arb and Auto-trade is on and takes games in progress, it's left to Auto-trade hedged. Fees are paid
+twice (buy and sell), about 1.75¢ each way at 50¢, which is why the gap must be well over the profit target.
+These defaults are a starting point: let paper trading show whether the bounces come before changing them.
+
 Size:
 `EV_BOT_KELLY` (¼) of the Kelly stake on `EV_BOT_BANKROLL` ($200, or your cash on that site if less), at most
 `EV_BOT_MAX_BET` ($10) a bet and `EV_BOT_DAILY_LIMIT` ($50) a day, `EV_BOT_MAX_OPEN` (10) open bets and

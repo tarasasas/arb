@@ -860,7 +860,10 @@ function renderMaker(s) {
 }
 // EV bot: single, unhedged bets priced below the fair price (see the README). Paper unless EV_BOT_PAPER=0.
 function evResults(r, label) {
-  if (!r || !r.bets) return "";
+  if (!r || (!r.bets && !r.dips?.n)) return "";
+  const d = r.dips, dips = d?.n ? ` · <span title="Dip trades: bought a panic drop on one site, sold on the bounce (or cut).
+    Net after both fees.">dip trades: ${d.closed} closed, ${d.up} up, <b class="${d.pnl >= 0 ? "profit" : ""}">${money(d.pnl)}</b>${
+    d.staked ? ` (${pct(d.pnl / d.staked)})` : ""}${d.open ? `, ${d.open} open` : ""}</span>` : "";
   const clv = r.clv_n ? `closing value <b class="${r.clv_avg >= 0 ? "profit" : ""}">${r.clv_avg >= 0 ? "+" : ""}${(r.clv_avg * 100).toFixed(1)}¢</b>
     a share avg, ${pct(r.clv_positive)} beat the close (${r.clv_n})` : "closing value: none yet";
   const settled = r.settled ? `settled ${r.won}–${r.lost}: <b class="${r.pnl >= 0 ? "profit" : ""}">${money(r.pnl)}</b>
@@ -870,7 +873,7 @@ function evResults(r, label) {
     r.mark_avg >= 0 ? "+" : ""}${(r.mark_avg * 100).toFixed(1)}¢</b> avg, ${pct(r.mark_positive)} up (${r.mark_n})</span>` : "";
   return `<span title="Closing value: the fair price just before each game started, minus what a share cost. Positive on average
     means the bets had an edge, long before enough results are in to tell.">${label}: ${r.open} open (${money(r.open_staked)},
-    +${money(r.open_ev)} expected) · ${settled} · ${clv}</span>${mark}`;
+    +${money(r.open_ev)} expected) · ${settled} · ${clv}</span>${mark}${dips}`;
 }
 // "Why no bets?": since the bot was turned on, why each same-question pair was passed over, and how close
 // the best one came. Each pass re-checks every pair, so these are checks, not distinct pairs.
@@ -893,7 +896,9 @@ function evWhy(e) {
       <td class="num">${share(k) < 0.1 && c[k] ? "<0.1" : share(k).toFixed(1)}%</td></tr>`).join("");
   const blocked = Object.entries(w.blocked || {}).map(([k, v]) => `${esc(k)} ${compact(v)}`).join(" · ");
   return `<div style="flex-basis:100%" class="muted">Since ${esc(localTime(w.since))}: ${compact(n)} pair checks over ${compact(w.passes)} passes
-      ${e.live_games ? `(${compact(c.live || 0)} on games in progress)` : ""} · ${compact(c.moves || 0)} stale-quote moments
+      ${e.live_games ? `(${compact(c.live || 0)} on games in progress)` : ""} · ${compact(c.moves || 0)} stale-quote moments${
+      e.dip?.on ? ` · dips: ${compact(c.dips || 0)} qualified, ${compact(c["dip confirming"] || 0)} checks waiting to see if the other
+      site followed${c["dip arb"] ? `, ${compact(c["dip arb"])} left to Auto-trade as arbs` : ""}` : ""}
       ${c["arb taken"] ? `· ${compact(c["arb taken"])} arbs Auto-trade won't take, cheap side considered` : ""} · ${best}</div>
     <details class="evwhy"><summary class="muted">Why no bets?</summary>
       <table><thead><tr><th>Passed over because</th><th class="num">Checks</th><th class="num">Share</th></tr></thead><tbody>${rows ||
@@ -915,10 +920,13 @@ function renderEV(s) {
   const top = (e.top || []).map(t => `<li>${esc(t.game)} · ${esc(t.quantity)} · ${esc(t.exchange)} <b>Buy ${t.side.toUpperCase()}</b>
       @ ${cents(t.ask)} · fair ${cents(t.fair)} (${esc(t.source)}) · <b class="profit">+${(t.ev * 100).toFixed(1)}¢</b> a share</li>`).join("");
   const hist = (e.history || []).map(h => `<li>${esc((h.time || "").slice(5, 16).replace("T", " "))} · ${h.paper ? `<span class="badge-paper">paper</span> ` : ""}${
-      h.live ? `<span class="pin">live</span> ` : ""}${h.from_arb ? `<span class="pin" title="The cheap side of an arb Auto-trade wasn't taking">arb side</span> ` : ""}${
+      h.kind === "dip" ? `<span class="pin" title="Bought a panic drop on one site, to sell on the bounce">dip</span> `
+        : h.live ? `<span class="pin">live</span> ` : ""}${h.from_arb ? `<span class="pin" title="The cheap side of an arb Auto-trade wasn't taking">arb side</span> ` : ""}${
       esc(h.game || "")} · ${esc(EXNAME[h.exchange] || h.exchange)} ${esc((h.side || "").toUpperCase())} ${compact(h.qty)} @ ${cents(h.avg)}
-      · fair ${cents(h.fair)}${h.fair_source ? ` <span class="muted">(${esc(h.fair_source)})</span>` : ""} · <b>${esc(h.status)}</b>${
+      · ${h.kind === "dip" ? "other site" : "fair"} ${cents(h.fair)}${h.fair_source ? ` <span class="muted">(${esc(h.fair_source)})</span>` : ""} · <b>${esc(h.status)}</b>${
+      h.sold_qty ? ` ${compact(h.sold_qty)} @ ${cents(h.sold_avg)}${h.exit ? ` <span class="muted">(${esc(h.exit)})</span>` : ""}` : ""}${
       h.pnl != null ? ` ${money(h.pnl)}` : ""}${h.clv != null ? ` · ${h.live ? "1 min later" : "close"} ${h.clv >= 0 ? "+" : ""}${(h.clv * 100).toFixed(1)}¢` : ""}</li>`).join("");
+  const c0 = x => Math.round(x * 100) + "¢", dp = e.dip || {};
   el.innerHTML = `<b>EV bot</b>
     <button id="ev-toggle" ${live && !canLive && !e.on ? "disabled" : ""} class="${e.on ? "" : "trade"}" style="margin:0">${e.on ? "Turn off" : "Turn on"}</button>
     <span>${e.on ? `<span style="color:var(--good)">●</span> ON` : "OFF"}</span>
@@ -936,7 +944,14 @@ function renderEV(s) {
       under 3 seconds old)` : ", not yet started (games in progress: off in Settings)"} · ${e.kelly}× Kelly on ${money(e.bankroll)},
       at most ${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day, ${e.max_open} open (${e.per_game > 1 ? `up to ${e.per_game}` : "one"}
       per game). It keeps each bet's closing
-      value (live bets: the fair price ${Math.round(e.live_mark_secs || 60)}s later) and settles it from the market's result.</div></details>
+      value (live bets: the fair price ${Math.round(e.live_mark_secs || 60)}s later) and settles it from the market's result.${dp.on ? `
+      <br><b>Dip trades</b> (games in progress; buy the scare, sell the bounce): when one site's price drops ${c0(dp.drop)} or more
+      within ${dp.window}s while the other site keeps trading but moves at most ${pct(dp.follow)} as far, and still hasn't followed
+      ${dp.confirm}s later, it buys the drop there (price + fee at least ${c0(dp.gap)} under the other site's price, up to
+      ${money(dp.max_bet)}). There's no score feed, so the other site is the referee: a goal moves both. It sells on the same site
+      once that makes ${c0(dp.take_profit)} a share after both fees; it cuts it ${c0(dp.stop_loss)} a share down, at once if the other
+      site follows it down, and after ${Math.round(dp.max_hold / 60)} min sells at the best price there. A game that ends first
+      settles it. Open dip trades are still sold with the bot off.` : ""}</div></details>
     ${e.halted ? `<div class="alert" style="flex-basis:100%">Stopped by itself: ${esc(e.halted)}</div>` : ""}
     ${evWhy(e)}
     ${top ? `<details class="evtop"><summary class="muted">Best bets now (${(e.top || []).length})</summary><ol>${top}</ol></details>` : ""}
@@ -949,7 +964,8 @@ function renderEV(s) {
   });
   document.getElementById("ev-toggle").onclick = async () => {
     if (!e.on && live && !confirm(`Turn on the EV bot with REAL orders?\n\nIts bets are not hedged: each one can lose. Up to ` +
-        `${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day. Paper trading (EV_BOT_PAPER=1) shows how it does first.`)) return;
+        `${money(e.max_bet)} a bet, ${money(e.daily_limit)} a day` + (dp.on ? `, and dip trades in games in progress (up to ` +
+        `${money(dp.max_bet)} each, sold on the bounce or cut)` : "") + `. Paper trading (EV_BOT_PAPER=1) shows how it does first.`)) return;
     try { state.evbot = await post("/api/evbot", { on: !e.on }); renderEV(state); } catch (err) { alert(err.message); }
   };
 }

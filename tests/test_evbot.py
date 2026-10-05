@@ -385,3 +385,215 @@ class LiveBotTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- dip trades: buy the scare, sell the bounce ------------------------------------------------------------------
+
+def live_pair():
+    g, src = pair(k_yes=0.55, k_no=0.47, p_yes=0.55, p_no=0.47, start_in=-0.5)      # kicked off 30 min ago
+    return g, src, g[("NFL:x", TOTAL)]["kalshi"][0], g[("NFL:x", TOTAL)]["polymarket"][0]
+
+
+def asks(src, c, yes, no):
+    c.ask = {YES: yes, NO: no}
+    src[(c.exchange, c.market_id)].levels = {"yes": [(yes, 500)], "no": [(no, 500)]}
+
+
+def panic(g, src, k, p, run, follow=False, frozen=False):
+    """Kalshi's Over drops 10c (0.55 -> 0.45) while Polymarket keeps trading around 0.54; run(secs) after each
+    change. follow: Polymarket drops with it. frozen: Polymarket's quotes never change."""
+    run(0)
+    if not frozen:
+        asks(src, p, 0.56, 0.46)
+    run(5)
+    asks(src, k, 0.45, 0.57)
+    if follow:
+        asks(src, p, 0.46, 0.56)
+    elif not frozen:
+        asks(src, p, 0.55, 0.47)
+    for secs in (20, 25, 31):
+        run(secs)
+
+
+class DipFindTests(unittest.TestCase):
+    def found(self, **kw):
+        g, src, k, p = live_pair()
+        watch, seen = evbot.DipWatch(), []
+        panic(g, src, k, p, lambda secs: seen.append(evbot.dip_candidates(g, src, NOW + timedelta(seconds=secs), watch)),
+              **kw)
+        return seen
+
+    def test_a_panic_on_one_site_is_bought_there_once_it_holds(self):
+        seen = self.found()
+        self.assertEqual([len(x) for x in seen], [0, 0, 0, 0, 1])       # 20s and 25s: still confirming
+        d = seen[-1][0]
+        self.assertEqual((d["contract"].exchange, d["side"], d["ask"]), ("kalshi", YES, 0.45))
+        self.assertAlmostEqual(d["q"], 0.54, 6)                          # Polymarket's mid
+        self.assertEqual((d["dip"]["drop"], d["dip"]["anchor_ex"], d["dip"]["anchor_side"]), (0.10, "polymarket", YES))
+        self.assertIn("Kalshi fell 10¢", d["fv"]["source"])
+
+    def test_news_moves_both_sites_and_is_left_alone(self):
+        self.assertEqual(self.found(follow=True)[-1], [])
+
+    def test_a_frozen_other_site_proves_nothing(self):
+        self.assertEqual(self.found(frozen=True)[-1], [])
+
+    def test_too_small_a_drop_or_gap(self):
+        with mock.patch.object(config, "EV_BOT_DIP_DROP", 0.12):
+            self.assertEqual(self.found()[-1], [])
+        with mock.patch.object(config, "EV_BOT_DIP_GAP", 0.08):
+            self.assertEqual(self.found()[-1], [])
+
+    def test_only_games_in_progress(self):
+        g, src = pair(k_yes=0.55, k_no=0.47, p_yes=0.55, p_no=0.47)        # starts in 3 hours
+        k, p = g[("NFL:x", TOTAL)]["kalshi"][0], g[("NFL:x", TOTAL)]["polymarket"][0]
+        watch, seen = evbot.DipWatch(), []
+        panic(g, src, k, p, lambda secs: seen.append(evbot.dip_candidates(g, src, NOW + timedelta(seconds=secs), watch)))
+        self.assertEqual(seen[-1], [])
+
+    def test_an_arb_goes_to_auto_trade_when_it_takes_games_in_progress(self):
+        g, src, k, p = live_pair()
+        watch, seen = evbot.DipWatch(), []
+        panic(g, src, k, p, lambda secs: seen.append(evbot.dip_candidates(
+            g, src, NOW + timedelta(seconds=secs), watch, arb_taken=lambda: True)))
+        self.assertEqual(seen[-1], [])
+
+
+class DipExitTests(unittest.TestCase):
+    POS = {"qty": 10, "avg": 0.45, "cost": 10 * (0.45 + fee_per_contract(0.07, 0.45))}
+
+    def exit(self, bid, anchor=0.54, held=30):
+        return evbot.dip_exit(self.POS, bid, anchor, held, 0.07)
+
+    def test_takes_the_profit_after_both_fees_at_the_lowest_price_that_makes_it(self):
+        why, price = self.exit(0.53)
+        self.assertIn("took the profit", why)
+        self.assertEqual(price, 0.51)                     # 0.51 - fee clears 0.467 + 2c; 0.50 doesn't
+        self.assertIsNone(self.exit(0.50))                # +1.5c after fees: not yet
+
+    def test_cuts_it_when_it_keeps_falling_or_the_other_site_follows(self):
+        self.assertIn("cut the loss", self.exit(0.40)[0])
+        self.assertAlmostEqual(self.exit(0.40)[1], 0.37)
+        self.assertIn("followed it down", self.exit(0.46, anchor=0.452)[0])
+
+    def test_sells_at_the_best_price_after_the_time_limit(self):
+        self.assertIn("no bounce in 10 min", self.exit(0.46, held=601)[0])
+        self.assertIsNone(self.exit(0.46, held=599))
+
+
+@mock.patch.object(config, "EV_BOT_PAPER", True)
+class DipBotTests(unittest.TestCase):
+    def buy(self, b=None):
+        b = b or bot()
+        b.set(True)
+        b._moved = lambda k, p: None
+        g, src, k, p = live_pair()
+        panic(g, src, k, p, lambda secs: b.observe(g, src, NOW + timedelta(seconds=secs)))
+        return b, g, src, k, p
+
+    def test_buys_the_dip_and_sells_the_bounce(self):
+        b, g, src, k, p = self.buy()
+        self.assertEqual(len(b.bets), 1)
+        d = b.bets[0]
+        self.assertEqual((d["kind"], d["exchange"], d["side"], d["status"]), ("dip", "kalshi", YES, "open"))
+        self.assertEqual(d["qty"], int(10 / (0.45 + fee_per_contract(0.07, 0.45))))      # $10 a dip trade
+        b.observe(g, src, NOW + timedelta(seconds=45))                                   # nothing yet: hold
+        self.assertEqual(d["status"], "open")
+        asks(src, k, 0.53, 0.49)                                                         # bounced: bid 0.51
+        b.observe(g, src, NOW + timedelta(seconds=60))
+        self.assertEqual((d["status"], d["sold_qty"], d["exits"][0]["avg"]), ("sold", d["qty"], 0.51))
+        self.assertAlmostEqual(d["pnl"], round(d["sold_amount"] - d["sold_fee"] - d["cost"], 2))
+        self.assertGreater(d["pnl"], 0)
+        r = b.status()["paper_results"]
+        self.assertEqual((r["dips"]["closed"], r["dips"]["up"], r["bets"]), (1, 1, 0))  # apart from value bets
+        self.assertIn("took the profit", b.status()["history"][0]["exit"])
+
+    def test_keeps_selling_with_the_bot_off(self):
+        b, g, src, k, p = self.buy()
+        b.set(False)
+        asks(src, k, 0.38, 0.64)                                                         # kept falling
+        b.observe(g, src, NOW + timedelta(seconds=40))
+        d = b.bets[0]
+        self.assertEqual(d["status"], "sold")
+        self.assertIn("cut the loss", d["exits"][0]["why"])
+        self.assertLess(d["pnl"], 0)
+
+    def test_a_loss_pauses_dip_trades_in_that_game(self):
+        b, g, src, k, p = self.buy()
+        asks(src, k, 0.38, 0.64)
+        b.observe(g, src, NOW + timedelta(seconds=40))                                   # cut at a loss
+        k2 = Contract("kalshi", "KO47", "NFL:x", TOTAL, ">", 47.5, "Over 47.5", fee_coef=0.07, close_time=k.close_time)
+        p2 = Contract("polymarket", "pm-o47", "NFL:x", TOTAL, ">", 47.5, "O/U 47.5", fee_coef=0.0695,
+                      close_time=p.close_time)
+        for c in (k2, p2):
+            src[(c.exchange, c.market_id)] = SimpleNamespace(levels={})
+            asks(src, c, 0.55, 0.47)
+        g2 = {("NFL:x", TOTAL): {"kalshi": [k2], "polymarket": [p2]}}                     # another line, same game
+        panic(g2, src, k2, p2, lambda secs: b.observe(g2, src, NOW + timedelta(seconds=50 + secs)))
+        self.assertEqual(len(b.bets), 1)
+        self.assertIn("cut at a loss in that game", " ".join(b.status()["why"]["blocked"]))
+
+    def test_the_other_site_following_ends_it(self):
+        b, g, src, k, p = self.buy()
+        asks(src, p, 0.46, 0.56)
+        b.observe(g, src, NOW + timedelta(seconds=40))
+        self.assertIn("followed it down", b.bets[0]["exits"][0]["why"])
+
+    def test_a_sale_cut_short_by_a_restart_is_tried_again(self):
+        b, g, src, k, p = self.buy()
+        b.bets[0]["exiting"] = True
+        b._save()
+        reloaded = evbot.EVBot(Scanner(), path=b.path, run_async=False)
+        reloaded._fresh = lambda ex, mid, age=None: True
+        asks(src, k, 0.53, 0.49)
+        reloaded.observe(g, src, NOW + timedelta(seconds=60))
+        self.assertEqual(reloaded.bets[0]["status"], "sold")
+
+    def test_a_dip_seen_long_ago_needs_confirming_again(self):
+        w = evbot.DipWatch()
+        self.assertEqual(w.held("x", 0, True), 0)
+        self.assertEqual(w.held("x", 12, True), 12)
+        self.assertEqual(w.held("x", 12 + config.EV_BOT_DIP_WINDOW_SECS + 1, True), 0)
+
+    def test_off_in_settings_means_no_dip_trades(self):
+        with mock.patch.object(config, "EV_BOT_DIPS", False):
+            b, *_ = self.buy()
+        self.assertEqual(b.bets, [])
+
+    def test_a_game_ending_first_settles_what_is_left(self):
+        b, g, src, k, p = self.buy()
+        d = b.bets[0]
+        src[("kalshi", "KO45")].levels = {"yes": [(0.53, 500)], "no": [(0.49, 5)]}       # only 5 to sell into
+        asks(src, k, 0.53, 0.49)
+        src[("kalshi", "KO45")].levels["no"] = [(0.49, 5)]
+        b.observe(g, src, NOW + timedelta(seconds=60))
+        self.assertEqual((d["status"], d["sold_qty"]), ("open", 5))
+        b.scanner.kalshi = SimpleNamespace(markets_by_ticker=lambda ts: {"KO45": {"status": "finalized", "result": "yes",
+                                                                                 "settlement_value_dollars": "1"}})
+        b.scanner.pm = SimpleNamespace(markets_by_slug=lambda ss: {})
+        b.settle(NOW + timedelta(hours=7), force=True)
+        left = d["qty"] - 5
+        self.assertEqual(d["status"], "won")
+        self.assertAlmostEqual(d["pnl"], round(left + d["sold_amount"] - d["sold_fee"] - d["cost"], 2), 2)
+
+
+@mock.patch.object(config, "EV_BOT_PAPER", False)
+class LiveDipTests(unittest.TestCase):
+    def test_a_real_dip_trade_sells_with_an_ioc_order(self):
+        orders = []
+
+        def buy(mid, side, n, limit, coef, expect=None):
+            orders.append(("buy", side, n, limit))
+            return Fill(qty=n, amount=n * 0.45, fee=0.37, order_id="b1")
+
+        def sell(mid, side, n, min_price, coef, expect=None):
+            orders.append(("sell", side, n, min_price))
+            return Fill(qty=n, amount=n * 0.52, fee=0.37, order_id="s1")
+        b = bot(FakeTrader(SimpleNamespace(buy=buy, sell=sell, balance=lambda shard=None: 500.0)))
+        b, g, src, k, p = DipBotTests.buy(None, b)
+        asks(src, k, 0.54, 0.48)
+        b.observe(g, src, NOW + timedelta(seconds=60))
+        self.assertEqual([o[0] for o in orders], ["buy", "sell"])
+        self.assertEqual(orders[1][:3], ("sell", YES, orders[0][2]))
+        self.assertEqual(orders[1][3], 0.51)                                             # the lowest price that clears it
+        self.assertEqual((b.bets[0]["status"], b.bets[0]["paper"]), ("sold", False))

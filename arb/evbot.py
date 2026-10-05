@@ -24,6 +24,14 @@ How it judges itself: every bet keeps the last fair price before its game starte
 standard early test of whether bets have an edge, known hours before the results) and, once its market
 settles, what it really paid. Paper mode (EV_BOT_PAPER, on by default) does everything but send orders,
 filling against the real books. Off every time the scanner starts.
+
+Dip trades (EV_BOT_DIPS; games in progress): buy low, sell high when people get scared. There's no score feed,
+so the other site is the referee: a goal or a red card moves both sites within seconds, a panicked seller only
+the book they sell into. A dip (find_dip): one site's price for an outcome fell EV_BOT_DIP_DROP within
+EV_BOT_DIP_WINDOW_SECS while the other site kept trading but moved at most EV_BOT_DIP_FOLLOW as far, still so
+EV_BOT_DIP_CONFIRM_SECS later, and the price + fee is EV_BOT_DIP_GAP under the other site's mid. It buys there
+(EV_BOT_DIP_MAX_BET) and sells on the same site once that clears EV_BOT_DIP_TAKE_PROFIT a share after both fees,
+or cuts it (dip_exit). Open dip trades keep being sold while the bot is off; a game that ends first settles them.
 """
 
 import json
@@ -221,13 +229,182 @@ def candidates(groups, source, now, fresh=lambda ex, mid, age=None: True, moved=
                                     "game": k.game_key, "label": k.game_label or k.game_key.split(":", 1)[1],
                                     "quantity": engine.describe_var(k.var), "start": start.isoformat(),
                                     "decided": decided.isoformat(), "market": m, "live": live, "min_edge": min_edge,
-                                    "arb": arb,
-                                    "levels": list(((getattr(m, "levels", None) or {}).get(side)) or [])
-                                    or ([(a, getattr(m, f"{side}_ask_size", None))]
-                                        if getattr(m, f"{side}_ask_size", None) else [])})
+                                    "arb": arb, "levels": _levels(m, side, a)})
                 count("qualified" if found else "below edge")
     out.sort(key=lambda b: -b["ev"])
     return out, fairs
+
+
+def _levels(m, side, a):
+    """The asks a buy of side can take on market m: its book, else the top of book with its size, else none."""
+    size = getattr(m, f"{side}_ask_size", None)
+    return list(((getattr(m, "levels", None) or {}).get(side)) or []) or ([(a, size)] if size else [])
+
+
+# ---- dip trades: buy what scared sellers dumped on one site, sell it when it bounces -------------------------
+
+def side_mid(c, side):
+    """The mid of one side of a contract (between its ask and 1 - the other side's ask), or None."""
+    q = quote(c)
+    return None if q is None else q[0] if side == YES else 1 - q[0]
+
+
+class DipWatch:
+    """Each live same-question pair's recent asks on both sites, in Kalshi's terms ((ask for its YES, ask for its
+    NO) per site), to spot a dip; and since when each dip has held."""
+
+    def __init__(self):
+        self.hist = {}             # (k id, p id) -> deque of (t, {"kalshi": (yes, no), "polymarket": (yes, no)})
+        self.since = {}            # ((k id, p id), site, outcome) -> when that dip was first seen
+        self.lock = threading.Lock()
+
+    def note(self, key, t, asks):
+        """Add a reading at t (seconds) and return the window's readings, oldest first. Readings under a quarter
+        second apart replace each other; one older than the last (a slower pass finishing late) is dropped."""
+        with self.lock:
+            h = self.hist.get(key)
+            if h is None:
+                h = self.hist[key] = deque()
+                if len(self.hist) > 4000:  # games long over: forget them
+                    for old in [k for k, v in self.hist.items() if v and t - v[-1][0] > config.EV_BOT_DIP_WINDOW_SECS]:
+                        del self.hist[old]
+            if h and t < h[-1][0]:
+                return list(h)
+            if h and t - h[-1][0] < 0.25:
+                h[-1] = (t, asks)
+            else:
+                h.append((t, asks))
+            while h and t - h[0][0] > config.EV_BOT_DIP_WINDOW_SECS:
+                h.popleft()
+            return list(h)
+
+    def held(self, key, t, ok):
+        """Seconds a dip has held (0 the first time it's seen, or once it's older than the window); None, and
+        forgotten, when ok is False."""
+        with self.lock:
+            if not ok:
+                self.since.pop(key, None)
+                return None
+            first = self.since.get(key)
+            if first is None or t - first > config.EV_BOT_DIP_WINDOW_SECS:
+                first = self.since[key] = t
+            return t - first
+
+
+def find_dip(hist, s, o, d):
+    """How outcome d (0 = Kalshi's YES, 1 = its NO) fell on site s against site o, over readings hist (oldest
+    first, the last one now): {"drop", "secs", "from", "follow", "alive"}, or None. The drop runs from the highest
+    ask in the window (the latest, if tied) to now; follow is how far o's ask fell over the same span; alive: o's
+    quotes changed since (it kept trading, not frozen or suspended)."""
+    t_now, cur = hist[-1]
+    a_now, o_now = cur[s][d], cur[o][d]
+    if a_now is None or o_now is None:
+        return None
+    peak = None
+    for t, x in hist[:-1]:
+        if x[s][d] is not None and x[o][d] is not None and (peak is None or x[s][d] >= peak[1][s][d]):
+            peak = (t, x)
+    if peak is None:
+        return None
+    t_pk, x_pk = peak
+    return {"drop": x_pk[s][d] - a_now, "secs": t_now - t_pk, "from": x_pk[s][d], "follow": x_pk[o][d] - o_now,
+            "alive": any(x[o] != x_pk[o] for t, x in hist if t > t_pk)}
+
+
+def dip_candidates(groups, source, now, watch, fresh=lambda ex, mid, age=None: True, stats=None,
+                   arb_taken=lambda: False):
+    """Dip buys worth making now, biggest gap first; notes every live same-question pair's asks in watch (a
+    DipWatch) on the way. arb_taken(): an arb in a game in progress goes to Auto-trade hedged instead."""
+    out = []
+    st = stats if stats is not None else {}
+    count = lambda why: st.__setitem__(why, st.get(why, 0) + 1)
+    t = now.timestamp()
+    kinds = GAME_VARS + (("player",) if config.EV_BOT_PROPS else ())
+    for (_gk, var), g in groups.items():
+        if var[0] not in kinds:
+            continue
+        for k in g.get("kalshi") or []:
+            decided = engine._parse_time(k.close_time)
+            if decided is None or engine._ended(k, now):
+                continue
+            for p in g.get("polymarket") or []:
+                rel = relation(k, p)
+                start = engine._parse_time(p.close_time)
+                if not rel or start is None or start > now:
+                    continue                           # games in progress only
+                if not (fresh("kalshi", k.market_id, config.EV_BOT_LIVE_QUOTE_AGE)
+                        and fresh("polymarket", p.market_id, config.EV_BOT_LIVE_QUOTE_AGE)):
+                    continue
+                same = {"kalshi": True, "polymarket": rel > 0}       # the contract's YES is Kalshi's YES
+                c_of = {"kalshi": k, "polymarket": p}
+                asks = {ex: (c.ask.get(YES), c.ask.get(NO)) if same[ex] else (c.ask.get(NO), c.ask.get(YES))
+                        for ex, c in c_of.items()}
+                pair_key = (k.market_id, p.market_id)
+                hist = watch.note(pair_key, t, asks)
+                if len(hist) < 2:
+                    continue
+                for s, o in (("kalshi", "polymarket"), ("polymarket", "kalshi")):
+                    for d in (0, 1):
+                        c, oc = c_of[s], c_of[o]
+                        side = YES if (d == 0) == same[s] else NO
+                        o_side = YES if (d == 0) == same[o] else NO
+                        a, qo = c.ask.get(side), quote(oc)
+                        dip = find_dip(hist, s, o, d)
+                        anchor = side_mid(oc, o_side)
+                        ok = bool(dip and a and 0 < a < 1 and qo and anchor is not None and dip["alive"]
+                                  and qo[1] <= config.EV_BOT_MAX_SPREAD + 1e-9
+                                  and dip["drop"] >= config.EV_BOT_DIP_DROP - 1e-9
+                                  and dip["follow"] <= config.EV_BOT_DIP_FOLLOW * dip["drop"] + 1e-9
+                                  and anchor - a - fee_per_contract(c.fee_coef, a) >= config.EV_BOT_DIP_GAP - 1e-9)
+                        held = watch.held((pair_key, s, d), t, ok)
+                        if not ok:
+                            continue
+                        if held < config.EV_BOT_DIP_CONFIRM_SECS - 1e-9:
+                            count("dip confirming")            # the other site may still be catching up
+                            continue
+                        if _hedged_arb(k, p, rel) and arb_taken():
+                            count("dip arb")
+                            continue
+                        count("dips")
+                        cost = a + fee_per_contract(c.fee_coef, a)
+                        qk, qp = quote(k), quote(p)
+                        out.append({
+                            "contract": c, "side": side, "ask": a, "q": anchor, "ev": anchor - cost, "cost": cost,
+                            "k": k.market_id, "p": p.market_id, "rel": rel,
+                            "fv": {"fair": anchor, "k_mid": qk[0] if qk else None, "p_mid": qp[0] if qp else None,
+                                   "source": f"dip: {NAMES[s]} fell {dip['drop'] * 100:.0f}¢ in {dip['secs']:.0f}s, "
+                                             f"{NAMES[o]} held"},
+                            "game": k.game_key, "label": k.game_label or k.game_key.split(":", 1)[1],
+                            "quantity": engine.describe_var(k.var), "start": start.isoformat(),
+                            "decided": decided.isoformat(), "market": source.get((c.exchange, c.market_id)),
+                            "live": True, "min_edge": config.EV_BOT_DIP_GAP, "arb": False,
+                            "levels": _levels(source.get((c.exchange, c.market_id)), side, a),
+                            "dip": {"drop": round(dip["drop"], 4), "secs": round(dip["secs"], 1), "from": dip["from"],
+                                    "anchor": round(anchor, 4), "anchor_ex": o, "anchor_id": oc.market_id,
+                                    "anchor_side": o_side}})
+    out.sort(key=lambda b: -b["ev"])
+    return out
+
+
+def dip_exit(pos, bid, anchor, held_secs, coef):
+    """(why, lowest price to accept) to sell an open dip trade now, or None to keep it. bid: the best price it
+    sells for on its own site; anchor: the other site's mid for the same outcome (None if not current)."""
+    paid = pos["cost"] / pos["qty"]                       # a share, buy fee included
+    net = lambda x: x - fee_per_contract(coef, x)          # a share sold at x, sell fee taken off
+    want = paid + config.EV_BOT_DIP_TAKE_PROFIT
+    floor = max(0.01, round(bid - config.SELLBACK_SLIPPAGE_TICKS * 0.01, 4))
+    if net(bid) >= want - 1e-9:
+        x = math.ceil(want * 100 - 1e-6) / 100             # the lowest whole cent that still makes the profit
+        while x < bid and net(x) < want - 1e-9:
+            x = round(x + 0.01, 2)
+        return "bounced: took the profit", min(x, bid)
+    if net(bid) <= paid - config.EV_BOT_DIP_STOP_LOSS + 1e-9:
+        return "kept falling: cut the loss", floor
+    if anchor is not None and anchor <= pos["avg"] + 0.005:
+        return "the other site followed it down: the drop was real", floor
+    if held_secs >= config.EV_BOT_DIP_MAX_HOLD_SECS:
+        return f"no bounce in {config.EV_BOT_DIP_MAX_HOLD_SECS / 60:g} min", floor
+    return None
 
 
 class EVBot:
@@ -239,6 +416,8 @@ class EVBot:
         self.tried = {}                    # market id -> time of the last bet attempt
         self.rejects = 0                   # orders refused in a row
         self.top = []                      # the best bets seen on the last pass, for the dashboard
+        self.dips = DipWatch()             # live pairs' recent prices, for dip trades
+        self.dip_pause = {}                # game -> no new dip trades there until (after one was cut at a loss)
         self._reset_why()
         self._last_settle = 0.0
         self._worker = ThreadPoolExecutor(1, thread_name_prefix="ev-bot") if run_async else None
@@ -247,9 +426,12 @@ class EVBot:
 
     def _load(self):
         try:
-            return json.loads(self.path.read_text(encoding="utf-8")) if self.path else []
+            bets = json.loads(self.path.read_text(encoding="utf-8")) if self.path else []
         except (OSError, ValueError):
             return []
+        for b in bets:
+            b.pop("exiting", None)         # a sale that was going out when the app stopped: try it again
+        return bets
 
     def _save(self):
         if not self.path:
@@ -285,6 +467,7 @@ class EVBot:
         with self.lock:
             if on and not self.on:
                 self._reset_why()
+                self.dips = DipWatch()     # prices from before it was off say nothing about now
                 self.why_since = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.on, self.halted = bool(on), None
             self.rejects = 0
@@ -302,8 +485,10 @@ class EVBot:
         return [b for b in self.bets if b["status"] == "open" and (paper is None or b["paper"] == paper)]
 
     def summary(self, paper):
-        """Settled results and closing value for real (paper=False) or paper bets."""
-        mine = [b for b in self.bets if b["paper"] == paper]
+        """Settled results and closing value for real (paper=False) or paper bets; dip trades on their own."""
+        mine = [b for b in self.bets if b["paper"] == paper and b.get("kind") != "dip"]
+        dips = [b for b in self.bets if b["paper"] == paper and b.get("kind") == "dip"]
+        closed = [b for b in dips if b["status"] != "open"]
         settled = [b for b in mine if b["status"] in ("won", "lost", "void")]
         staked = sum(b["cost"] for b in settled)
         pnl = sum(b["pnl"] for b in settled)
@@ -320,7 +505,10 @@ class EVBot:
                 "clv_positive": round(sum(x > 0 for x in clv) / len(clv), 3) if clv else None,
                 "live_bets": sum(bool(b.get("live")) for b in mine),
                 "mark_n": len(mark), "mark_avg": round(sum(mark) / len(mark), 4) if mark else None,
-                "mark_positive": round(sum(x > 0 for x in mark) / len(mark), 3) if mark else None}
+                "mark_positive": round(sum(x > 0 for x in mark) / len(mark), 3) if mark else None,
+                "dips": {"n": len(dips), "open": len(dips) - len(closed), "closed": len(closed),
+                         "up": sum((b["pnl"] or 0) > 0 for b in closed), "pnl": round(sum(b["pnl"] or 0 for b in closed), 2),
+                         "staked": round(sum(b["cost"] for b in closed), 2)}}
 
     def status(self):
         return {"on": self.on, "busy": self.busy, "halted": self.halted, "paper": config.EV_BOT_PAPER,
@@ -331,14 +519,22 @@ class EVBot:
                 "per_game": config.EV_BOT_PER_GAME, "profile": self._profile(), "take_arbs": config.EV_BOT_TAKE_ARBS,
                 "props": config.EV_BOT_PROPS,
                 "live_extra_edge": config.EV_BOT_LIVE_EXTRA_EDGE, "live_mark_secs": config.EV_BOT_LIVE_MARK_SECS,
+                "dip": {"on": config.EV_BOT_DIPS, "drop": config.EV_BOT_DIP_DROP, "window": config.EV_BOT_DIP_WINDOW_SECS,
+                        "follow": config.EV_BOT_DIP_FOLLOW, "confirm": config.EV_BOT_DIP_CONFIRM_SECS,
+                        "gap": config.EV_BOT_DIP_GAP, "take_profit": config.EV_BOT_DIP_TAKE_PROFIT,
+                        "stop_loss": config.EV_BOT_DIP_STOP_LOSS, "max_hold": config.EV_BOT_DIP_MAX_HOLD_SECS,
+                        "max_bet": config.EV_BOT_DIP_MAX_BET},
                 "real": self.summary(False), "paper_results": self.summary(True),
-                "history": [{k: b.get(k) for k in ("time", "paper", "game", "quantity", "exchange", "side", "title",
-                                                   "qty", "avg", "cost", "fair", "fair_source", "ev", "status", "pnl", "clv",
-                                                   "live", "from_arb")}
+                "history": [{**{k: b.get(k) for k in ("time", "paper", "game", "quantity", "exchange", "side", "title",
+                                                      "qty", "avg", "cost", "fair", "fair_source", "ev", "status", "pnl",
+                                                      "clv", "live", "from_arb", "kind", "sold_qty")},
+                             "sold_avg": round(b["sold_amount"] / b["sold_qty"], 4) if b.get("sold_qty") else None,
+                             "exit": (b.get("exits") or [{}])[-1].get("why")}
                             for b in reversed(self.bets[-20:])],
                 "top": self.top if self.on else [],
                 "why": {"since": self.why_since, "passes": self.passes, "counts": dict(self.funnel),
-                        "checked": sum(v for k, v in self.funnel.items() if k not in ("moves", "live", "arb taken")),
+                        "checked": sum(v for k, v in self.funnel.items()
+                                       if k not in ("moves", "live", "arb taken", "dips", "dip confirming", "dip arb")),
                         "best": self.best,
                         "blocked": dict(self.blocked)}}
 
@@ -379,11 +575,17 @@ class EVBot:
         auto = getattr(self.scanner, "autotrader", None)
         return not getattr(auto, "on", False) or (live and not config.AUTO_TRADE_LIVE_GAMES)
 
+    def _auto_takes_live_arbs(self):
+        """Auto-trade is on and takes games in progress: an arb there goes to it hedged, not to a dip trade."""
+        return bool(getattr(getattr(self.scanner, "autotrader", None), "on", False) and config.AUTO_TRADE_LIVE_GAMES)
+
     def observe(self, groups, source, now=None):
         """After a price pass: keep each open bet's latest pre-game fair price (its closing value once the game
-        starts), and when on, place the best bet worth taking. Returns the bet started, if any."""
-        if not self.on:                    # off: only the games it still holds bets in, for their closing value
-            games = {b["game_key"] for b in self.bets if b["status"] == "open" and not b.get("tracked")}
+        starts), sell open dip trades that bounced (on or off), and when on, place the best bet worth taking (a dip
+        trade first). Returns the bet started, if any."""
+        if not self.on:                    # off: only the games it still holds bets in (closing value, dip exits)
+            games = {b["game_key"] for b in self.bets
+                     if b["status"] == "open" and (not b.get("tracked") or b.get("kind") == "dip")}
             if not games:
                 return None
             groups = {g: v for g, v in groups.items() if g[0] in games}
@@ -391,6 +593,14 @@ class EVBot:
         stats = {}
         cands, fairs = candidates(groups, source, now, self._fresh, self._moved, stats, self._arbs_ok)
         self._track_closing(fairs, now)
+        self._dip_exits(groups, source, now)
+        if self.on and config.EV_BOT_DIPS:
+            dips = dip_candidates(groups, source, now, self.dips, self._fresh, stats, self._auto_takes_live_arbs)
+            paused = [d for d in dips if self.dip_pause.get(d["game"], 0) > now.timestamp()]
+            if paused:                     # whatever cut the last one there is likely still moving that game
+                self._block("dip trade cut at a loss in that game in the last "
+                            f"{config.EV_BOT_COOLDOWN_SECS / 60:g} min")
+            cands = [d for d in dips if d not in paused] + cands
         if self.on:
             with self.lock:
                 self.passes += 1
@@ -452,8 +662,8 @@ class EVBot:
     def _track(self, fairs, now):
         changed = False
         for b in self.bets:
-            if b["status"] != "open" or b.get("tracked"):
-                continue
+            if b["status"] != "open" or b.get("tracked") or b.get("kind") == "dip":
+                continue                   # (a dip trade is judged by what it sold for)
             start = engine._parse_time(b.get("start") or "")
             f = fairs.get((b["k"], b["p"]))
             if b.get("live"):
@@ -484,12 +694,16 @@ class EVBot:
     # ---- placing a bet ------------------------------------------------------------------------
 
     def _size(self, b, bankroll):
-        c = b["contract"]
-        limit = limit_for(b["q"], c.fee_coef, b["ask"], b.get("min_edge", config.EV_BOT_MIN_EDGE), config.EV_BOT_MIN_ROI)
+        """(shares, limit price, fills) for a bet: a fraction of the Kelly stake; a dip trade, EV_BOT_DIP_MAX_BET."""
+        c, dip = b["contract"], b.get("dip")
+        limit = (limit_for(b["q"], c.fee_coef, b["ask"], config.EV_BOT_DIP_GAP, 0.0) if dip else
+                 limit_for(b["q"], c.fee_coef, b["ask"], b.get("min_edge", config.EV_BOT_MIN_EDGE), config.EV_BOT_MIN_ROI))
         if limit is None:
             return 0, None, []
-        stake_cap = min(config.EV_BOT_MAX_BET, config.EV_BOT_DAILY_LIMIT - self.spent_today(config.EV_BOT_PAPER))
-        want = min(kelly_shares(b["q"], b["cost"], bankroll, config.EV_BOT_KELLY), stake_cap / b["cost"])
+        stake_cap = min(config.EV_BOT_DIP_MAX_BET if dip else config.EV_BOT_MAX_BET,
+                        config.EV_BOT_DAILY_LIMIT - self.spent_today(config.EV_BOT_PAPER))
+        want = stake_cap / b["cost"] if dip else \
+            min(kelly_shares(b["q"], b["cost"], bankroll, config.EV_BOT_KELLY), stake_cap / b["cost"])
         usable = [(p, q) for p, q in b["levels"] if q and p <= limit + 1e-9]
         n = math.floor(min(want, sum(q for _, q in usable)) + 1e-9)
         fills = engine._take(usable, n)
@@ -524,9 +738,14 @@ class EVBot:
                     self.scanner.log(f"EV bot: {NAMES[c.exchange]} {side.upper()} {c.market_id} didn't fill at ≤ ${limit:.2f}")
                     return
             entry = self._record(b, qty, amount, fee, limit, order_id)
-            self.scanner.log(f"EV bot {'paper ' if entry['paper'] else ''}bet: {entry['game']} · {NAMES[c.exchange]} "
-                             f"{side.upper()} {qty:g} @ {entry['avg']:.3f} (fair {entry['fair']:.3f}, "
-                             f"+${entry['ev'] * qty:.2f} expected)")
+            if b.get("dip"):
+                self.scanner.log(f"EV bot {'paper ' if entry['paper'] else ''}dip buy: {entry['game']} · "
+                                 f"{NAMES[c.exchange]} {side.upper()} {qty:g} @ {entry['avg']:.3f} ({b['fv']['source']}; "
+                                 f"{NAMES[b['dip']['anchor_ex']]} at {b['dip']['anchor']:.3f})")
+            else:
+                self.scanner.log(f"EV bot {'paper ' if entry['paper'] else ''}bet: {entry['game']} · {NAMES[c.exchange]} "
+                                 f"{side.upper()} {qty:g} @ {entry['avg']:.3f} (fair {entry['fair']:.3f}, "
+                                 f"+${entry['ev'] * qty:.2f} expected)")
         except Exception as e:
             self._halt(f"unexpected error ({e!r}): check your {NAMES.get(c.exchange, '')} account")
         finally:
@@ -577,14 +796,128 @@ class EVBot:
                  "cost": round(amount + fee, 4), "avg": round(amount / qty, 4), "limit": limit, "order_id": order_id,
                  "fair": round(b["q"], 4), "fair_source": b["fv"]["source"], "ev": round(b["q"] - (amount + fee) / qty, 4),
                  "k": b["k"], "p": b["p"], "yes_is_k": c.exchange == "kalshi" or b["rel"] > 0,
-                 "mids": {"kalshi": round(b["fv"]["k_mid"], 4), "polymarket": round(b["fv"]["p_mid"], 4)},
+                 "mids": {"kalshi": None if b["fv"]["k_mid"] is None else round(b["fv"]["k_mid"], 4),
+                          "polymarket": None if b["fv"]["p_mid"] is None else round(b["fv"]["p_mid"], 4)},
                  "start": b["start"], "decided": b["decided"], "status": "open", "pnl": None, "clv": None,
                  "live": bool(b.get("live")), "placed": (b.get("now") or engine.now_utc()).isoformat(),
                  "from_arb": bool(b.get("arb"))}
+        if b.get("dip"):
+            entry.update({"kind": "dip", "dip": b["dip"], "sold_qty": 0.0, "sold_amount": 0.0, "sold_fee": 0.0,
+                          "exits": []})
         with self.lock:
             self.bets.append(entry)
             self._save()
         return entry
+
+    # ---- selling dip trades ---------------------------------------------------------------------
+
+    def _dip_exits(self, groups, source, now):
+        """Sell each open dip trade whose price has bounced, or that dip_exit says to cut. Runs on every pass,
+        with the bot on or off; a sale goes out on the bot's worker (one order at a time)."""
+        t = now.timestamp()
+        with self.lock:
+            mine = [b for b in self.bets if b.get("kind") == "dip" and b["status"] == "open"
+                    and not b.get("exiting") and not b.get("unsellable") and t >= b.get("retry_at", 0)]
+        if not mine:
+            return
+        by_id = {(c.exchange, c.market_id): c for g in groups.values() for lst in g.values() for c in lst}
+        for b in mine:
+            c = by_id.get((b["exchange"], b["market_id"]))
+            if c is None or not self._fresh(c.exchange, c.market_id, config.EV_BOT_LIVE_QUOTE_AGE):
+                continue
+            other = NO if b["side"] == YES else YES
+            ask_other = c.ask.get(other)
+            if ask_other is None or not 0 < ask_other < 1:
+                continue                   # nobody buying it there right now: hold
+            bid = round(1 - ask_other, 4)
+            oc = by_id.get((b["dip"]["anchor_ex"], b["dip"]["anchor_id"]))
+            anchor = side_mid(oc, b["dip"]["anchor_side"]) if oc is not None and \
+                self._fresh(oc.exchange, oc.market_id, config.EV_BOT_LIVE_QUOTE_AGE) else None
+            placed = engine._parse_time(b.get("placed") or "")
+            go = dip_exit(b, bid, anchor, (now - placed).total_seconds() if placed else 0.0, c.fee_coef)
+            if go is None:
+                continue
+            m = source.get((c.exchange, c.market_id))
+            bids = sorted(((round(1 - p, 4), q) for p, q in _levels(m, other, ask_other) if q), reverse=True)
+            with self.lock:
+                if b.get("exiting"):
+                    continue
+                b["exiting"] = True
+            if self._worker:
+                self._worker.submit(self._sell, b, c, go[0], go[1], bids, bid, now)
+            else:
+                self._sell(b, c, go[0], go[1], bids, bid, now)
+
+    def _sell(self, b, c, why, min_price, bids, bid, now):
+        """Sell what's left of a dip trade at min_price or better: filled against the real bids on paper, else an
+        immediate-or-cancel order. What doesn't fill is tried again on a later pass."""
+        try:
+            left = round(b["qty"] - b["sold_qty"], 6)
+            if b["paper"]:
+                fills, need = [], left
+                for p, q in bids:
+                    if need <= 1e-9 or p < min_price - 1e-9:
+                        break
+                    fills.append((p, min(q, need)))
+                    need -= min(q, need)
+                qty, amount = sum(q for _, q in fills), sum(p * q for p, q in fills)
+                fee = total_fee(c.exchange, fills, c.fee_coef) if fills else 0.0
+            else:
+                got = self._place_sell(b, c, left, min_price, bid)
+                if got is None:
+                    return
+                qty, amount, fee = got.qty, got.amount, got.fee
+            if qty <= 0:
+                b["retry_at"] = now.timestamp() + 1      # the bid moved: next pass
+                return
+            with self.lock:
+                b["sold_qty"] = round(b["sold_qty"] + qty, 6)
+                b["sold_amount"] = round(b["sold_amount"] + amount, 4)
+                b["sold_fee"] = round(b["sold_fee"] + fee, 4)
+                b["exits"].append({"time": now.isoformat(timespec="seconds"), "why": why, "qty": qty,
+                                   "avg": round(amount / qty, 4)})
+                if b["sold_qty"] >= b["qty"] - 1e-6:
+                    b["status"] = "sold"
+                    b["pnl"] = round(b["sold_amount"] - b["sold_fee"] - b["cost"], 2)
+                    b["settled_at"] = now.isoformat()
+                if not why.startswith("bounced"):  # the drop was real: leave that game's other lines alone a while
+                    self.dip_pause[b["game_key"]] = now.timestamp() + config.EV_BOT_COOLDOWN_SECS
+                self._save()
+            self.scanner.log(f"EV bot {'paper ' if b['paper'] else ''}dip sell ({why}): {b['game']} · "
+                             f"{NAMES[c.exchange]} {b['side'].upper()} {qty:g} @ {amount / qty:.3f}, bought @ "
+                             f"{b['avg']:.3f}" + (f": {'+' if b['pnl'] >= 0 else '-'}${abs(b['pnl']):.2f}"
+                                                  if b["status"] == "sold" else f", {b['qty'] - b['sold_qty']:g} left"))
+        except Exception as e:
+            b["retry_at"] = now.timestamp() + 10
+            self.scanner.log(f"EV bot: selling a dip trade failed ({e!r}); will retry")
+        finally:
+            b["exiting"] = False
+
+    def _place_sell(self, b, c, qty, min_price, bid):
+        """A real immediate-or-cancel sell. Returns its Fill, or None when nothing was sent (tried again later)."""
+        t, wait = getattr(self.scanner, "trader", None), time.time() + 10
+        if t is None or not t.venues:
+            b["retry_at"] = wait
+            self.scanner.log(f"EV bot: can't sell a dip trade on {NAMES[c.exchange]}: trading is off")
+            return None
+        if not t.lock.acquire(blocking=False):
+            return None                    # an arb trade is going out: it goes first
+        try:
+            with trading():
+                v = t.venues[c.exchange]
+                info = t._cached_info(c.exchange, c.market_id) or t._fetch_info(c.exchange, v, c.market_id)
+                n = floor_to(qty, info["min_qty"])
+                if n <= 0:                 # a fraction no site sells: it settles with the game
+                    b["unsellable"] = True
+                    return None
+                try:
+                    return v.sell(c.market_id, b["side"], n, min_price, c.fee_coef, expect=bid)
+                except ApiError as e:
+                    b["retry_at"] = wait
+                    self.scanner.log(f"EV bot: {NAMES[c.exchange]} refused selling a dip trade ({e.detail}); will retry")
+                    return None
+        finally:
+            t.lock.release()
 
     def _halt(self, why):
         with self.lock:
@@ -627,8 +960,9 @@ class EVBot:
                 if not s.get("paid"):
                     continue
                 pays = s["pays_yes"] if b["side"] == YES else 1 - s["pays_yes"]
-                b["payout"] = round(b["qty"] * pays, 2)
-                b["pnl"] = round(b["payout"] - b["cost"], 2)
+                held = b["qty"] - b.get("sold_qty", 0)          # a dip trade may have sold part of it
+                b["payout"] = round(held * pays, 2)
+                b["pnl"] = round(held * pays + b.get("sold_amount", 0) - b.get("sold_fee", 0) - b["cost"], 2)
                 b["status"] = "won" if pays >= 0.999 else "lost" if pays <= 0.001 else "void"
                 b["settled_at"] = now.isoformat()
                 done.append(b)

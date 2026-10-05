@@ -239,7 +239,10 @@ class FastLaneTests(unittest.TestCase):
         self.assertIn("T:A", self.lane_games())              # the EV bot does (EV_BOT_LIVE_GAMES)
         self.s._lane_cache = None
         with mock.patch.object(scanner.config, "EV_BOT_LIVE_GAMES", False):
-            self.assertNotIn("T:A", self.lane_games())
+            self.assertIn("T:A", self.lane_games())          # its dip trades still do (EV_BOT_DIPS)
+            self.s._lane_cache = None
+            with mock.patch.object(scanner.config, "EV_BOT_DIPS", False):
+                self.assertNotIn("T:A", self.lane_games())
 
     def test_crypto_windows_stay_out_of_the_lane_while_auto_trade_skips_them(self):
         from datetime import timedelta

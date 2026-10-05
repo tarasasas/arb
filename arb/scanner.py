@@ -682,8 +682,8 @@ class Scanner:
         with self.lock:
             groups = self.groups
         skip_windows = config.FAST_LANE == "auto" and not config.AUTO_TRADE_CRYPTO_WINDOWS
-        # games in progress: when Auto-trade takes them, or the EV bot is on and takes them
-        live_ok = bool(config.AUTO_TRADE_LIVE_GAMES or (config.EV_BOT_LIVE_GAMES
+        # games in progress: when Auto-trade takes them, or the EV bot is on and takes them (bets or dip trades)
+        live_ok = bool(config.AUTO_TRADE_LIVE_GAMES or ((config.EV_BOT_LIVE_GAMES or config.EV_BOT_DIPS)
                                                        and getattr(getattr(self, "evbot", None), "on", False)))
         key = (id(groups), config.FAST_MAX_HOURS, config.AUTO_TRADE_LONG_DAYS, live_ok, skip_windows)
         hit = getattr(self, "_lane_cache", None)
