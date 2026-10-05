@@ -219,12 +219,22 @@ re-checked before ordering. Rows with a one-way-rules, different-settlement-sour
 warning never qualify. A wrong auto-match can lose on both sides, so set either setting to `0` to
 require your check.
 
+**Long-dated arbs:** also anything whose result is known within `AUTO_TRADE_LONG_DAYS` (90 days, about
+three months), but only at a return of at least `AUTO_TRADE_LONG_MIN_ROI` (4%), since the money is tied
+up until then. The return is judged on the best-priced pair (the dashboard's ROI for a small trade), and
+the trade buys only as many shares as keep 4% overall: deeper levels that would pull it below are left
+alone. There's no minimum size or profit: a $9.60 trade making $0.40 qualifies. Same rules otherwise
+(auto-matched pairs per `FAST_ALLOW_AUTO_MATCHED`, rule warnings always block), and the same per-trade
+and per-day limits, shared with the 24-hour arbs. If `AUTO_TRADE_MIN_ROI` is set higher, that counts
+instead. `AUTO_TRADE_LONG_DAYS=0` turns it off. The row's ⚡ Fast trade button needs the same 4%.
+
 - **⚡ Fast trade** (a button on qualifying rows): one click places both orders, up to `FAST_MAX_TRADE`
   (and your **Max to invest**, if you set one).
 - **Auto-trade** (the bar above the tabs): places qualifying arbs by itself, one at a time.
   - It's **off every time the scanner starts**, and you're asked once when you turn it on.
-  - It only trades when the return at live prices is at least `AUTO_TRADE_MIN_ROI` (0.5%), at the size
-    it can actually take (capped per trade). `AUTO_TRADE_MIN_PROFIT` adds an optional dollar floor (off).
+  - It only trades when the return at live prices is at least `AUTO_TRADE_MIN_ROI` (0.5%; 4% for
+    long-dated arbs), buying only as many shares as keep that return (capped per trade).
+    `AUTO_TRADE_MIN_PROFIT` adds an optional dollar floor (off; never for long-dated arbs).
   - It never spends more than `AUTO_TRADE_MAX_TRADE` per trade or `AUTO_TRADE_DAILY_LIMIT` per day.
     Today's spend and net are kept in `cache/auto_trade_day.json`, so the daily limit and the daily loss
     stop hold across restarts.
@@ -293,7 +303,10 @@ check about every half second (`FAST_LANE_PAUSE_SECS`), and their markets get th
 slots. That's a tenth or less of all markets (about 600 pairs on a typical day), so with an
 Advanced-tier Kalshi key a pass takes a second or two. The Auto-trade bar shows "Fast lane: N pairs
 decided within 24h, checked every Xs". `FAST_LANE=always` runs it all the time (for Fast trade by
-hand too), `off` never; also in ⚙ Settings.
+hand too), `off` never; also in ⚙ Settings. In Auto-trade mode (below) the long-dated pairs get a
+price check of their own every `AUTO_TRADE_LONG_RECHECK_SECS` (10s), running alongside the fast lane so
+the 24-hour pairs keep their half-second pace; long-dated markets on a live feed are re-checked as soon
+as they move. The bar shows "Long-dated: N pairs within 90 days, checked every Xs".
 
 **Auto-trade mode.** While Auto-trade is on, only the markets it can take are refreshed: the full
 sweep, near-arb re-checks, live-feed re-checks of other markets, non-sports suggestions and the My
@@ -304,7 +317,7 @@ always go ahead of every other request.
 
 **⚙ Settings** (top right, and next to the Auto-trade switch) changes all of these from the dashboard:
 what Auto-trade and Fast trade may take (auto-matched pairs, too-good-to-be-true rows, player props,
-games in progress), the minimum return, the per-trade and per-day limits, the hard cap per trade
+games in progress, long-dated arbs and their return), the minimum return, the per-trade and per-day limits, the hard cap per trade
 (`MAX_TRADE_DOLLARS`, default $100), leg order, and Auto maker's limits. A change applies at once and
 is saved to `.env`, the same lines you can still edit by hand.
 
@@ -320,6 +333,8 @@ AUTO_TRADE_MAX_TRADE=25
 AUTO_TRADE_DAILY_LIMIT=100
 AUTO_TRADE_MIN_PROFIT=0         # optional dollar floor; ROI minimum below is what counts
 AUTO_TRADE_MIN_ROI=0.5          # percent
+AUTO_TRADE_LONG_DAYS=90         # also arbs decided within this many days (0 = off)...
+AUTO_TRADE_LONG_MIN_ROI=4       # ...at this return (percent) or better, any size
 AUTO_TRADE_COOLDOWN_SECS=60
 AUTO_TRADE_ORDER=smart          # or thinner_first / together / polymarket_first
 AUTO_TRADE_FAST_EDGE=2          # cents a pair in crypto windows and games in progress

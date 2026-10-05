@@ -761,6 +761,22 @@ class FailSafeTests(unittest.TestCase):
         with self.assertRaisesRegex(TradeError, "too thin"):
             make(k, p).prepare(LEGS, hedge_depth=2)
 
+    def test_min_roi_buys_only_the_shares_that_keep_the_return(self, *_):
+        # 10 shares at ~4.8% (Kalshi 0.40), then 100 more that still profit but at ~1.6% (Kalshi 0.43)
+        k = FakeVenue("kalshi", yes=[(0.40, 10), (0.43, 100)])
+        p = FakeVenue("polymarket", no=[(0.52, 1000)])
+        self.assertGreater(make(k, p).prepare(LEGS)["size"], 100)          # no floor: everything profitable
+        plan = make(k, p).prepare(LEGS, min_roi=0.04)
+        self.assertGreaterEqual(plan["size"], 10)
+        self.assertLess(plan["size"], 20)
+        self.assertGreaterEqual(plan["expected_profit"] / plan["capital"], 0.04)
+
+    def test_min_roi_out_of_reach_says_so(self, *_):
+        k = FakeVenue("kalshi", yes=[(0.40, 10)])
+        p = FakeVenue("polymarket", no=[(0.52, 1000)])
+        with self.assertRaisesRegex(TradeError, "Under 10% return"):
+            make(k, p).prepare(LEGS, min_roi=0.10)
+
     def test_partial_says_which_site_missed_and_why(self, *_):
         k = FakeVenue("kalshi", yes=[(0.40, 1000)])
         p = FakeVenue("polymarket", no=[(0.50, 20)], yes=[(0.55, 100)])

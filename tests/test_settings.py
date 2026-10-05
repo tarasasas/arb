@@ -13,7 +13,7 @@ class SettingsTests(unittest.TestCase):
         self.env.write_text("# my keys\nKALSHI_API_KEY_ID=abc\nKALSHI_PRIVATE_KEY_PATH=kalshi.key\n"
                             "FAST_ALLOW_TOO_GOOD=1\n# FAST_ALLOW_AUTO_MATCHED=0\nAUTO_TRADE_MAX_TRADE=25\n", encoding="utf-8")
         keys = ["FAST_ALLOW_TOO_GOOD", "AUTO_TRADE_MAX_TRADE", "AUTO_TRADE_MIN_ROI", "TRADE_ORDER", "TRADE_LEGS_TOGETHER",
-                "FAST_ALLOW_PLAYER_PROPS", "AUTO_TRADE_MAX_MISSES"]
+                "FAST_ALLOW_PLAYER_PROPS", "AUTO_TRADE_MAX_MISSES", "AUTO_TRADE_LONG_DAYS", "AUTO_TRADE_LONG_MIN_ROI"]
         self.saved = {k: getattr(config, k) for k in keys}
 
     def tearDown(self):
@@ -59,6 +59,19 @@ class SettingsTests(unittest.TestCase):
             self.assertFalse(engine.fast_check(row, now)["ok"])
             settings.update({"FAST_ALLOW_PLAYER_PROPS": True}, self.env)
             self.assertTrue(engine.fast_check(row, now)["ok"])
+
+    def test_long_dated_settings_are_what_fast_check_reads(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime(2026, 10, 5, tzinfo=timezone.utc)
+        row = {"warnings": [], "payout": 1.0, "edge_per_contract": 0.04, "decided": (now + timedelta(days=60)).isoformat()}
+        with mock.patch.dict("os.environ", {}):
+            settings.update({"AUTO_TRADE_LONG_DAYS": 90, "AUTO_TRADE_LONG_MIN_ROI": 4}, self.env)
+            self.assertEqual(config.AUTO_TRADE_LONG_MIN_ROI, 0.04)
+            self.assertTrue(engine.fast_check(row, now)["ok"])                  # 4.17%
+            settings.update({"AUTO_TRADE_LONG_MIN_ROI": 5}, self.env)
+            self.assertFalse(engine.fast_check(row, now)["ok"])
+            settings.update({"AUTO_TRADE_LONG_MIN_ROI": 4, "AUTO_TRADE_LONG_DAYS": 0}, self.env)
+            self.assertFalse(engine.fast_check(row, now)["ok"])                 # 0 days = off
 
     def test_every_setting_exists_in_config(self):
         for key in settings.SPEC:

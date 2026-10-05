@@ -556,8 +556,8 @@ def fast_check(row, now):
     """Can this row be traded without a confirm step (Fast trade / Auto-trade)? Pairs matched by
     contract terms, by the sports matcher, approved by you, or (FAST_ALLOW_AUTO_MATCHED) auto-matched by
     wording, whose result is known within FAST_MAX_HOURS (crypto included; the payout itself may come
-    later, see to_row). Never rows that look
-    too good to be true or carry rule warnings. {"ok": bool, "why": str}."""
+    later, see to_row), or within AUTO_TRADE_LONG_DAYS at long_min_roi() or better ("long": True). Never
+    rows that look too good to be true or carry rule warnings. {"ok": bool, "why": str[, "long": True]}."""
     if row.get("suspicious") and not config.FAST_ALLOW_TOO_GOOD:
         return {"ok": False, "why": "too good to be true: check it first"}
     auto = bool((row.get("pair") or {}).get("auto"))
@@ -571,9 +571,31 @@ def fast_check(row, now):
         return {"ok": False, "why": w.split(":")[0].split(" (")[0].lower()}
     when = decided_at(row)
     hours = (when - now).total_seconds() / 3600 if when else None
+    note = "; auto-matched, not verified" if auto else ""
     if hours is not None and hours <= config.FAST_MAX_HOURS:
-        return {"ok": True, "why": f"result within {config.FAST_MAX_HOURS:g}h" + ("; auto-matched, not verified" if auto else "")}
+        return {"ok": True, "why": f"result within {config.FAST_MAX_HOURS:g}h" + note}
+    days = config.AUTO_TRADE_LONG_DAYS
+    if hours is not None and days > 0 and hours <= days * 24:
+        # Long-dated: the money is tied up for weeks or months, so only at the higher return.
+        roi, need = top_roi(row), long_min_roi()
+        if roi >= need - 1e-9:
+            return {"ok": True, "long": True, "why": f"result within {days:g} days, {roi * 100:.2f}% return "
+                                                     f"(long-dated arbs need {need * 100:g}%)" + note}
+        return {"ok": False, "why": f"result known in more than {config.FAST_MAX_HOURS:g}h and under "
+                                    f"{need * 100:g}% return: use Make trade"}
     return {"ok": False, "why": f"result known in more than {config.FAST_MAX_HOURS:g}h: use Make trade"}
+
+
+def top_roi(row):
+    """Return on the best-priced pair, fees included: the most any size of this arb can make per dollar
+    (row["roi"] is the return at the full size the books allow)."""
+    edge, pay = row.get("edge_per_contract") or 0.0, row.get("payout") or 1.0
+    return edge / (pay - edge) if 0 < edge < pay else 0.0
+
+
+def long_min_roi():
+    """The return a long-dated arb needs: AUTO_TRADE_LONG_MIN_ROI, or the general minimum if that's higher."""
+    return max(config.AUTO_TRADE_LONG_MIN_ROI, config.AUTO_TRADE_MIN_ROI)
 
 
 def decided_at(row):

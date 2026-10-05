@@ -269,21 +269,22 @@ class Trader:
     # ---- planning ----------------------------------------------------------------------
 
     def prepare(self, legs, max_invest=None, timeline=None, hedge_depth=1.0, order=None, first=None, dry=False,
-                book_share=None, choose=None):
+                book_share=None, choose=None, min_roi=0.0):
         """hedge_depth > 1: shrink the size until the second leg's book holds that many times the shares
         at or below break-even, so a small move between the two orders can't leave the first leg unhedged.
         order: how the two orders go out (ORDER_MODES); TRADE_ORDER if not given. first: which site goes
         first in a one-after-the-other order (else the thinner book). dry: a paper trade (simulate()): no
         cash limits, nothing moved between Kalshi shards. book_share: take at most this share of the shares
         each book shows at the prices paid. choose: a callable returning (order mode, first site, why), called
-        once the books are read, so the order is decided on the latest timing (Auto-trade's "smart" order)."""
+        once the books are read, so the order is decided on the latest timing (Auto-trade's "smart" order).
+        min_roi: buy only as many shares as keep at least this return (deeper levels cost more per pair)."""
         tl = dict(timeline or {})
         tl.setdefault("decided", time.time())      # Make trade: the click is the decision
         if not dry:
             self.warm()                    # order connections ready while the checks run
         with trading():                    # ahead of every other request, the fast lane's included
             plan = self._prepare(legs, max_invest, hedge_depth, order if order in ORDER_MODES else config.TRADE_ORDER,
-                                 first=first, dry=dry, book_share=book_share, choose=choose)
+                                 first=first, dry=dry, book_share=book_share, choose=choose, min_roi=min_roi)
         tl["checks_done"] = time.time()
         plan["timeline"] = tl
         return plan
@@ -337,7 +338,7 @@ class Trader:
         return info, levels, balance, checks
 
     def _prepare(self, legs, max_invest=None, hedge_depth=1.0, mode=None, first=None, dry=False, book_share=None,
-                 choose=None):
+                 choose=None, min_roi=0.0):
         if not self.venues:
             raise TradeError("Trading needs both API keys. Add POLYMARKET_KEY_ID and POLYMARKET_SECRET_KEY to .env.")
         by_ex = {l["exchange"]: l for l in legs}
@@ -386,22 +387,24 @@ class Trader:
                            "limit": fills[-1][0] if fills else None}
             return out
 
-        def fits(n, kalshi_cash=None, pm_cash=None):
+        def fits(n, kalshi_cash=None, pm_cash=None, roi=None):
+            roi = min_roi if roi is None else roi
             c = cost_at(n)
             spend = {ex: c[ex]["amount"] + c[ex]["fee"] for ex in EXCHANGES}
             cash = {"kalshi": balance["kalshi"] if kalshi_cash is None else kalshi_cash,
                     "polymarket": balance["polymarket"] if pm_cash is None else pm_cash}
-            return (sum(spend.values()) <= cap and all(spend[ex] <= cash[ex] for ex in EXCHANGES)
-                    and payout * n - sum(spend.values()) > 0)
+            total = sum(spend.values())
+            return (total <= cap and all(spend[ex] <= cash[ex] for ex in EXCHANGES)
+                    and payout * n - total > 0 and payout * n - total >= roi * total - 1e-9)
 
-        def largest(kalshi_cash=None, pm_cash=None):
+        def largest(kalshi_cash=None, pm_cash=None, roi=None):
             n = floor_to(full["size"], step)
-            if fits(n, kalshi_cash, pm_cash):
+            if fits(n, kalshi_cash, pm_cash, roi):
                 return n
             lo, hi = 0, int(n // step)
             while lo < hi:
                 mid = (lo + hi + 1) // 2
-                lo, hi = (mid, hi) if fits(mid * step, kalshi_cash, pm_cash) else (lo, mid - 1)
+                lo, hi = (mid, hi) if fits(mid * step, kalshi_cash, pm_cash, roi) else (lo, mid - 1)
             return lo * step
 
         # If even unlimited Kalshi cash wouldn't make one pair fit, Kalshi isn't the limit: say what is.
@@ -414,6 +417,9 @@ class Trader:
                 need = one["polymarket"]["amount"] + one["polymarket"]["fee"]
                 raise TradeError(f"Polymarket buying power is ${balance['polymarket']:.2f}, not enough for even one pair "
                                  f"(about ${need:.2f} on Polymarket). Nothing was traded.")
+            if min_roi and largest(kalshi_cash=math.inf, pm_cash=math.inf, roi=0) > 0:
+                raise TradeError(f"Under {min_roi * 100:g}% return at live prices within your ${cap:.2f} limit (the "
+                                 f"books moved). Nothing was traded.")
             raise TradeError(f"Not profitable at live prices within your ${cap:.2f} limit any more (the books moved). "
                              f"Nothing was traded.")
 
@@ -464,6 +470,7 @@ class Trader:
         if n <= 0:
             where = f" on shard {shard}"
             limits = f"cap ${cap:.2f}, Kalshi cash{where} ${balance['kalshi']:.2f}, Polymarket buying power ${balance['polymarket']:.2f}"
+            limits += f", at least {min_roi * 100:g}% return" if min_roi else ""
             raise TradeError(f"Can't fit even one profitable pair within your limits ({limits}).")
 
         if book_share and 0 < book_share < 1:

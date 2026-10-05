@@ -968,7 +968,8 @@ function renderAuto(s) {
   const on = tradingOn();
   el.className = "autobar" + (a.on ? " on" : a.halted ? " halted" : "");
   const hist = (a.history || []).map(h => `<li>${esc(h.time.slice(11))} · ${h.paper ? `<span class="badge-paper">paper</span> ` : ""}${
-    esc(h.game || "")}${h.category ? ` <span class="muted">(${esc(h.category)})</span>` : ""} · <b>${esc(h.status)}</b>${
+    esc(h.game || "")}${h.category ? ` <span class="muted">(${esc(h.category)})</span>` : ""}${
+    h.long ? ` <span class="muted">· long-dated, result by ${esc(localTime(h.long))}</span>` : ""} · <b>${esc(h.status)}</b>${
     h.spent == null ? "" : h.status === "ok" ? ` · ${money(h.spent)} in, net ${money(h.net)}`
       : ` · ${h.pairs ? `${compact(h.pairs)} pairs kept, ` : ""}net ${money(h.net)}`}${h.unhedged ? ` · <span style="color:var(--critical)">${compact(h.unhedged)} unhedged</span>` : ""}${
     h.ms && h.ms["total (tick to done)"] != null ? ` · <span class="muted">${h.ms["total (tick to done)"]} ms tick to done</span>` : ""}${
@@ -991,8 +992,12 @@ function renderAuto(s) {
     ${s.lane?.active ? `<span class="muted" title="The pairs Auto-trade could take get their own price check and go first on the live streams (Settings: Fast lane)">Fast lane:
       ${compact(s.lane.pairs)} pairs decided within ${s.lane.hours ?? a.fast_max_hours}h, checked every
       ${s.lane.every != null ? s.lane.every.toFixed(1) : s.lane.seconds.toFixed(1)}s</span>` : ""}
+    ${s.long_lane ? `<span class="muted" title="Arbs decided within these days need the long-dated return (Settings)">Long-dated:
+      ${compact(s.long_lane.pairs)} pairs within ${s.long_lane.days} days, checked every
+      ${(s.long_lane.every ?? s.long_lane.seconds).toFixed(0)}s</span>` : ""}
     <button type="button" class="settings-link" style="margin:0">⚙ Settings</button>
-    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs whose result is known within ${a.fast_max_hours}h (even if paid out later)${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with one-way-rules, different-source or contradicting-price warnings ·
+    <details class="limits"><summary class="muted">Limits</summary><div class="rules-text">Arbs whose result is known within ${a.fast_max_hours}h (even if paid out later)${
+      a.long_days > 0 ? `, or within ${a.long_days} days at ROI ≥ ${pct(a.long_min_roi)} (only as many shares as keep that return, any size)` : ""}${a.allow_auto_matched ? " (auto-matched pairs included)" : ", never auto-matched pairs"}, never rows with one-way-rules, different-source or contradicting-price warnings ·
       ${a.allow_player_props ? "player props included" : "no player props"} ·
       ROI ≥ ${pct(a.min_roi)}${a.allow_too_good ? ", no upper limit (too-good-to-be-true rows included)" : ", never rows flagged too good to be true"} ·
       ${a.live_games ? "" : "not games already in play · "}up to ${money(a.max_trade)} per trade${a.min_profit > 0 ? ` · profit ≥ ${money(a.min_profit)}` : ""} ·

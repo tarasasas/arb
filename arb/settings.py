@@ -13,7 +13,14 @@ GROUPS = [
     ("What Auto-trade and Fast trade may take", [
         ("FAST_MAX_HOURS", "number", "Only arbs whose result is known within (hours)",
          "When the game ends or the event happens, even if a site pays out later (Polymarket's end dates often "
-         "run weeks past the event). Arbs decided later always need Make trade with its confirm step.", 24),
+         "run weeks past the event). Arbs decided later need Make trade, or the long-dated return below.", 24),
+        ("AUTO_TRADE_LONG_DAYS", "number", "Also arbs whose result is known within (days), at a higher return",
+         "Long-dated arbs: the money is tied up until the result is known, so they need the return below. In "
+         "Auto-trade mode their prices are checked about every 10 seconds (live-feed markets as soon as they move). "
+         "0 = off.", 90),
+        ("AUTO_TRADE_LONG_MIN_ROI", "percent", "Minimum return for those (%)",
+         "On the trade itself: only as many shares as keep this return are bought, with no minimum size or profit. "
+         "If Minimum return (Auto-trade) is higher, that counts.", 4),
         ("FAST_ALLOW_AUTO_MATCHED", "bool", "Pairs matched by wording you haven't checked",
          "Non-sports pairs the matcher paired automatically. A wrong match can lose on both sides.", True),
         ("FAST_ALLOW_TOO_GOOD", "bool", "Rows flagged too good to be true",

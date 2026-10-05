@@ -111,6 +111,13 @@ AUTO_TRADE_MAX_TRADE = _env_num("AUTO_TRADE_MAX_TRADE", 25)  # $ per Auto-trade,
 AUTO_TRADE_DAILY_LIMIT = _env_num("AUTO_TRADE_DAILY_LIMIT", 100)   # $ spent by Auto-trade per day
 AUTO_TRADE_MIN_PROFIT = _env_num("AUTO_TRADE_MIN_PROFIT", 0.0)     # $ floor (off: only the ROI minimum applies)
 AUTO_TRADE_MIN_ROI = _env_num("AUTO_TRADE_MIN_ROI", 0.5) / 100     # % of the money put in
+# Long-dated arbs: also those whose result is known within AUTO_TRADE_LONG_DAYS (0 = off), but only at
+# AUTO_TRADE_LONG_MIN_ROI or better, since the money is tied up until then. A trade buys only as many shares
+# as keep that return, with no minimum size or profit. In Auto-trade mode their prices are checked every
+# AUTO_TRADE_LONG_RECHECK_SECS (live-feed markets as soon as they move), the 24h pairs still every half second.
+AUTO_TRADE_LONG_DAYS = _env_num("AUTO_TRADE_LONG_DAYS", 90)
+AUTO_TRADE_LONG_MIN_ROI = _env_num("AUTO_TRADE_LONG_MIN_ROI", 4) / 100
+AUTO_TRADE_LONG_RECHECK_SECS = _env_num("AUTO_TRADE_LONG_RECHECK_SECS", 10)
 AUTO_TRADE_COOLDOWN_SECS = _env_num("AUTO_TRADE_COOLDOWN_SECS", 60)  # per pair of markets
 # Rows kept from an earlier price pass (not re-checked, e.g. out of book downloads) carry old prices: trying
 # one costs the pair its cooldown when the arb turns out gone. Auto-trade takes only rows checked this recently.

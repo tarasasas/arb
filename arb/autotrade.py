@@ -6,6 +6,8 @@ Auto-trade sends its orders per AUTO_TRADE_ORDER (default thinner_first: the thi
 the other site for exactly what filled).
 Only rows the scanner marks "fast" qualify (engine.fast_check): crypto pairs matched by contract terms
 or anything whose result is known within FAST_MAX_HOURS, never auto-matched pairs or rows with rule warnings.
+Long-dated rows (result known within AUTO_TRADE_LONG_DAYS) qualify only at AUTO_TRADE_LONG_MIN_ROI or better,
+and are bought only as far as the trade keeps that return, with no minimum size or profit.
 
 Auto-trade is off every time the scanner starts; you turn it on in the dashboard. It places one trade
 at a time, at most AUTO_TRADE_MAX_TRADE each and AUTO_TRADE_DAILY_LIMIT per day, and turns itself
@@ -19,7 +21,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import config, execpolicy
+from . import config, engine, execpolicy
 from .trader import TradeError
 
 
@@ -94,7 +96,8 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
                decided=None, hedge_depth=1.0, order=None, first=None, dry=False, book_share=None, min_edge=0.0,
                choose=None):
     """Plan and place a trade in one step, for an arb the scanner currently lists as fast.
-    dry: a paper trade (nothing is sent; see Trader.simulate). min_edge: profit per pair the plan needs."""
+    dry: a paper trade (nothing is sent; see Trader.simulate). min_edge: profit per pair the plan needs.
+    min_roi: the plan buys only as many shares as keep this return; long-dated rows need at least theirs."""
     decided = decided or time.time()
     row = current_row(scanner, legs)
     if row is None:
@@ -102,9 +105,12 @@ def fast_trade(scanner, legs, max_invest=None, label="Fast trade", min_profit=0.
     fast = row.get("fast") or {}
     if not fast.get("ok"):
         raise TradeError(f"{label} isn't allowed for this arb ({fast.get('why', 'not checked')}). Use Make trade.")
+    if fast.get("long"):                  # money tied up for months: only at the long-dated return
+        min_roi = max(min_roi, engine.long_min_roi())
     cap = min(x for x in (cap or config.FAST_MAX_TRADE, max_invest) if x)
     trader = scanner.trader
-    extra = {k: v for k, v in (("first", first), ("dry", dry), ("book_share", book_share), ("choose", choose)) if v}
+    extra = {k: v for k, v in (("first", first), ("dry", dry), ("book_share", book_share), ("choose", choose),
+                               ("min_roi", min_roi)) if v}
     plan = trader.prepare(legs, cap, timeline={"tick": row.get("tick_ts"), "detected": row.get("detected_ts"),
                                                "decided": decided}, hedge_depth=hedge_depth, order=order, **extra)
     roi = plan["expected_profit"] / plan["capital"] if plan["capital"] else 0
@@ -190,7 +196,9 @@ class AutoTrader:
             getattr(self.scanner.trader, "warm", lambda: None)()    # order connections open before the first arb
         self.scanner.log(f"Auto-trade turned {'on' if on else 'off'}" + (
             f": up to ${config.AUTO_TRADE_MAX_TRADE:g} per trade, ${config.AUTO_TRADE_DAILY_LIMIT:g} per day, "
-            f"profit at least ${config.AUTO_TRADE_MIN_PROFIT:g}" if on else ""))
+            f"profit at least ${config.AUTO_TRADE_MIN_PROFIT:g}" + (
+                f"; also arbs decided within {config.AUTO_TRADE_LONG_DAYS:g} days at {engine.long_min_roi() * 100:g}%+ "
+                f"return, any size" if config.AUTO_TRADE_LONG_DAYS > 0 else "") if on else ""))
         return self.status()
 
     def status(self):
@@ -198,6 +206,7 @@ class AutoTrader:
                 "net_today": round(self.net.get(self._today(), 0.0), 2),
                 "daily_limit": config.AUTO_TRADE_DAILY_LIMIT, "max_trade": config.AUTO_TRADE_MAX_TRADE,
                 "min_profit": config.AUTO_TRADE_MIN_PROFIT, "min_roi": config.AUTO_TRADE_MIN_ROI,
+                "long_days": config.AUTO_TRADE_LONG_DAYS, "long_min_roi": engine.long_min_roi(),
                 "live_games": config.AUTO_TRADE_LIVE_GAMES, "max_daily_loss": config.AUTO_TRADE_MAX_DAILY_LOSS,
                 "fast_max_trade": config.FAST_MAX_TRADE, "fast_max_hours": config.FAST_MAX_HOURS,
                 "allow_auto_matched": config.FAST_ALLOW_AUTO_MATCHED, "allow_too_good": config.FAST_ALLOW_TOO_GOOD,
@@ -219,15 +228,22 @@ class AutoTrader:
         """The most profitable fast row worth trading that wasn't tried in the last cooldown."""
         now = now or time.time()
         wall = time.time()
-        ok = [r for r in rows if (r.get("fast") or {}).get("ok")
+        ok = [r for r in rows if (r.get("fast") or {}).get("ok") and self._worth(r)
               and wall - (r.get("detected_ts") or wall) <= config.AUTO_TRADE_MAX_ROW_AGE
-              and (r.get("profit") or 0) >= config.AUTO_TRADE_MIN_PROFIT
-              and (r.get("roi") or 0) >= config.AUTO_TRADE_MIN_ROI
               and (config.AUTO_TRADE_LIVE_GAMES or not in_play(r))
               and self.game_pause.get(r.get("game"), 0) <= now
               and now - self.tried.get(pair_id(r["legs"]), 0) >= config.AUTO_TRADE_COOLDOWN_SECS
               and self._type_ok(r)]
         return max(ok, key=lambda r: r["profit"], default=None)
+
+    @staticmethod
+    def _worth(row):
+        """Long-dated rows: the long-dated return on their best-priced pair (the trade is then sized to keep
+        it), no minimum profit. The rest: the minimum profit and return at the full size the books allow."""
+        if (row.get("fast") or {}).get("long"):
+            return engine.top_roi(row) >= engine.long_min_roi() - 1e-9
+        return ((row.get("profit") or 0) >= config.AUTO_TRADE_MIN_PROFIT
+                and (row.get("roi") or 0) >= config.AUTO_TRADE_MIN_ROI)
 
     def _type_ok(self, row):
         """The row's market type isn't paused and the row has the edge that type needs."""
@@ -267,9 +283,12 @@ class AutoTrader:
         entry = {"time": datetime.now().isoformat(timespec="seconds"), "game": row.get("game"),
                  "tab": row.get("tab"), "legs": [f"{l['exchange']} Buy {l['side'].upper()}" for l in row["legs"]],
                  "category": cat, "order": why, "paper": dry}
+        long = bool((row.get("fast") or {}).get("long"))
+        if long:
+            entry["long"] = row.get("decided") or row.get("closes")
         try:
             res = fast_trade(self.scanner, legs_of(row), label="Auto-trade", cap=cap, decided=decided,
-                             min_profit=config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI,
+                             min_profit=0.0 if long else config.AUTO_TRADE_MIN_PROFIT, min_roi=config.AUTO_TRADE_MIN_ROI,
                              hedge_depth=config.AUTO_TRADE_HEDGE_DEPTH, order=mode, first=first, dry=dry,
                              book_share=config.AUTO_TRADE_BOOK_SHARE, min_edge=need,
                              choose=lambda: execpolicy.choose_order(self.scanner, row, self.stats, cat))

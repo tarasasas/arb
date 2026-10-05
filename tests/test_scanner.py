@@ -279,6 +279,56 @@ class FastLaneTests(unittest.TestCase):
             self.s._apply_stream_wants()
             self.assertEqual((got["kalshi"], got["polymarket"]), (["kA"], ["pA"]))
 
+    def test_long_dated_pairs_are_a_set_of_their_own(self):
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LONG_DAYS", 90):
+            self.assertEqual(self.lane_games(), ["T:A"])                     # the fast lane is unchanged
+            self.assertEqual([g[0] for g in self.s.lane_groups(long=True)], ["T:B"])
+            self.assertEqual(sorted(g[0] for g in self.s.auto_groups()), ["T:A", "T:B"])
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LONG_DAYS", 2):    # B is decided in 3 days
+            self.assertEqual(list(self.s.lane_groups(long=True)), [])
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LONG_DAYS", 0):
+            self.assertEqual(list(self.s.lane_groups(long=True)), [])
+
+    def test_long_pass_polls_only_the_long_dated_pairs(self):
+        self.s.refresh_prices(hot=False)                     # full sweep: both rows
+        tops, seen = [], []
+        self.s.kalshi.refresh_tops = lambda ms: tops.extend(m.ticker for m in ms)
+        self.s.kalshi.refresh_books = lambda ms: None
+        self.s.autotrader.check = lambda rows: seen.append(sorted(r["game"] for r in rows))
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LONG_DAYS", 90):
+            self.s.refresh_prices(lane="long")
+        self.assertEqual(tops, ["kB"])
+        self.assertEqual(seen, [["A", "B"]])                  # A's row kept from the full sweep
+        self.assertEqual((self.s.state["long_lane"]["pairs"], self.s.state["long_lane"]["days"]), (1, 90))
+        self.assertNotIn("lane", self.s.state)               # the fast lane's numbers are its own
+
+    def test_long_dated_pairs_get_their_own_pass_in_auto_trade_mode(self):
+        import threading
+        passes = []
+        self.s.refresh_prices, self.s.streams = lambda lane=False: passes.append(lane), {}
+
+        def run_once():
+            stop = threading.Event()
+            with mock.patch.object(scanner.time, "sleep", lambda _s: stop.set()):
+                self.s._long_loop(stop)
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LONG_DAYS", 90):
+            self.s.autotrader.on = True
+            run_once()
+            self.assertEqual(passes, ["long"])
+            self.assertIn("1 pairs decided within 90 days", "\n".join(self.s.logs))
+            self.s.state["long_lane"] = {"pairs": 1}
+            self.s.autotrader.on = False                     # not Auto-trade mode: the full sweep finds them
+            run_once()
+            self.assertEqual(passes, ["long"])
+            self.assertNotIn("long_lane", self.s.state)
+            self.s.autotrader.on = True
+            with mock.patch.object(scanner.config, "AUTO_TRADE_FOCUS", False):
+                run_once()
+            self.assertEqual(passes, ["long"])
+        with mock.patch.object(scanner.config, "AUTO_TRADE_LONG_DAYS", 0):
+            run_once()
+        self.assertEqual(passes, ["long"])
+
 
 class StartupTests(unittest.TestCase):
     def test_trading_status_is_published_at_start(self):
@@ -550,15 +600,15 @@ class AutoTradeModeTests(unittest.TestCase):
     def test_live_feed_rechecks_only_auto_trade_markets(self):
         import threading
         s = self.make(on=True)
-        s.market_groups = {("kalshi", "K1"): {"lane"}, ("kalshi", "K2"): {"other"}}
-        s.lane_groups = lambda: {"lane": {}}
+        s.market_groups = {("kalshi", "K1"): {"lane"}, ("kalshi", "K2"): {"other"}, ("kalshi", "K3"): {"months"}}
+        s.lane_groups = lambda long=False: {"months": {}} if long else {"lane": {}}
         seen = []
         s.refresh_prices = lambda stream_groups=None: seen.append(stream_groups)
-        s._tick, s.dirty = threading.Event(), {("kalshi", "K1"), ("kalshi", "K2")}
+        s._tick, s.dirty = threading.Event(), {("kalshi", "K1"), ("kalshi", "K2"), ("kalshi", "K3")}
         stop = threading.Event()
         s._tick.wait = lambda _t: stop.set() or True              # one pass
         s._stream_loop(stop)
-        self.assertEqual(seen, [{"lane"}])
+        self.assertEqual(seen, [{"lane", "months"}])              # long-dated pairs too
 
     def test_setting_off_keeps_regular_mode(self):
         s = self.make(on=True)

@@ -75,6 +75,90 @@ class FastCheckTests(unittest.TestCase):
         self.assertFalse(far["ok"])
 
 
+class LongDatedTests(unittest.TestCase):
+    """Arbs decided within AUTO_TRADE_LONG_DAYS: only at AUTO_TRADE_LONG_MIN_ROI or better."""
+
+    def setUp(self):
+        for k, v in (("AUTO_TRADE_LONG_DAYS", 90), ("AUTO_TRADE_LONG_MIN_ROI", 0.04), ("AUTO_TRADE_MIN_ROI", 0.005),
+                     ("FAST_ALLOW_AUTO_MATCHED", True)):
+            patcher = mock.patch.object(config, k, v)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def check(self, days=60, edge=0.04, now=NOW, **kw):
+        r = {"warnings": [], "tab": "Technology", "payout": 1.0, "edge_per_contract": edge,
+             "decided": (now + timedelta(days=days)).isoformat(), **kw}
+        return engine.fast_check(r, now)
+
+    def test_the_example_four_percent_three_months_out(self):
+        # Kalshi YES 5c + Polymarket NO 90c (fees in): 4c a pair on 96c = 4.17%, Kalshi closes Jan 1, Polymarket Jan 14
+        r = self.check(edge=0.04, now=datetime(2026, 10, 5, 14, tzinfo=timezone.utc),
+                       decided=datetime(2027, 1, 1, 15, tzinfo=timezone.utc).isoformat(),
+                       closes=datetime(2027, 1, 14, 22, tzinfo=timezone.utc).isoformat(), pair={"auto": True},
+                       warnings=["AUTO-MATCHED, NOT VERIFIED: the scanner paired these"])
+        self.assertEqual((r["ok"], r.get("long")), (True, True))
+        self.assertIn("4.17%", r["why"])
+
+    def test_under_the_return_or_past_the_days_needs_make_trade(self):
+        self.assertFalse(self.check(edge=0.035)["ok"])                       # 3.6%
+        self.assertIn("under 4% return", self.check(edge=0.035)["why"])
+        self.assertFalse(self.check(days=95)["ok"])
+        with mock.patch.object(config, "AUTO_TRADE_LONG_DAYS", 0):         # off
+            self.assertFalse(self.check()["ok"])
+
+    def test_the_general_minimum_counts_if_higher(self):
+        with mock.patch.object(config, "AUTO_TRADE_MIN_ROI", 0.05):
+            self.assertFalse(self.check(edge=0.045)["ok"])                   # 4.7%
+            self.assertTrue(self.check(edge=0.05)["ok"])                     # 5.3%
+
+    def test_within_the_hours_nothing_changes(self):
+        r = self.check(days=0.5, edge=0.01)
+        self.assertTrue(r["ok"])
+        self.assertNotIn("long", r)
+
+    def test_rule_warnings_still_block(self):
+        self.assertFalse(self.check(warnings=["ONE-WAY RULES: x"])["ok"])
+
+    def long_row(self, **kw):
+        r = row(tab="Technology", profit=0.40, roi=0.02, edge_per_contract=0.045, payout=1.0,
+                decided=(NOW + timedelta(days=80)).isoformat(), **kw)
+        r["fast"]["long"] = True
+        return r
+
+    def test_auto_trade_takes_it_sized_to_the_return_with_no_minimum_profit(self):
+        # full-size return 2% (deeper levels), best pair 4.7%: the trade is sized to keep 4%
+        s = FakeScanner([self.long_row()], FakeTrader(profit=0.41, capital=9.6))
+        a = autotrade.AutoTrader(s, run_async=False)
+        a.set(True)
+        with mock.patch.object(config, "AUTO_TRADE_MIN_PROFIT", 5):
+            self.assertIsNotNone(a.check(s.state["opportunities"]))
+        self.assertIn(("execute", "p1"), s.trader.calls)
+        self.assertEqual(s.trader.kw["min_roi"], 0.04)
+        self.assertTrue(a.history[0]["long"])
+        self.assertEqual(a.status()["long_min_roi"], 0.04)
+
+    def test_auto_trade_skips_it_under_the_return(self):
+        s = FakeScanner([self.long_row(k="K2", p="p2")], FakeTrader())
+        s.state["opportunities"][0]["edge_per_contract"] = 0.03
+        a = autotrade.AutoTrader(s, run_async=False)
+        a.set(True)
+        self.assertIsNone(a.check(s.state["opportunities"]))
+
+    def test_under_the_return_at_live_prices_is_not_executed(self):
+        s = FakeScanner([self.long_row()], FakeTrader(profit=0.30, capital=9.7))      # 3.1% once planned
+        a = autotrade.AutoTrader(s, run_async=False)
+        a.set(True)
+        a.check(s.state["opportunities"])
+        self.assertNotIn(("execute", "p1"), s.trader.calls)
+        self.assertEqual(a.history[0]["status"], "skipped")
+
+    def test_fast_trade_by_hand_needs_the_return_too(self):
+        s = FakeScanner([self.long_row()], FakeTrader(profit=0.30, capital=9.7))
+        with self.assertRaisesRegex(TradeError, "3.09%"):
+            autotrade.fast_trade(s, autotrade.legs_of(self.long_row()))
+        self.assertEqual(s.trader.kw["min_roi"], 0.04)
+
+
 class FakeTrader:
     def __init__(self, profit=1.0, capital=20.0, result=None, fail=None):
         self.venues, self.plans, self.calls = {"kalshi": 1, "polymarket": 1}, {}, []

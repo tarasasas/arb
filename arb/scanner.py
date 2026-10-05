@@ -657,7 +657,7 @@ class Scanner:
         """Full sweep (hot=False): every watched contract. Hot sweep: only the quantities that
         were within NEAR_MISS_EDGE of an arb on the last full sweep, so it takes ~1-2s.
         stream_groups: re-check just these pair groups on books the live streams already hold.
-        lane: the fast lane, every pair Auto-trade could take (see lane_groups)."""
+        lane: the fast lane, every pair Auto-trade could take (see lane_groups); "long": its long-dated pairs."""
         if hot or stream_groups is not None or lane:
             with priority():               # near-arb and stream re-checks go ahead of background loads
                 return self._refresh_prices(hot, stream_groups, lane)
@@ -673,9 +673,10 @@ class Scanner:
         return mode == "auto" and bool(getattr(self.autotrader, "on", False) or getattr(self.makerbot, "on", False)
                                        or getattr(getattr(self, "evbot", None), "on", False))
 
-    def lane_groups(self, now=None):
-        """The pair groups Auto-trade could take: result known within FAST_MAX_HOURS, soonest first. Games
-        already under way are left out unless AUTO_TRADE_LIVE_GAMES is on (Auto-trade skips them).
+    def lane_groups(self, now=None, long=False):
+        """The pair groups Auto-trade could take: result known within FAST_MAX_HOURS, soonest first. long: the
+        long-dated ones instead (known after that, within AUTO_TRADE_LONG_DAYS; Auto-trade needs a higher return
+        there). Games already under way are left out unless AUTO_TRADE_LIVE_GAMES is on (Auto-trade skips them).
         Re-worked out at most every 30s, or when the matched markets or the hours change."""
         now = now or engine.now_utc()
         with self.lock:
@@ -684,11 +685,12 @@ class Scanner:
         # games in progress: when Auto-trade takes them, or the EV bot is on and takes them
         live_ok = bool(config.AUTO_TRADE_LIVE_GAMES or (config.EV_BOT_LIVE_GAMES
                                                        and getattr(getattr(self, "evbot", None), "on", False)))
-        key = (id(groups), config.FAST_MAX_HOURS, live_ok, skip_windows)
+        key = (id(groups), config.FAST_MAX_HOURS, config.AUTO_TRADE_LONG_DAYS, live_ok, skip_windows)
         hit = getattr(self, "_lane_cache", None)
         if hit and hit[0] == key and time.time() - hit[1] < 30:
-            return hit[2]
+            return hit[2][1 if long else 0]
         cutoff = now + timedelta(hours=config.FAST_MAX_HOURS)
+        last = max(cutoff, now + timedelta(days=config.AUTO_TRADE_LONG_DAYS))
         picked = []
         for g, by_ex in groups.items():
             def first(ex):
@@ -698,7 +700,7 @@ class Scanner:
             # Same date fast_check uses: when the result is known. Non-sports: the earlier site (Polymarket's
             # end date often runs weeks past the event); sports: Kalshi's.
             close = min((t for t in (k_close, p_close) if t), default=None) if g[1][0] == "event" else k_close
-            if close is None or close > cutoff:
+            if close is None or close > last:
                 continue
             if (g[1][0] not in ("event", "price") and not live_ok
                     and p_close is not None and p_close <= now):
@@ -707,9 +709,19 @@ class Scanner:
                 continue                    # crypto Up/Down windows: Auto-trade leaves them alone
             picked.append((close, g))
         picked.sort(key=lambda t: t[0])
-        out = {g: groups[g] for _, g in picked}
+        out = ({g: groups[g] for t, g in picked if t <= cutoff}, {g: groups[g] for t, g in picked if t > cutoff})
         self._lane_cache = (key, time.time(), out)
-        return out
+        return out[1 if long else 0]
+
+    def auto_groups(self):
+        """Every pair group Auto-trade could take: the fast lane's and the long-dated ones."""
+        return {**self.lane_groups(), **self.lane_groups(long=True)}
+
+    def long_lane_on(self):
+        """Auto-trade mode with long-dated arbs on: the full sweep that would otherwise find them is paused,
+        so the lane checks them too, every AUTO_TRADE_LONG_RECHECK_SECS."""
+        return bool(config.AUTO_TRADE_LONG_DAYS > 0 and config.AUTO_TRADE_FOCUS
+                    and getattr(getattr(self, "autotrader", None), "on", False))
 
     def _lane_loop(self, stop_event):
         """While the lane is active, re-check its pairs every FAST_LANE_PAUSE_SECS (streamed markets from
@@ -736,6 +748,32 @@ class Scanner:
                 continue
             time.sleep(config.FAST_LANE_PAUSE_SECS)
 
+    def _long_loop(self, stop_event):
+        """While long_lane_on: re-check the long-dated pairs every AUTO_TRADE_LONG_RECHECK_SECS, on a thread of
+        their own so the fast lane keeps its half-second pace (live-feed markets are re-checked as they move)."""
+        was = False
+        while not (stop_event and stop_event.is_set()):
+            on = self.long_lane_on() and bool(self.groups)
+            if on != was:                   # streams: long-dated markets after the fast lane's
+                was = on
+                self._apply_stream_wants()
+                if on:
+                    self.log(f"Long-dated arbs: {len(self.lane_groups(long=True))} pairs decided within "
+                             f"{config.AUTO_TRADE_LONG_DAYS:g} days, re-checked about every "
+                             f"{config.AUTO_TRADE_LONG_RECHECK_SECS:g}s")
+            if not on:
+                with self.lock:
+                    self.state.pop("long_lane", None)
+                time.sleep(1)
+                continue
+            try:
+                self.refresh_prices(lane="long")
+            except Exception as e:
+                self.log(f"Long-dated check error: {e!r}")
+                time.sleep(2)
+                continue
+            time.sleep(config.AUTO_TRADE_LONG_RECHECK_SECS)
+
     def _refresh_prices(self, hot=False, stream_groups=None, lane=False):
         t0 = time.time()
         t0_wall = t0                       # polled prices: the pass's start is the tick
@@ -744,12 +782,17 @@ class Scanner:
             contracts, source, groups = self.contracts, self.source, self.groups
             hot_keys = self.hot_groups
         if lane:
-            groups = self.lane_groups()
+            groups = self.lane_groups(long=lane == "long")
             contracts = [c for g in groups.values() for lst in g.values() for c in lst]
             hot = True                      # a partial pass: keeps the rows it didn't re-check
             if not contracts:
                 with self.lock:
-                    self.state["lane"] = {"active": True, "pairs": 0, "markets": 0, "seconds": 0}
+                    if lane == "long":
+                        self._long_t0 = t0
+                        self.state["long_lane"] = {"pairs": 0, "markets": 0, "seconds": 0,
+                                                   "days": config.AUTO_TRADE_LONG_DAYS}
+                    else:
+                        self.state["lane"] = {"active": True, "pairs": 0, "markets": 0, "seconds": 0}
                 return
         # Full sweeps poll every market (a backstop for the streams); near-arb passes skip markets
         # with a fresh streamed book.
@@ -911,7 +954,13 @@ class Scanner:
             self.state.update({"opportunities": opportunities, "last_prices": now.isoformat(), "status": "running",
                                "hot_count": sum(len(v) for v in self.hot_groups.values()),
                                "streams": {ex: s.status() for ex, s in self.streams.items()}})
-            if lane:
+            if lane == "long":
+                last, self._long_t0 = getattr(self, "_long_t0", None), t0
+                self.state["long_lane"] = {"pairs": len(groups), "seconds": secs, "days": config.AUTO_TRADE_LONG_DAYS,
+                                           "every": round(t0 - last, 1) if last and t0 - last < 300 else None,
+                                           "markets": len({(c.exchange, c.market_id) for c in contracts}),
+                                           "polled": len(kms) + len(pms)}
+            elif lane:
                 last, self._lane_t0 = getattr(self, "_lane_t0", None), t0
                 self.state["lane"] = {"active": True, "pairs": len(groups), "seconds": secs,
                                       "every": round(t0 - last, 1) if last and t0 - last < 60 else None,
@@ -1051,8 +1100,9 @@ class Scanner:
             return
         pairs = getattr(self, "_stream_pairs", [])
         wanted = {"kalshi": [], "polymarket": []}
-        if self.lane_active():
-            lane = self.lane_groups()
+        # the fast lane's markets first, then (Auto-trade mode with long-dated arbs on) the long-dated ones
+        for lane in (self.lane_groups() if self.lane_active() else {},
+                     self.lane_groups(long=True) if self.long_lane_on() else {}):
             ids = {(c.exchange, c.market_id) for g in lane.values() for lst in g.values() for c in lst}
             for k, p in pairs:
                 if ("kalshi", k) in ids or ("polymarket", p) in ids:
@@ -1093,7 +1143,7 @@ class Scanner:
                     idx = self.market_groups
                 gs = set().union(*(idx.get(d, set()) for d in dirty))
                 if self.auto_mode():
-                    gs &= set(self.lane_groups())        # only what Auto-trade can take
+                    gs &= set(self.auto_groups())        # only what Auto-trade can take
                 try:
                     if gs:
                         self.refresh_prices(stream_groups=gs)
@@ -1244,6 +1294,7 @@ class Scanner:
             threading.Thread(target=self._stream_loop, args=(stop_event,), daemon=True).start()
         threading.Thread(target=self._loop, args=(stop_event, False), daemon=True).start()
         threading.Thread(target=self._lane_loop, args=(stop_event,), daemon=True).start()
+        threading.Thread(target=self._long_loop, args=(stop_event,), daemon=True).start()
         self._loop(stop_event, True)
 
     def live_depth(self, exchange, market_id, side):
