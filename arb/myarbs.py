@@ -223,10 +223,20 @@ class MyArbs:
             a["id"] = f"{a['id']}-closed-{uuid.uuid4().hex[:6]}"
 
     def _close_sold_out(self):
-        """Close open arbs whose sales (Sell) left no pairs and at most a fraction of a share (saved by a version
-        that kept those open). Returns how many."""
+        """Repairs for arbs saved by earlier versions. Close open arbs whose sales (Sell) left no pairs and at most a
+        fraction of a share. Give closed arbs with recorded sales what they sold for (an arb the position check put
+        back and then closed again lost it). Sold-out legs carry no fees. Returns how many changed."""
         n, now = 0, datetime.now(timezone.utc).isoformat()
         for a in self.items:
+            c, sales = a.get("closed"), a.get("sales") or []
+            if c and sales and c.get("sold_for") is None:
+                c.update(sold_for=round(sum(x["proceeds"] for x in sales), 2),
+                         cost=round(sum(x["cost"] for x in sales), 2), profit=a.get("realized") or 0.0)
+                n += 1
+            for leg in a.get("legs") or []:
+                if leg.get("fees") and leg["shares"] <= 1e-6:
+                    leg["fees"] = 0.0
+                    n += 1
             legs = a.get("legs") or []
             if (not a.get("closed") and not a.get("paid_out") and a.get("sales") and legs
                     and min(l["shares"] for l in legs) <= 1e-6 and max(l["shares"] for l in legs) < 1 - 1e-6):
@@ -306,6 +316,8 @@ class MyArbs:
                     if live + 1e-6 < leg["shares"]:
                         if leg["shares"] > 0:
                             leg["paid"] = round(leg["paid"] * live / leg["shares"], 2)
+                            if leg.get("fees"):
+                                leg["fees"] = round(leg["fees"] * live / leg["shares"], 2)
                         sold.append(f"{leg['shares'] - live:g} {names[leg['exchange']]} {leg['side'].upper()}")
                         leg["shares"] = live
                     elif live > leg["shares"] + 1e-6 and uses[(leg["exchange"], leg["market_id"], leg["side"])] == 1:
@@ -483,6 +495,8 @@ class MyArbs:
                 if leg is None or qty <= 0:
                     continue
                 c = leg["paid"] / leg["shares"] * qty if leg["shares"] else 0.0
+                if leg.get("fees") and leg["shares"]:     # the buy fees are part of `paid`: they go with the shares
+                    leg["fees"] = round(leg["fees"] * max(0.0, leg["shares"] - qty) / leg["shares"], 2)
                 leg["shares"], leg["paid"] = round(max(0.0, leg["shares"] - qty), 4), round(max(0.0, leg["paid"] - c), 2)
                 proceeds, cost = proceeds + amount - fee, cost + c
                 legs[ex] = {"shares": qty, "amount": round(amount, 2), "fee": round(fee, 2)}

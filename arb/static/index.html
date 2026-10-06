@@ -1313,8 +1313,10 @@ const realCost = a => a.paid_out ? a.paid_out.cost : a.closed?.cost != null ? a.
 // Worth now: what Sell would get, from both order books as last read (about every 30s): the pairs that make the most,
 // sold into the bids, both sites' fees off, against what they cost.
 function worthCell(a) {
-  if (a.closed) return a.closed.sold_for != null ? `${money(a.closed.sold_for)}<div class="muted">sold for</div>`
-    : `–<div class="muted" title="Sold on the site itself, so the app never saw the price">sold on the site</div>`;
+  if (a.closed) return a.closed.sold_for != null ? `<span class="muted">Sold for</span> <b>${money(a.closed.sold_for)}</b>${
+      a.closed.profit != null ? `<div class="${a.closed.profit >= 0 ? "profit" : ""}">${a.closed.profit >= 0 ? "+" : "−"}${
+      money(Math.abs(a.closed.profit))} vs cost</div>` : ""}`
+    : `<span class="muted" title="Sold on the site itself, so the app never saw the price">Sold on the site</span>`;
   if (a.sell_now == null) return a.worth_now == null ? "–" : money(a.worth_now);
   const p = a.sell_profit, part = a.sell_pairs != null && a.sell_pairs < a.pairs;
   return `<span title="What Sell would get for ${part ? `${compact(a.sell_pairs)} of your ${compact(a.pairs)}` : `your ${compact(a.pairs)}`} pairs:
@@ -1392,7 +1394,7 @@ function legCell(l) {
   return `<div><span class="ex ${l.exchange === "kalshi" ? "kalshi" : "poly"}">${l.exchange === "kalshi" ? "KALSHI" : "POLYMARKET"}</span>
     <b>${sideName(l)}</b> · ${compact(l.shares)} shares · paid ${money(l.paid)}${l.cost_from === "account"
       ? ` <span class="muted" title="Your account's cost for these shares, fees included${l.paid_recorded != null
-        ? `; recorded at the time as ${money(l.paid_recorded)}` : ""}">(real cost${l.fees > 0
+        ? `; recorded at the time as ${money(l.paid_recorded)}` : ""}">(real cost${l.fees > 0 && l.paid >= l.fees
         ? `: ${money(l.paid - l.fees)} + ${money(l.fees)} fees` : ""}${l.paid_recorded != null && Math.abs(l.paid_recorded - l.paid) >= 0.01
         ? `, was ${money(l.paid_recorded)}` : ""})</span>` : ""} ${st}
     <div class="muted" style="font-size:12px">${esc(l.title)}${l.settles ? ` · settles ${esc(localTime(l.settles))}` : ""}</div></div>`;

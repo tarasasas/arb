@@ -274,6 +274,26 @@ class BookkeepingTests(unittest.TestCase):
         again = myarbs.MyArbs(self.m.path)
         self.assertEqual(again.items[0]["closed"]["sold_for"], 5.76)
 
+    def test_a_sale_takes_the_legs_fees_with_its_shares(self):
+        a = self.m.save(held())
+        self.m.items[0]["legs"][0]["fees"] = 0.10                 # Kalshi: $45.00 includes $0.10 of fees
+        self.m.apply_sale(a["id"], {"kalshi": (60, 34.8, 0.01), "polymarket": (60, 27.0, 0.01)})
+        self.assertEqual(self.m.items[0]["legs"][0]["fees"], 0.04)
+        self.m.apply_sale(a["id"], {"kalshi": (40, 23.2, 0.01), "polymarket": (40, 18.0, 0.01)})
+        k = self.m.items[0]["legs"][0]
+        self.assertEqual((k["paid"], k["fees"]), (0.0, 0.0))  # it showed "real cost: $-0.10 + $0.10 fees"
+
+    def test_older_closed_arbs_get_what_their_sales_sold_for(self):
+        a = self.m.save(held())
+        self.m.apply_sale(a["id"], {"kalshi": (100, 58.0, 0.2), "polymarket": (100, 45.0, 0.2)})
+        x = self.m.items[0]
+        x["closed"] = {"time": x["closed"]["time"], "why": "you sold 100 Kalshi YES and 100 Polymarket NO"}
+        x["legs"][0]["fees"] = 0.1
+        self.m._save()
+        again = myarbs.MyArbs(self.m.path)
+        c = again.items[0]["closed"]
+        self.assertEqual((c["sold_for"], c["profit"], again.items[0]["legs"][0]["fees"]), (102.6, x["realized"], 0.0))
+
     def test_worth_now_walks_the_books_like_sell(self):
         # The case that showed it: Polymarket's best YES offer is 4c but holds 0.11 shares (next 9c), so its NO
         # sells for 96c only 0.11 times and 91c for the rest. The best price alone made Worth now $6.07, Sell $5.77.
