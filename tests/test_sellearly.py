@@ -208,16 +208,104 @@ class BookkeepingTests(unittest.TestCase):
         new = next(x for x in self.m.items if not x.get("closed"))
         self.assertIsNone(new.get("realized"))
 
-    def test_the_list_estimates_selling_now_at_the_best_bids(self):
-        a = self.m.save(held())
-        self.m._live = {("kalshi", "KX-DAMON"): {"state": "open", "bid": {"yes": 0.58}},
-                        ("polymarket", "oscar-damon"): {"state": "open", "bid": {"no": 0.45}}}
-        row = self.m._rows([a])[0]
-        want = (100 * 0.58 - total_fee("kalshi", [(0.58, 100)], 0.07)
-                + 100 * 0.45 - total_fee("polymarket", [(0.45, 100)], 0.0695))
-        self.assertAlmostEqual(row["sell_now"], round(want, 2))
-        self.assertAlmostEqual(row["sell_profit"], round(want - 95.0, 2))
+    def sync(self, read_at, k_shares=100, p_shares=100):
+        """An account sync that reads 100 + 100 shares of the pair (still listed, or bought again)."""
+        kc = type("C", (), {"title": "k"})()
+        pairs = [("KX-DAMON", "oscar-damon", kc, kc, 1.0)]
+        kpos = {"KX-DAMON": {"side": "yes", "shares": k_shares, "paid": 45.0}}
+        ppos = {"oscar-damon": {"side": "no", "shares": p_shares, "paid": 50.0}}
+        self.m.sync_from_accounts(pairs, kpos, ppos, [], lambda c: {"game": "Matt Damon", "tab": "", "closes": None},
+                                  read_at)
 
+    def test_a_site_still_listing_sold_shares_does_not_reopen_the_arb(self):
+        # The report: sold with Sell, then the next position check (the sites' lists lagging the fills) rebuilt the
+        # arb from the old shares: back among the open ones, "sold for" gone.
+        a = self.m.save({**held(), "id": "acct-KX-DAMON-oscar-damon"})
+        self.m.apply_sale(a["id"], {"kalshi": (100, 58.0, 0.2), "polymarket": (100, 45.0, 0.2)})
+        self.sync(read_at=__import__("time").time() + 1)                         # read after the sale finished
+        self.assertEqual(len(self.m.items), 1)
+        closed = self.m.items[0]
+        self.assertEqual((closed["closed"]["sold_for"], closed["legs"][0]["shares"]), (102.6, 0))
+        row = self.m._rows([closed])[0]
+        self.assertEqual((row["phase"], row["paid"], row["profit"]), ("sold", 95.0, 7.6))
+        self.assertAlmostEqual(row["roi"], 7.6 / 95.0)
+
+    def test_the_pair_bought_again_later_is_a_new_arb(self):
+        a = self.m.save({**held(), "id": "acct-KX-DAMON-oscar-damon"})
+        self.m.apply_sale(a["id"], {"kalshi": (100, 58.0, 0.2), "polymarket": (100, 45.0, 0.2)})
+        self.m.touched = {k: v - myarbs.SALE_GRACE_SECS - 1 for k, v in self.m.touched.items()}
+        self.sync(read_at=__import__("time").time())
+        self.assertEqual(sorted(bool(x.get("closed")) for x in self.m.items), [False, True])
+        new = next(x for x in self.m.items if not x.get("closed"))
+        self.assertEqual((new["id"], new.get("realized"), new["legs"][0]["shares"]), ("acct-KX-DAMON-oscar-damon", None, 100))
+
+    def test_a_fraction_left_over_still_closes_it(self):
+        a = self.m.save(held(6, 0.57, 6.04, 5.05))                     # Polymarket filled 6.04 by dollar amount
+        self.m.apply_sale(a["id"], {"kalshi": (6, 0.36, 0.03), "polymarket": (6, 5.46, 0.03)})
+        c = self.m.items[0]["closed"]
+        self.assertIn("0.04 Polymarket NO left over", c["why"])
+        self.assertEqual(c["sold_for"], 5.76)
+
+    def test_a_whole_share_left_unsold_stays_open_for_balance(self):
+        a = self.m.save(held(6, 0.57, 6, 5.01))
+        self.m.apply_sale(a["id"], {"kalshi": (6, 0.36, 0.03)})         # Polymarket's buyers were gone
+        self.assertNotIn("closed", self.m.items[0])
+
+    def test_sold_shares_the_sync_had_put_back_close_with_what_they_sold_for(self):
+        # An arb an earlier version reopened that way: its sale is in `sales`, its legs back at full size. Once the
+        # sites' lists show the shares gone, the check closes it, and the sale's price is still known.
+        a = self.m.save(held())
+        self.m.apply_sale(a["id"], {"kalshi": (60, 34.8, 0.01), "polymarket": (60, 27.0, 0.01)})
+        x = self.m.items[0]
+        x["legs"][0].update(shares=100, paid=45.0)
+        x["legs"][1].update(shares=100, paid=50.0)
+        self.m.touched = {}
+        self.m._live = {("kalshi", "KX-DAMON"): {"state": "open"}, ("polymarket", "oscar-damon"): {"state": "open"}}
+        self.m.reconcile({}, {}, read_at=__import__("time").time())
+        c = self.m.items[0]["closed"]
+        self.assertEqual((c["sold_for"], c["profit"]), (61.78, x["realized"]))
+
+    def test_a_sold_out_arb_saved_open_by_an_earlier_version_closes_on_load(self):
+        a = self.m.save(held(6, 0.57, 6.04, 5.05))
+        x = self.m.items[0]
+        x["legs"][0]["shares"], x["legs"][1]["shares"] = 0, 0.04
+        x["sales"], x["realized"] = [{"proceeds": 5.76, "cost": 5.58, "profit": 0.18}], 0.18
+        self.m._save()
+        again = myarbs.MyArbs(self.m.path)
+        self.assertEqual(again.items[0]["closed"]["sold_for"], 5.76)
+
+    def test_worth_now_walks_the_books_like_sell(self):
+        # The case that showed it: Polymarket's best YES offer is 4c but holds 0.11 shares (next 9c), so its NO
+        # sells for 96c only 0.11 times and 91c for the rest. The best price alone made Worth now $6.07, Sell $5.77.
+        kalshi = {"yes": [(0.11, 100)], "no": [(0.94, 41.78)]}                      # Kalshi YES bid 6c
+        poly = {"yes": [(0.04, 0.11), (0.09, 109.89)], "no": [(0.97, 8333)]}
+        a = self.m.save(held(6, 0.57, 6, 5.01))
+        self.m._live = {("kalshi", "KX-DAMON"): {"state": "open"}, ("polymarket", "oscar-damon"): {"state": "open"}}
+        self.m._books = {("kalshi", "KX-DAMON"): kalshi, ("polymarket", "oscar-damon"): poly}
+        self.m.fee_coef = lambda ex, mid: 0.07 if ex == "kalshi" else 0.0695
+        row = self.m._rows([a])[0]
+        self.assertEqual((row["sell_now"], row["sell_profit"], row["sell_pairs"]), (5.77, 0.19, 6))
+        s = Scanner(Path(self.dir.name) / "sell.json", {"kalshi": FakeVenue(kalshi), "polymarket": FakeVenue(poly)})
+        plan = sellearly.EarlySeller(s).preview(s.my_arbs.save(held(6, 0.57, 6, 5.01))["id"])
+        self.assertEqual((plan["proceeds"], plan["profit"], plan["n"]), (row["sell_now"], row["sell_profit"], 6))
+
+    def test_no_books_no_estimate(self):
+        a = self.m.save(held())
+        self.m._live = {("kalshi", "KX-DAMON"): {"state": "open"}, ("polymarket", "oscar-damon"): {"state": "open"}}
+        self.m._books = {("kalshi", "KX-DAMON"): KALSHI}                             # Polymarket's didn't load
+        self.assertIsNone(self.m._rows([a])[0]["sell_profit"])
+
+    def test_books_are_read_for_open_arbs_only(self):
+        a = self.m.save(held())
+        b = self.m.save({**held(), "legs": [{**l, "market_id": l["market_id"] + "-2"} for l in held()["legs"]]})
+        self.m.apply_sale(b["id"], {"kalshi": (100, 58.0, 0.2), "polymarket": (100, 45.0, 0.2)})       # closed
+        self.m._live = {(l["exchange"], l["market_id"]): {"state": "open"} for x in (a, b) for l in x["legs"]}
+        asked = []
+        kc = type("K", (), {"books_by_ticker": lambda _s, ts: asked.append(sorted(ts)) or {t: KALSHI for t in ts}})()
+        pc = type("P", (), {"live_levels": lambda _s, slug: asked.append(slug) or POLY})()
+        self.m._refresh_books([dict(x) for x in self.m.items], kc, pc)
+        self.assertEqual(asked, [["KX-DAMON"], "oscar-damon"])
+        self.assertEqual(set(self.m._books), {("kalshi", "KX-DAMON"), ("polymarket", "oscar-damon")})
 
 if __name__ == "__main__":
     unittest.main()

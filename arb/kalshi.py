@@ -457,6 +457,15 @@ class KalshiClient:
         """Current depth for buying each side of one market: {"yes": [...], "no": [...]}."""
         return buy_levels(self.http.get(f"/markets/{ticker}/orderbook").get("orderbook_fp") or {})
 
+    def books_by_ticker(self, tickers):
+        """{ticker: depth for buying each side} for many markets, 100 order books per request."""
+        out, tickers = {}, list(tickers)
+        for i in range(0, len(tickers), 100):
+            d = self.http.get("/markets/orderbooks", [("tickers", t) for t in tickers[i:i + 100]])
+            for ob in d.get("orderbooks") or []:
+                out[ob.get("ticker")] = buy_levels(ob.get("orderbook_fp") or {})
+        return out
+
 
 def _ask(v):
     """A listed ask, or None when there's nobody selling (listed as 0 or 1)."""

@@ -40,6 +40,7 @@ class Scanner:
         self.catalog_time = 0.0
         self.store = MatchStore()
         self.my_arbs = MyArbs()
+        self.my_arbs.fee_coef = self.fee_coef_for   # Worth now uses the fees Sell uses
         self.accounts = None            # built on first sync (needs the API keys in .env)
         self.streams = {}               # live order-book streams, by exchange (need API keys)
         self.market_groups = {}         # (exchange, market id) -> pair groups it's in
@@ -89,6 +90,15 @@ class Scanner:
             return Trader(self, None), f"off: Polymarket key couldn't be loaded ({e})"
         venues = {"kalshi": KalshiVenue(self.kalshi), "polymarket": PolymarketVenue(self.pm, pm_signer)}
         return Trader(self, venues), f"on (cap ${config.MAX_TRADE_DOLLARS:.0f} per trade)"
+
+    def fee_coef_for(self, exchange, market_id):
+        """A market's taker fee coefficient: its matched contract's, else its Kalshi series', else None."""
+        c = self.find_any_contract(exchange, market_id)
+        if c is not None:
+            return c.fee_coef
+        if exchange == "kalshi":
+            return self.kalshi.series_fee_coefs().get(market_id.split("-")[0])
+        return None
 
     def find_any_contract(self, exchange, market_id):
         """Like find_contract, but over every matched market, not just the ones Focus scans."""

@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
+from . import myarbs
 from .autotrade import fast_trade, record_trade
 from .trader import TradeError
 
@@ -223,6 +224,10 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     res = scanner.seller.execute(str(body.get("plan_id") or ""))
                     scanner.log(f"Sell early: {res['text']}")
                     threading.Thread(target=scanner.refresh_balances, daemon=True).start()   # cash changed
+                    # check positions once the sites' lists show the sale (Auto-trade mode pauses its own check)
+                    later = threading.Timer(myarbs.SALE_GRACE_SECS + 5, scanner.sync_positions)
+                    later.daemon = True
+                    later.start()
                     return self._json(200, res)
                 if path == "/api/myarbs/delete":
                     scanner.my_arbs.delete(body.get("id", ""))

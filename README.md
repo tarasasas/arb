@@ -393,10 +393,11 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   arb's profit. Extra shares under one share (Polymarket fills fractions on a buy by dollar amount)
   can be balanced too, as long as the site takes an order that small.
 - **Worth now and Sell** (selling an arb early). Held to the end, an arb pays its payout per pair; before
-  then each leg can be sold back into its site's bids. **Worth now** shows what your pairs would bring at
-  the best bids, after both sites' fees, and the profit or loss against what they cost (≈: from the best
-  bid only, refreshed about every 30 seconds; it sorts by that profit). When that's a profit, a **Sell**
-  button appears. It prices the real order books first and shows:
+  then each leg can be sold back into its site's bids. **Worth now** is what **Sell** would get: your pairs
+  sold into both order books, after both sites' fees, and the profit or loss against what they cost. It
+  walks the depth, not just the best price, which can hold a fraction of a share with the rest cents
+  lower. The books are read about every 30 seconds (≈), and it sorts by that profit. When it's a profit,
+  a **Sell** button appears. It reads the books again first and shows:
   - how many pairs to sell: the number that makes the most. Deeper bids can pay less than a pair cost,
     and those pairs stay held;
   - what they sell for after fees, the profit against what they cost, and what holding them to the end
@@ -410,10 +411,15 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
     **Balance**.
 
   The arb's legs drop by what sold, at their average cost, and what the sale made over that cost is kept
-  in its profit. Sold out completely, it moves to **Closed early** showing what it sold for, and counts
-  in the "All arbs" card. While a sale's orders are out, the position check leaves that pair alone so it
-  can't count the sale twice. What earlier sales made (Sell or Balance) is kept when the account sync
-  updates an arb. A pair you buy again after closing one starts a new arb, and the closed one stays.
+  in its profit. With no pairs left it moves to **Closed early**, showing what it sold for, and counts in
+  the "All arbs" card. A fraction of a share left on one side doesn't keep it open; it's listed under
+  **Only on one site**. A whole share or more stays, for Balance. The sites' position lists can lag
+  their fills, so the position check leaves a pair alone while its sale is going out and for 2 minutes
+  after (`SALE_GRACE_SECS`). Then it checks once, even in Auto-trade mode, which otherwise pauses that
+  check. Without this, a check that still saw the sold shares put them back as an open arb. What earlier
+  sales made (Sell or Balance) is kept when the account sync updates an arb. A pair you buy again after
+  closing one starts a new arb, and the closed one stays. Arbs closed because you sold on the site itself
+  show "sold on the site": the app never saw that price.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
   cost cut pro rata. An arb with a leg sold out moves to **Closed early**, with a note saying what

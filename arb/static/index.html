@@ -1310,13 +1310,17 @@ const isOpen = a => a.phase ? a.phase === "active" || a.phase === "awaiting" : !
 const soldCost = a => (a.sales || []).reduce((s, x) => s + (x.cost || 0), 0);
 const realProfit = a => a.paid_out ? a.paid_out.profit : a.closed?.profit != null ? a.closed.profit : a.profit;
 const realCost = a => a.paid_out ? a.paid_out.cost : a.closed?.cost != null ? a.closed.cost : a.paid + soldCost(a);
-// Worth now: selling the pairs at the best bids, both sites' fees off, against what they cost (Sell prices the real books).
+// Worth now: what Sell would get, from both order books as last read (about every 30s): the pairs that make the most,
+// sold into the bids, both sites' fees off, against what they cost.
 function worthCell(a) {
-  if (a.closed?.sold_for != null) return `${money(a.closed.sold_for)}<div class="muted">sold for</div>`;
+  if (a.closed) return a.closed.sold_for != null ? `${money(a.closed.sold_for)}<div class="muted">sold for</div>`
+    : `–<div class="muted" title="Sold on the site itself, so the app never saw the price">sold on the site</div>`;
   if (a.sell_now == null) return a.worth_now == null ? "–" : money(a.worth_now);
-  const p = a.sell_profit;
-  return `≈ ${money(a.sell_now)}<div class="${p > 0 ? "profit" : "muted"}" title="Your ${compact(a.pairs)} pairs sold at the best bids now,
-    both sites' fees off, against what they cost. Sell checks the real order books first.">${p >= 0 ? "+" : "−"}${money(Math.abs(p))} vs cost</div>`;
+  const p = a.sell_profit, part = a.sell_pairs != null && a.sell_pairs < a.pairs;
+  return `<span title="What Sell would get for ${part ? `${compact(a.sell_pairs)} of your ${compact(a.pairs)}` : `your ${compact(a.pairs)}`} pairs:
+    sold into both order books as last read (about every 30 seconds), both sites' fees off. Sell reads the books again first.">≈ ${
+    money(a.sell_now)}</span>${part ? `<div class="muted">${compact(a.sell_pairs)} of ${compact(a.pairs)} pairs</div>` : ""}<div class="${
+    p > 0 ? "profit" : "muted"}">${p >= 0 ? "+" : "−"}${money(Math.abs(p))} vs cost</div>`;
 }
 
 // ---- Paid out: arbs whose markets have both paid, with what they really paid ------------------------
@@ -1617,7 +1621,7 @@ function renderMyArbs() {
       <td class="num" data-l="Paid">${money(a.paid)}</td><td class="num" data-l="Pays">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
       <td class="num profit" data-l="Profit">${money(a.profit)}</td><td class="num" data-l="ROI">${pct(a.roi)}</td>
       <td class="num c-worth" data-l="Worth now">${worthCell(a)}</td>
-      <td class="c-acts">${isOpen(a) && a.phase === "active" && a.sell_profit > 0
+      <td class="c-acts">${isOpen(a) && a.phase === "active" && a.sell_profit >= 0.01
           ? `<button data-mine="sell" data-id="${esc(a.id)}" class="trade" ${tradingOn() ? "" : "disabled title='Needs both API keys'"}
               title="Selling now makes more than these pairs cost: see it priced on the live books first">Sell</button>` : ""}
           ${isOpen(a) && a.phase === "active" && (a.unhedged.length || (a.leftover || []).length)
@@ -1629,7 +1633,7 @@ function renderMyArbs() {
     myTh("closes", "Pays out", "", "Sort by when it pays out")}${
     myTh("unhedged", "Your orders", "", "Sort by shares not hedged")}${myTh("paid", "Paid", "num")}${
     myTh("guaranteed", "Pays whatever happens", "num")}${myTh("profit", "Locked profit", "num")}${myTh("roi", "ROI", "num")}${
-    myTh("worth_now", "Worth now", "num", "Your pairs sold at the best bids right now, both sites' fees off, and the profit against what they cost (sorts by that profit)")}<th></th></tr></thead>`;
+    myTh("worth_now", "Worth now", "num", "What Sell would get: your pairs sold into both order books (read about every 30 seconds), both sites' fees off, and the profit against what they cost (sorts by that profit)")}<th></th></tr></thead>`;
   el.innerHTML = `
     <div class="sumgrid" style="max-width:none">
       <div class="sumcard"><div class="label">Active arbs</div><div class="big">${open.length}</div>
