@@ -68,6 +68,8 @@ class Scanner:
         self.evbot = EVBot(self, path=config.EV_BETS_FILE)   # EV bot: off until you turn it on
         from .balance import Balancer
         self.balancer = Balancer(self)      # "Balance" in My arbs: even up legs with different share counts
+        from .sellearly import EarlySeller
+        self.seller = EarlySeller(self)     # "Sell" in My arbs: close an arb early when selling now is a profit
         self.state = {"status": "starting", "opportunities": [], "near_misses": [], "stats": {},
                       "leagues": [], "unmatched": [], "tabs": [], "pair_conflicts": [], "last_catalog": None, "last_prices": None,
                       "scan_seconds": None, "logs": []}
@@ -422,6 +424,7 @@ class Scanner:
         if len(acc.missing) == 2:
             self.my_arbs.sync_state = {"status": "off", "error": "Add your Kalshi and Polymarket API keys to .env"}
             return
+        read_at = time.time()             # a sale after this isn't in these positions yet
         try:
             kpos, ppos = acc.positions()
         except Exception as e:
@@ -432,13 +435,13 @@ class Scanner:
         self.my_arbs.sync_from_accounts(
             pairs, kpos, ppos, unpaired,
             lambda kc: {"game": kc.game_label or kc.game_key.split(":", 1)[-1], "tab": engine.row_tab(kc),
-                        "closes": kc.close_time})
+                        "closes": kc.close_time}, read_at)
         try:                               # follow legs you sold yourself (needs each market's live state)
             self.my_arbs.snapshot(self.kalshi, self.pm)
             read = tuple(ex for ex, name in (("kalshi", "Kalshi"), ("polymarket", "Polymarket")) if name not in acc.missing)
-            for a in self.my_arbs.reconcile(kpos, ppos, read):
+            for a in self.my_arbs.reconcile(kpos, ppos, read, read_at):
                 self.log(f"My arbs: {a['game']}: {a['note'].split('. ')[0]}")
-            for a in self.my_arbs.update_cost_basis(kpos, ppos, read):
+            for a in self.my_arbs.update_cost_basis(kpos, ppos, read, read_at):
                 self.log(f"My arbs: {a['game']}: cost updated from your accounts to "
                          f"${sum(l['paid'] for l in a['legs']):.2f}")
             if acc.kalshi_http:             # when each arb was really placed (first Kalshi fill), once per arb

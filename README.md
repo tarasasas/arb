@@ -392,6 +392,28 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   no worse than the price shown. A sale's gain or loss against what those shares cost is kept in the
   arb's profit. Extra shares under one share (Polymarket fills fractions on a buy by dollar amount)
   can be balanced too, as long as the site takes an order that small.
+- **Worth now and Sell** (selling an arb early). Held to the end, an arb pays its payout per pair; before
+  then each leg can be sold back into its site's bids. **Worth now** shows what your pairs would bring at
+  the best bids, after both sites' fees, and the profit or loss against what they cost (≈: from the best
+  bid only, refreshed about every 30 seconds; it sorts by that profit). When that's a profit, a **Sell**
+  button appears. It prices the real order books first and shows:
+  - how many pairs to sell: the number that makes the most. Deeper bids can pay less than a pair cost,
+    and those pairs stay held;
+  - what they sell for after fees, the profit against what they cost, and what holding them to the end
+    pays. Usually waiting pays a little more, and selling puts the money back in your accounts now. When
+    the two sites' prices have crossed the other way, selling beats waiting, and it says by how much;
+  - the two orders. Nothing is sent until you confirm, and it's only offered when the sale is a profit.
+    The thinner book goes first, immediate-or-cancel at no less than the price shown: if the book moved,
+    fewer sell, never cheaper, and if none sell nothing happens. Then the other site sells exactly what
+    sold, at no less than 5¢ under its price shown and never below where the whole sale still covers what
+    those pairs cost (up to 3 tries). Anything still unsold there stays in My arbs without its pair, for
+    **Balance**.
+
+  The arb's legs drop by what sold, at their average cost, and what the sale made over that cost is kept
+  in its profit. Sold out completely, it moves to **Closed early** showing what it sold for, and counts
+  in the "All arbs" card. While a sale's orders are out, the position check leaves that pair alone so it
+  can't count the sale twice. What earlier sales made (Sell or Balance) is kept when the account sync
+  updates an arb. A pair you buy again after closing one starts a new arb, and the closed one stays.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
   cost cut pro rata. An arb with a leg sold out moves to **Closed early**, with a note saying what

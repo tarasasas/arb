@@ -217,6 +217,13 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     res = scanner.balancer.execute(str(body.get("plan_id") or ""), str(body.get("choice") or ""))
                     scanner.log(f"Balance: {res['text']}")
                     return self._json(200, res)
+                if path == "/api/myarbs/sell/preview":
+                    return self._json(200, scanner.seller.preview(str(body.get("id") or "")))
+                if path == "/api/myarbs/sell/execute":
+                    res = scanner.seller.execute(str(body.get("plan_id") or ""))
+                    scanner.log(f"Sell early: {res['text']}")
+                    threading.Thread(target=scanner.refresh_balances, daemon=True).start()   # cash changed
+                    return self._json(200, res)
                 if path == "/api/myarbs/delete":
                     scanner.my_arbs.delete(body.get("id", ""))
                     return self._json(200, {"ok": True})

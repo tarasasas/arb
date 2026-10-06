@@ -3,12 +3,14 @@
 dashboard's "Track this arb" form for orders you placed on the sites yourself."""
 
 import json
+import math
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 
 from . import config
+from .model import total_fee
 
 PATH = config.PROJECT_ROOT / "my_arbs.json"
 LIVE_TTL_SECS = 30          # re-check market status and prices at most this often
@@ -95,10 +97,11 @@ def pair_key(arb):
 
 def merge_duplicates(items):
     """Collapse entries for the same pair of markets. An entry from your accounts wins (it counts
-    every fill); otherwise repeat trades are added together into the earliest entry."""
+    every fill); otherwise repeat trades are added together into the earliest entry. What sales of
+    their shares made (realized) adds up. Closed and paid-out arbs are history: never merged."""
     groups, order = {}, []
     for a in items:
-        k = pair_key(a)
+        k = ("done", a.get("id")) if a.get("closed") or a.get("paid_out") else pair_key(a)
         if k not in groups:
             order.append(k)
         groups.setdefault(k, []).append(a)
@@ -121,6 +124,11 @@ def merge_duplicates(items):
             base["legs"] = [legs["kalshi"], legs["polymarket"]]
         base["created"] = min(a.get("created") or "" for a in group) or base.get("created")
         base["note"] = base.get("note") or next((a["note"] for a in others if a.get("note")), "")
+        if any(a.get("realized") for a in group):
+            base["realized"] = round(sum(a.get("realized") or 0.0 for a in group), 2)
+        sales = [x for a in group for x in a.get("sales") or []]
+        if sales:
+            base["sales"] = sales
         out.append(base)
     return out
 
@@ -133,6 +141,7 @@ class MyArbs:
         self.unpaired = []                          # live positions with no partner on the other site
         self.known_pairs = 0                        # pairs kept from My arbs that the scanner can't match now
         self.sync_state = {"status": "never"}
+        self.touched = {}                           # pair -> when a sale changed it (inf while its orders are out)
         if path.exists():
             try:
                 self.items = json.loads(path.read_text(encoding="utf-8")).get("arbs", [])
@@ -162,7 +171,8 @@ class MyArbs:
         with self.lock:
             old = next((a for a in self.items if a["id"] == arb.get("id")), None)
             if old is None and arb.get("source") != "account":
-                same = next((a for a in self.items if pair_key(a) == pair_key({"legs": legs})), None)
+                same = next((a for a in self.items if pair_key(a) == pair_key({"legs": legs})
+                             and not a.get("closed") and not a.get("paid_out")), None)
                 if same and arb.get("source") != "make_trade":
                     raise ValueError(f'You already track this pair ("{same["game"]}"): use Edit on it in My arbs')
             entry = {"id": arb.get("id") or uuid.uuid4().hex[:12],
@@ -172,15 +182,34 @@ class MyArbs:
                      "closes": arb.get("closes"), "payout": float(arb.get("payout") or 1.0),
                      "note": str(arb.get("note") or ""), "legs": legs,
                      "edited": bool(arb.get("edited") or (old or {}).get("edited"))}
+            for k in ("realized", "sales", "placed", "check"):        # an account sync or edit keeps these
+                if (old or {}).get(k) is not None:
+                    entry[k] = old[k]
             self.items = merge_duplicates([a for a in self.items if a["id"] != entry["id"]] + [entry])
             self._save()
             self._live_time = 0.0                   # fetch status for the new markets next time
         return entry
 
-    def sync_from_accounts(self, pairs, kpos, ppos, unpaired, row_info):
+    def hold(self, a):
+        """A sale's orders are going out for this arb: the position sync leaves the pair alone until release()."""
+        with self.lock:
+            self.touched[pair_key(a)] = math.inf
+
+    def release(self, a):
+        with self.lock:
+            self.touched[pair_key(a)] = time.time()
+
+    def _stale(self, key, read_at):
+        """Positions read at read_at predate a sale on this pair (or one is under way): don't apply them."""
+        return read_at is not None and self.touched.get(key, 0) >= read_at
+
+    def sync_from_accounts(self, pairs, kpos, ppos, unpaired, row_info, read_at=None):
         """Upsert an arb for every paired live position. Shares and cost follow the accounts unless
-        you edited the entry yourself. row_info(kalshi contract) -> {game, tab, closes}."""
+        you edited the entry yourself. row_info(kalshi contract) -> {game, tab, closes}. read_at: when the
+        positions were read (pairs sold from since are left for the next read)."""
         for ticker, slug, kc, pc, payout in pairs:
+            if self._stale((ticker, slug), read_at):
+                continue
             kp, pp = kpos[ticker], ppos[slug]
             arb_id = f"acct-{ticker}-{slug}"
             with self.lock:
@@ -216,18 +245,18 @@ class MyArbs:
                     n += 1
         return [u for u in unpaired if (u["exchange"], u["market_id"], u.get("side")) not in claimed], n
 
-    def reconcile(self, kpos, ppos, read=("kalshi", "polymarket")):
+    def reconcile(self, kpos, ppos, read=("kalshi", "polymarket"), read_at=None):
         """Make every tracked leg hold what your account really holds, read through the sites' APIs.
         Fewer shares live (you sold some) cuts the leg, its cost pro rata; a leg sold out closes the arb.
         More shares live (you bought more, e.g. to hedge the short side by hand) raises the leg to the
         live count, the added shares at the account's average cost. A market held by two tracked arbs
         is only ever cut, since the extra shares can't be told apart. Only legs whose market is known
         to be still open are touched, because a market that settles also makes the position disappear.
-        read: the exchanges whose positions were read. Returns the arbs that changed."""
+        read: the exchanges whose positions were read; read_at: when. Returns the arbs that changed."""
         names = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
         changed = []
         with self.lock:
-            open_arbs = [a for a in self.items if not a.get("closed")]
+            open_arbs = [a for a in self.items if not a.get("closed") and not self._stale(pair_key(a), read_at)]
             uses = {}
             for a in open_arbs:
                 for leg in a["legs"]:
@@ -272,7 +301,7 @@ class MyArbs:
                 self._save()
         return changed
 
-    def update_cost_basis(self, kpos, ppos, read=("kalshi", "polymarket")):
+    def update_cost_basis(self, kpos, ppos, read=("kalshi", "polymarket"), read_at=None):
         """Set each tracked leg's cost to what your account says you really paid (fees included), at the
         account's average cost per share, so profit and ROI use real prices rather than planned ones.
         Legs whose account cost is uncertain (estimated) are left as recorded. Returns the arbs whose
@@ -280,7 +309,7 @@ class MyArbs:
         changed, dirty = [], False
         with self.lock:
             for a in self.items:
-                if a.get("closed"):
+                if a.get("closed") or self._stale(pair_key(a), read_at):
                     continue
                 moved = False
                 for leg in a["legs"]:
@@ -407,6 +436,43 @@ class MyArbs:
             self._save()
             return a
 
+    def apply_sale(self, arb_id, sold):
+        """Record selling an arb's shares early (Sell): sold = {exchange: (shares, amount, fee)}. Each leg loses
+        those shares at its average cost; what the sale made over that cost goes to `realized`, and the sale is
+        kept in `sales`. An arb with no shares left closes, with what all its sales made."""
+        names = {"kalshi": "Kalshi", "polymarket": "Polymarket"}
+        with self.lock:
+            a = next((a for a in self.items if a["id"] == arb_id), None)
+            if a is None or not sold:
+                return None
+            proceeds = cost = 0.0
+            legs = {}
+            for ex, (qty, amount, fee) in sold.items():
+                leg = next((l for l in a["legs"] if l["exchange"] == ex), None)
+                if leg is None or qty <= 0:
+                    continue
+                c = leg["paid"] / leg["shares"] * qty if leg["shares"] else 0.0
+                leg["shares"], leg["paid"] = round(max(0.0, leg["shares"] - qty), 4), round(max(0.0, leg["paid"] - c), 2)
+                proceeds, cost = proceeds + amount - fee, cost + c
+                legs[ex] = {"shares": qty, "amount": round(amount, 2), "fee": round(fee, 2)}
+            gain = proceeds - cost
+            now = datetime.now(timezone.utc).isoformat()
+            a["realized"] = round((a.get("realized") or 0.0) + gain, 2)
+            a.setdefault("sales", []).append({"time": now, "legs": legs, "proceeds": round(proceeds, 2),
+                                              "cost": round(cost, 2), "profit": round(gain, 2)})
+            did = " and ".join(f"{v['shares']:g} {names[ex]} {next(l for l in a['legs'] if l['exchange'] == ex)['side'].upper()}"
+                               for ex, v in legs.items())
+            a["note"] = (f"Sold early: {did} for ${proceeds:.2f} after fees ({'+' if gain >= 0 else '-'}${abs(gain):.2f} "
+                         f"vs what they cost). " + (a.get("note") or ""))
+            if all(l["shares"] <= 1e-6 for l in a["legs"]):
+                sales = a["sales"]
+                a["closed"] = {"time": now, "why": f"sold early for ${sum(x['proceeds'] for x in sales):.2f}",
+                               "sold_for": round(sum(x["proceeds"] for x in sales), 2),
+                               "cost": round(sum(x["cost"] for x in sales), 2), "profit": a["realized"]}
+            self.touched[pair_key(a)] = time.time()
+            self._save()
+            return a
+
     def delete(self, arb_id):
         with self.lock:
             self.items = [a for a in self.items if a["id"] != arb_id]
@@ -460,11 +526,21 @@ class MyArbs:
                              "worth_now": round(bid * l["shares"], 2) if bid is not None else None})
             s = summarize(a)
             worth = [l["worth_now"] for l in legs]
+            # Selling the pairs at the best bids now, each site's fee off (an estimate: Sell prices the real books)
+            bids = [(l["exchange"], (self._live.get((l["exchange"], l["market_id"])) or {}).get("bid", {}).get(l["side"]))
+                    for l in a["legs"]]
+            sell_now = sell_profit = None
+            if s["pairs"] > 0 and all(b for _, b in bids):
+                coef = {"kalshi": config.KALSHI_TAKER_COEF, "polymarket": config.POLYMARKET_DEFAULT_COEF}
+                sell_now = sum(b * s["pairs"] - total_fee(ex, [(b, s["pairs"])], coef[ex]) for ex, b in bids)
+                sell_profit = round(sell_now - s["pair_cost"] * s["pairs"], 2)
+                sell_now = round(sell_now, 2)
             settled = bool(a.get("closed") or a.get("paid_out")) or all(l["state"] in ("settled", "closed") for l in legs)
             # active: still trading; awaiting: markets over, payout not in yet; paid: paid out; sold: you sold out early
             phase = ("paid" if a.get("paid_out") else "sold" if a.get("closed") else "awaiting" if settled else "active")
             out.append({**a, "legs": legs, **s,
                         "worth_now": round(sum(worth), 2) if None not in worth else None,
+                        "sell_now": sell_now, "sell_profit": sell_profit,
                         "settled": settled, "phase": phase})
         return out
 

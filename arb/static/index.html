@@ -1306,8 +1306,18 @@ async function loadMyArbs() {
 }
 // Money still out: trading, or the markets are over and the payout hasn't arrived. (Older servers: !settled.)
 const isOpen = a => a.phase ? a.phase === "active" || a.phase === "awaiting" : !a.settled;
-const realProfit = a => a.paid_out ? a.paid_out.profit : a.profit;
-const realCost = a => a.paid_out ? a.paid_out.cost : a.paid;
+// Sold early with Sell: what the sales made and what those shares cost; partly sold: the sales count too.
+const soldCost = a => (a.sales || []).reduce((s, x) => s + (x.cost || 0), 0);
+const realProfit = a => a.paid_out ? a.paid_out.profit : a.closed?.profit != null ? a.closed.profit : a.profit;
+const realCost = a => a.paid_out ? a.paid_out.cost : a.closed?.cost != null ? a.closed.cost : a.paid + soldCost(a);
+// Worth now: selling the pairs at the best bids, both sites' fees off, against what they cost (Sell prices the real books).
+function worthCell(a) {
+  if (a.closed?.sold_for != null) return `${money(a.closed.sold_for)}<div class="muted">sold for</div>`;
+  if (a.sell_now == null) return a.worth_now == null ? "–" : money(a.worth_now);
+  const p = a.sell_profit;
+  return `≈ ${money(a.sell_now)}<div class="${p > 0 ? "profit" : "muted"}" title="Your ${compact(a.pairs)} pairs sold at the best bids now,
+    both sites' fees off, against what they cost. Sell checks the real order books first.">${p >= 0 ? "+" : "−"}${money(Math.abs(p))} vs cost</div>`;
+}
 
 // ---- Paid out: arbs whose markets have both paid, with what they really paid ------------------------
 function paidOutHtml(paid) {
@@ -1528,7 +1538,7 @@ const MY_SORT = {
   game: a => (a.game || "").toLowerCase(), closes: a => a.closes ? Date.parse(a.closes) : null,
   placed: a => (a.placed || a.created) ? Date.parse(a.placed || a.created) : null,
   unhedged: a => a.unhedged.reduce((s, u) => s + u.shares, 0), paid: a => a.paid, guaranteed: a => a.guaranteed,
-  profit: a => a.profit, roi: a => a.roi, worth_now: a => a.worth_now,
+  profit: a => a.profit, roi: a => a.roi, worth_now: a => a.sell_profit ?? a.worth_now,
 };
 function mySorted(list) {
   const f = MY_SORT[mySort.key] || MY_SORT.closes, sign = mySort.dir === "asc" ? 1 : -1;
@@ -1606,8 +1616,11 @@ function renderMyArbs() {
         ${(a.leftover || []).map(u => leftoverHtml(a, u)).join("")}</td>
       <td class="num" data-l="Paid">${money(a.paid)}</td><td class="num" data-l="Pays">${money(a.guaranteed)}<div class="muted">${compact(a.pairs)} pairs</div></td>
       <td class="num profit" data-l="Profit">${money(a.profit)}</td><td class="num" data-l="ROI">${pct(a.roi)}</td>
-      <td class="num c-worth" data-l="Worth now">${a.worth_now == null ? "–" : money(a.worth_now)}</td>
-      <td class="c-acts">${isOpen(a) && a.phase === "active" && (a.unhedged.length || (a.leftover || []).length)
+      <td class="num c-worth" data-l="Worth now">${worthCell(a)}</td>
+      <td class="c-acts">${isOpen(a) && a.phase === "active" && a.sell_profit > 0
+          ? `<button data-mine="sell" data-id="${esc(a.id)}" class="trade" ${tradingOn() ? "" : "disabled title='Needs both API keys'"}
+              title="Selling now makes more than these pairs cost: see it priced on the live books first">Sell</button>` : ""}
+          ${isOpen(a) && a.phase === "active" && (a.unhedged.length || (a.leftover || []).length)
           ? `<button data-mine="balance" data-id="${esc(a.id)}" class="trade" ${tradingOn() ? "" : "disabled title='Needs both API keys'"}
               title="Sell the extra shares, or buy the missing ones on the other site, whichever leaves more">Balance</button>` : ""}
           <button data-mine="edit" data-id="${esc(a.id)}">Edit</button>
@@ -1616,7 +1629,7 @@ function renderMyArbs() {
     myTh("closes", "Pays out", "", "Sort by when it pays out")}${
     myTh("unhedged", "Your orders", "", "Sort by shares not hedged")}${myTh("paid", "Paid", "num")}${
     myTh("guaranteed", "Pays whatever happens", "num")}${myTh("profit", "Locked profit", "num")}${myTh("roi", "ROI", "num")}${
-    myTh("worth_now", "Worth now", "num", "If you sold both legs at the best bids right now, before fees")}<th></th></tr></thead>`;
+    myTh("worth_now", "Worth now", "num", "Your pairs sold at the best bids right now, both sites' fees off, and the profit against what they cost (sorts by that profit)")}<th></th></tr></thead>`;
   el.innerHTML = `
     <div class="sumgrid" style="max-width:none">
       <div class="sumcard"><div class="label">Active arbs</div><div class="big">${open.length}</div>
@@ -1628,12 +1641,13 @@ function renderMyArbs() {
         <span style="font-size:.55em">${ratio(tot("profit"), tot("paid"))}</span></div>
         <div class="sub">profit ÷ money in, active arbs, fees included</div></div>
       ${(() => { // active + paid out; arbs you sold early are left out: what you sold them for isn't recorded
-        const all = myArbs.filter(a => isOpen(a) || a.paid_out), p = all.reduce((s, a) => s + (realProfit(a) || 0), 0),
-              c = all.reduce((s, a) => s + (realCost(a) || 0), 0);
+        const all = myArbs.filter(a => isOpen(a) || a.paid_out || a.closed?.profit != null),
+              p = all.reduce((s, a) => s + (realProfit(a) || 0), 0), c = all.reduce((s, a) => s + (realCost(a) || 0), 0),
+              unknown = done.filter(a => a.closed?.profit == null).length;
         return `<div class="sumcard"><div class="label">All arbs, incl. paid out</div><div class="big profit"
           style="${p < 0 ? "color:var(--critical)" : ""}">${ratio(p, c)}</div>
-          <div class="sub">${p < 0 ? "−" : ""}${money(Math.abs(p))} profit on ${money(c)} spent${done.length
-            ? ` · ${done.length} sold early not counted (sale price not recorded)` : ""}</div></div>`; })()}
+          <div class="sub">${p < 0 ? "−" : ""}${money(Math.abs(p))} profit on ${money(c)} spent${unknown
+            ? ` · ${unknown} sold early by hand not counted (sale price not recorded)` : ""}</div></div>`; })()}
     </div>
     ${payoutChartHtml(open)}
     <div class="toolrow"><button data-mine="sync">Sync now</button>
@@ -1667,6 +1681,7 @@ document.getElementById("myarbs").addEventListener("click", async e => {
   }
   if (b.dataset.mine === "edit" && a) openTrack(null, a);
   if (b.dataset.mine === "balance" && a) openBalance(a);
+  if (b.dataset.mine === "sell" && a) openSell(a);
   if (b.dataset.mine === "del" && a && confirm(`Remove "${a.game}" from My arbs?`)) {
     try { await post("/api/myarbs/delete", { id: a.id }); } catch (err) { alert(err.message); }
     loadMyArbs();
@@ -1767,6 +1782,55 @@ async function openBalance(a) {
     }
     loadMyArbs();
   });
+}
+
+// Sell early: what selling an arb's pairs brings now on the live books, against what they cost and what holding pays.
+async function openSell(a) {
+  showModal(`<h3>Sell ${esc(a.game)}</h3><div class="muted">Checking live order books…</div>`);
+  let plan;
+  try { plan = await post("/api/myarbs/sell/preview", { id: a.id }); }
+  catch (e) {
+    return showModal(`<h3>Sell</h3><div class="alert">${esc(e.message)}</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+  const signed = v => `${v >= 0 ? "+" : "−"}${money(Math.abs(v))}`;
+  const legs = plan.legs ? Object.values(plan.legs).sort((x, y) => (x.exchange === plan.first ? -1 : 1) - (y.exchange === plan.first ? -1 : 1))
+    .map((l, i) => `<li>${i ? "Then" : "First"}: sell ${compact(l.qty)} ${l.side.toUpperCase()} on ${esc(EXNAME[l.exchange] || l.exchange)}
+      at ≥ ${cents(l.limit)} (${money(l.amount)}, fee ${money(l.fee)})</li>`).join("") : "";
+  const vsHold = !plan.n ? "" : plan.profit > plan.hold_profit
+    ? `That's <b class="profit">${money(plan.profit - plan.hold_profit)} more than waiting</b>: the two sites' prices have crossed the other way.`
+    : `Waiting makes ${money(plan.hold_profit - plan.profit)} more${a.closes ? `, when it pays out ${esc(localTime(a.closes))}` : ""}; selling
+       now puts ${money(plan.proceeds)} back in your accounts today.`;
+  showModal(`<h3>Sell ${esc(a.game)} early</h3>
+    ${plan.ok ? "" : `<div class="alert">Not selling: ${esc(plan.why)}.</div>`}
+    ${plan.n ? `<div class="bal-opt${plan.ok ? " best" : " off"}"><b>Sell ${compact(plan.n)} pairs now for ${money(plan.proceeds)} after fees</b>
+      <div>They cost ${money(plan.cost)}: <b class="${plan.profit > 0 ? "profit" : ""}">${signed(plan.profit)}</b>${plan.roi != null
+        ? ` (${pct(plan.roi)})` : ""}. Held to the end they pay ${money(plan.hold_payout)} (${signed(plan.hold_profit)}).</div>
+      <div class="muted">${vsHold}</div>
+      <ol class="muted" style="margin:6px 0 0 18px;padding:0">${legs}</ol>
+      ${plan.kept > 0 ? `<div class="muted">The other ${compact(plan.kept)} pairs stay held: the deeper bids would pay less than they cost
+        (selling all ${compact(plan.all.n)} the books take: ${signed(plan.all.profit)}).</div>` : ""}
+      ${plan.ok ? `<button class="trade" id="sell-go">Sell ${compact(plan.n)} pairs</button>` : ""}</div>` : ""}
+    ${(plan.extra || []).map(x => `<div class="muted">${compact(x.shares)} extra ${esc(x.side.toUpperCase())} on ${esc(x.exchange)} aren't part
+      of a pair and stay (Balance handles them).</div>`).join("")}
+    <div class="policy">The thinner book goes first, immediate-or-cancel at no less than the price shown: if it moved, fewer sell, never
+      cheaper, and if none sell nothing happens. Then the other site for exactly what sold, at no less than 5¢ under its price shown and
+      never below where the whole sale still covers what those pairs cost (up to 3 tries). Anything still unsold there stays in My arbs
+      without its pair, for Balance. This preview is good for 30 seconds.</div>
+    <div class="actions"><button onclick="closeModal()">Cancel</button></div>`);
+  const go = document.getElementById("sell-go");
+  if (go) go.onclick = async () => {
+    go.disabled = true; go.textContent = "Selling…";
+    try {
+      const res = await post("/api/myarbs/sell/execute", { plan_id: plan.id });
+      showModal(`<h3>Sell</h3><div class="${res.status === "ok" ? "" : "alert"}">${esc(res.text)}</div>
+        <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+    } catch (e) {
+      showModal(`<h3>Sell</h3><div class="alert">${esc(e.message)}</div>
+        <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+    }
+    loadMyArbs();
+  };
 }
 
 // Form to record the orders you actually placed. From an opportunity it starts with the dashboard's sizing.

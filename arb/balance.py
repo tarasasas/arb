@@ -26,15 +26,33 @@ PLAN_TTL_SECS = 30
 MIN_EXTRA = 0.005          # less than this is rounding, not an imbalance
 
 
-class Balancer:
+class ArbOrders:
+    """Orders on an arb you hold (My arbs): Balance, and Sell early (sellearly.py)."""
+    WHAT = "Balancing"
+
     def __init__(self, scanner):
         self.scanner, self.plans, self.lock = scanner, {}, threading.Lock()
 
     def _venues(self):
         venues = getattr(getattr(self.scanner, "trader", None), "venues", None)
         if not venues:
-            raise TradeError("Balancing places orders, so it needs both API keys (trading is off).")
+            raise TradeError(f"{self.WHAT} places orders, so it needs both API keys (trading is off).")
         return venues
+
+    def _keep(self, plan):
+        with self.lock:
+            now = time.time()
+            self.plans = {k: p for k, p in self.plans.items() if now - p["created"] < PLAN_TTL_SECS}
+            self.plans[plan["id"]] = plan
+
+    def _take_plan(self, plan_id, again):
+        with self.lock:
+            plan = self.plans.pop(plan_id, None)
+        if plan is None:
+            raise TradeError(f"That preview was already used or doesn't exist. Press {again} again.")
+        if time.time() - plan["created"] > PLAN_TTL_SECS:
+            raise TradeError(f"That preview expired (prices move). Press {again} again for fresh numbers.")
+        return plan
 
     def _arb(self, arb_id):
         mine = self.scanner.my_arbs
@@ -55,6 +73,14 @@ class Balancer:
         except Exception:
             return config.KALSHI_TAKER_COEF
 
+    @staticmethod
+    def _write(log):
+        log["finished"] = engine.now_utc().isoformat()
+        with open(config.TRADES_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log, default=str) + "\n")
+
+
+class Balancer(ArbOrders):
     def preview(self, arb_id):
         a = self._arb(arb_id)
         legs = a["legs"]
@@ -83,10 +109,7 @@ class Balancer:
         plan = {"id": uuid.uuid4().hex, "created": time.time(), "arb_id": arb_id, "game": a.get("game"),
                 "extra": extra, "extra_exchange": NAMES[big["exchange"]], "extra_side": big["side"],
                 "payout": payout, "options": options, "recommended": best}
-        with self.lock:
-            now = time.time()
-            self.plans = {k: p for k, p in self.plans.items() if now - p["created"] < PLAN_TTL_SECS}
-            self.plans[plan["id"]] = plan
+        self._keep(plan)
         return plan
 
     def _sell_option(self, leg, extra, info, levels):
@@ -110,6 +133,7 @@ class Balancer:
         return {**base, "ok": True, "qty": got, "limit": fills[-1][0], "amount": round(amount, 2), "fee": round(fee, 2),
                 "value": round(value, 2), "left": round(extra - got, 4),
                 "text": f"Sell the {got:g} extra {side.upper()} on {name} for ${value:.2f} after fees"}
+
 
     def _buy_option(self, leg, big, extra, payout, info, levels, cash):
         ex, name, side = leg["exchange"], NAMES[leg["exchange"]], leg["side"]
@@ -143,12 +167,7 @@ class Balancer:
                          + (f" (as many as your ${config.MAX_TRADE_DOLLARS:g} cap per trade allows)" if capped else ""))}
 
     def execute(self, plan_id, choice):
-        with self.lock:
-            plan = self.plans.pop(plan_id, None)
-        if plan is None:
-            raise TradeError("That preview was already used or doesn't exist. Press Balance again.")
-        if time.time() - plan["created"] > PLAN_TTL_SECS:
-            raise TradeError("That preview expired (prices move). Press Balance again for fresh numbers.")
+        plan = self._take_plan(plan_id, "Balance")
         opt = plan["options"].get(choice)
         if not opt or not opt["ok"]:
             raise TradeError("That option isn't available.")
@@ -180,12 +199,6 @@ class Balancer:
                 "fee": round(fill.fee, 2),
                 "text": f"{verb} {fill.qty:g} {side} on {name} for ${money:.2f}"
                         + (f" ({short:g} didn't fill: the book moved; press Balance again)" if short > 0 else "") + "."}
-
-    @staticmethod
-    def _write(log):
-        log["finished"] = engine.now_utc().isoformat()
-        with open(config.TRADES_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log, default=str) + "\n")
 
 
 def needs_balance(arb):
