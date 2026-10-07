@@ -42,7 +42,7 @@ class ArbOrders:
     def _keep(self, plan):
         with self.lock:
             now = time.time()
-            self.plans = {k: p for k, p in self.plans.items() if now - p["created"] < PLAN_TTL_SECS}
+            self.plans = {k: p for k, p in self.plans.items() if now - p["created"] < p.get("ttl", PLAN_TTL_SECS)}
             self.plans[plan["id"]] = plan
 
     def _take_plan(self, plan_id, again):
@@ -50,7 +50,7 @@ class ArbOrders:
             plan = self.plans.pop(plan_id, None)
         if plan is None:
             raise TradeError(f"That preview was already used or doesn't exist. Press {again} again.")
-        if time.time() - plan["created"] > PLAN_TTL_SECS:
+        if time.time() - plan["created"] > plan.get("ttl", PLAN_TTL_SECS):
             raise TradeError(f"That preview expired (prices move). Press {again} again for fresh numbers.")
         return plan
 

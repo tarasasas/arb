@@ -232,7 +232,9 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                 if path == "/api/myarbs/sellall/preview":
                     return self._json(200, scanner.seller.preview_all())
                 if path == "/api/myarbs/sellall/execute":
-                    res = scanner.seller.execute_all(str(body.get("plan_id") or ""), str(body.get("which") or ""))
+                    picks = body.get("picks")
+                    res = scanner.seller.execute_all(str(body.get("plan_id") or ""), str(body.get("which") or ""),
+                                                     picks if isinstance(picks, list) else None)
                     scanner.log(f"Sell all: {res['text']}")
                     threading.Thread(target=scanner.refresh_balances, daemon=True).start()
                     later = threading.Timer(myarbs.SALE_GRACE_SECS + 5, scanner.sync_positions)

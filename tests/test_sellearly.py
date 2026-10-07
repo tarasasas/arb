@@ -431,3 +431,40 @@ class SellAllTests(unittest.TestCase):
         self.assertAlmostEqual(rows["win"]["sell_profit"], b["profitable"]["profit"])
         self.assertAlmostEqual(rows["win"]["sell_all_profit"] + rows["lose"]["sell_all_profit"], b["everything"]["profit"], 2)
         self.assertEqual(rows["win"]["hold_all_profit"] + rows["lose"]["hold_all_profit"], b["everything"]["hold_profit"])
+
+    def test_sells_just_the_ones_you_pick_each_its_own_way(self):
+        b = self.seller.preview_all()
+        ids = {r["game"]: r["arb_id"] for r in b["arbs"]}
+        res = self.seller.execute_all(b["id"], picks=[{"arb_id": ids["win"], "sale": "best"},
+                                                       {"arb_id": ids["lose"], "sale": "everything"}])
+        self.assertEqual([r["status"] for r in res["results"]], ["ok", "ok"])
+        self.assertEqual(self.arb("win")["legs"][0]["shares"], 40)          # the 60 that made money
+        self.assertTrue(self.arb("lose")["closed"])                          # every pair, at a loss
+        b2 = self.seller.preview_all()
+        only = next(r["arb_id"] for r in b2["arbs"] if r["game"] == "win")
+        self.seller.execute_all(b2["id"], picks=[{"arb_id": only, "sale": "everything"}])
+        self.assertEqual(self.arb("win")["legs"][0]["shares"], 0)
+
+    def test_a_choice_the_preview_cant_do_is_refused_before_anything_is_sent(self):
+        b = self.seller.preview_all()
+        lose = next(r["arb_id"] for r in b["arbs"] if r["game"] == "lose")
+        shut = next(r["arb_id"] for r in b["arbs"] if r["game"] == "shut")
+        for picks, why in (([{"arb_id": lose, "sale": "best"}], "can't sell that way"),     # selling now loses
+                           ([{"arb_id": shut, "sale": "everything"}], "can't sell that way"),
+                           ([{"arb_id": "nope", "sale": "best"}], "Refresh prices"), ([], "choose at least one")):
+            with self.assertRaisesRegex(TradeError, why):
+                self.seller.execute_all(b["id"], picks=picks)
+        self.assertEqual(self.k.orders + self.p.orders, [])
+        self.seller.execute_all(b["id"], picks=[{"arb_id": lose, "sale": "everything"}])       # still usable
+        self.assertTrue(self.arb("lose")["closed"])
+
+    def test_choosing_has_two_minutes(self):
+        b = self.seller.preview_all()
+        self.seller.plans[b["id"]]["created"] -= 90                         # past a single Sell's 30 seconds
+        self.seller.preview(self.ids["win"])                                # (keeping another plan prunes old ones)
+        res = self.seller.execute_all(b["id"], which="profitable")
+        self.assertEqual(res["status"], "ok")
+        b = self.seller.preview_all()
+        self.seller.plans[b["id"]]["created"] -= sellearly.SELL_ALL_TTL_SECS + 1
+        with self.assertRaisesRegex(TradeError, "expired"):
+            self.seller.execute_all(b["id"], which="profitable")

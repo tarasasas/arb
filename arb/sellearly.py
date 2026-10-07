@@ -25,6 +25,7 @@ from .venues import floor_to
 
 OTHER = {"yes": "no", "no": "yes"}
 SECOND_LEG_SLIP = 0.05     # $/share the second leg may sell under its previewed price (never below break-even)
+SELL_ALL_TTL_SECS = 120    # a Sell all preview stays usable this long: choosing which to sell takes a while
 
 
 def bids_for(levels, side):
@@ -187,23 +188,24 @@ class EarlySeller(ArbOrders):
                     "proceeds": round(sum(p["proceeds"] for p in plans), 2), "cost": round(sum(p["cost"] for p in plans), 2),
                     "profit": round(sum(p["profit"] for p in plans), 2),
                     "hold_profit": round(sum(p["hold_profit"] for p in plans), 2)}
-        batch = {"id": uuid.uuid4().hex, "created": time.time(), "arbs": rows,
+        batch = {"id": uuid.uuid4().hex, "created": time.time(), "ttl": SELL_ALL_TTL_SECS, "arbs": rows,
                  "profitable": total([r["best"] for r in rows if r["best"] and r["best"]["ok"]]),
                  "everything": total([r["everything"] for r in rows if r["everything"]]),
                  "unsellable": sum(1 for r in rows if not r["everything"])}
         self._keep(batch)
         return batch
 
-    def execute_all(self, batch_id, which):
-        """Sell the arbs a Sell all preview priced: which = "profitable" (the ones that make money, as single Sell
-        would) or "everything" (every pair the books take). One arb at a time; one failing doesn't stop the rest."""
-        batch = self._take_plan(batch_id, "Sell all")
-        if which not in ("profitable", "everything"):
-            raise TradeError("Choose the profitable arbs or everything.")
-        plans = [r["best"] for r in batch["arbs"] if r["best"] and r["best"]["ok"]] if which == "profitable" else \
-            [r["everything"] for r in batch["arbs"] if r["everything"]]
-        if not plans:
-            raise TradeError("Nothing to sell.")
+    def execute_all(self, batch_id, which=None, picks=None):
+        """Sell the arbs a Sell all preview priced. picks: the ones you chose, [{"arb_id", "sale": "best" (the pairs
+        that make money, as its own Sell would) or "everything" (every pair the books take)}]; or which =
+        "profitable" / "everything" for all of them. One arb at a time; one failing doesn't stop the rest. A choice
+        the preview can't do is refused before anything is sent, and the preview stays usable."""
+        with self.lock:
+            batch = self.plans.get(batch_id)
+        if batch is None:
+            self._take_plan(batch_id, "Sell all")          # (raises: used, expired or unknown)
+        plans = self._picked(batch, which, picks)
+        self._take_plan(batch_id, "Sell all")
         results = []
         for plan in plans:
             try:
@@ -219,6 +221,32 @@ class EarlySeller(ArbOrders):
                 "text": f"Sold {len(sold)} of {len(plans)} arbs for ${proceeds:.2f} after fees"
                         + (f": {'+' if profit >= 0 else '-'}${abs(profit):.2f} against what they cost" if sold else "")
                         + (f". {bad} didn't fully sell: see below." if bad else ".")}
+
+    @staticmethod
+    def _picked(batch, which, picks):
+        rows = {r["arb_id"]: r for r in batch["arbs"]}
+        if picks is None:
+            if which not in ("profitable", "everything"):
+                raise TradeError("Choose which arbs to sell.")
+            plans = [r["best"] for r in rows.values() if r["best"] and r["best"]["ok"]] if which == "profitable" \
+                else [r["everything"] for r in rows.values() if r["everything"]]
+        else:
+            plans, seen = [], set()
+            for p in picks:
+                r = rows.get(str(p.get("arb_id") or ""))
+                if r is None:
+                    raise TradeError("An arb you chose isn't in this preview any more: press Refresh prices.")
+                if r["arb_id"] in seen:
+                    continue
+                plan = {"best": r["best"], "everything": r["everything"]}.get(p.get("sale"))
+                if not plan or not plan.get("ok"):
+                    raise TradeError(f"{r['game'] or r['arb_id']}: can't sell that way now "
+                                     f"({(r['best'] or {}).get('why') or r.get('why') or 'no price'}).")
+                plans.append(plan)
+                seen.add(r["arb_id"])
+        if not plans:
+            raise TradeError("Nothing to sell: choose at least one arb.")
+        return plans
 
     # ---- the orders ----------------------------------------------------------------------------------------
 

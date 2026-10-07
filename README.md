@@ -423,10 +423,17 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
 - **If sold early now and Sell all.** A card at the top adds up Worth now for every active arb: the
   expected gain from selling the ones that make money, and the total gain or loss from selling everything,
   each next to what those pairs make if held to the end. **Sell all…** reads every active arb's order books
-  again and lists each one with both numbers, then offers two sales:
-  - **the ones that make money**: each sells the pairs that make the most, as its own Sell button would;
-  - **everything**: every pair the books take, including those that sell for less than they cost, to have
-    the money back now. It asks you to confirm, with the total gain or loss.
+  again and lists each one with a checkbox. You choose which to sell; the ones that make money start
+  ticked, and **Select: the ones that make money / all / none** sets them all at once. For each arb, choose
+  how much to sell:
+  - **"N that make money"**: the pairs that make the most, as its own Sell button would. Only offered when
+    selling now is a profit;
+  - **"all N pairs"**: every pair the books take, even below what they cost, to have the money back now.
+
+  The total for what's ticked updates as you choose: pairs, what they sell for after fees, the gain or loss
+  against what they cost, and what they'd make if held. **Sell N selected** asks you to confirm if the total
+  is a loss or any arb sells at a loss. The prices are good for 2 minutes (`SELL_ALL_TTL_SECS`).
+  **Refresh prices** reads the books again and keeps your choices.
 
   It sells one arb at a time with the same orders as Sell. A sale at a loss can't break even, so its
   second leg goes down to 5¢ under its price shown, so it still fills. One arb failing doesn't stop the
