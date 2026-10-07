@@ -420,6 +420,17 @@ The **My arbs** tab, at the right end of the tabs, tracks the arbs you've actual
   sales made (Sell or Balance) is kept when the account sync updates an arb. A pair you buy again after
   closing one starts a new arb, and the closed one stays. Arbs closed because you sold on the site itself
   show "sold on the site": the app never saw that price.
+- **If sold early now and Sell all.** A card at the top adds up Worth now for every active arb: the
+  expected gain from selling the ones that make money, and the total gain or loss from selling everything,
+  each next to what those pairs make if held to the end. **Sell all…** reads every active arb's order books
+  again and lists each one with both numbers, then offers two sales:
+  - **the ones that make money**: each sells the pairs that make the most, as its own Sell button would;
+  - **everything**: every pair the books take, including those that sell for less than they cost, to have
+    the money back now. It asks you to confirm, with the total gain or loss.
+
+  It sells one arb at a time with the same orders as Sell. A sale at a loss can't break even, so its
+  second leg goes down to 5¢ under its price shown, so it still fills. One arb failing doesn't stop the
+  rest, and the result lists each one. Arbs whose market isn't trading are listed as can't be sold now.
 - **Sales you make yourself are followed.** If your live position in a tracked leg is smaller than
   recorded (you sold some or all of it on the site), the leg is cut to what you still hold, with its
   cost cut pro rata. An arb with a leg sold out moves to **Closed early**, with a note saying what

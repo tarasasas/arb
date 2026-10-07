@@ -635,6 +635,13 @@ class MyArbs:
                         "worth_now": round(sum(worth), 2) if None not in worth else None,
                         "sell_now": round(v["proceeds"], 2) if v else None,
                         "sell_profit": round(v["profit"], 2) if v else None, "sell_pairs": v["n"] if v else None,
+                        # every pair the books take (Sell all → everything), and what holding the sold pairs pays
+                        "sell_all_now": round(v["all"]["proceeds"], 2) if v else None,
+                        "sell_all_profit": round(v["all"]["profit"], 2) if v else None,
+                        "sell_all_pairs": v["all"]["n"] if v else None,
+                        "hold_profit_sold": round(float(a.get("payout") or 1.0) * v["n"] - v["cost"], 2) if v else None,
+                        "hold_all_profit": round(float(a.get("payout") or 1.0) * v["all"]["n"] - v["all"]["cost"], 2)
+                        if v else None,
                         "settled": settled, "phase": phase})
         return out
 

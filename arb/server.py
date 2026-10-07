@@ -229,6 +229,16 @@ def serve(scanner, port, open_browser=True, phone=False, password=""):
                     later.daemon = True
                     later.start()
                     return self._json(200, res)
+                if path == "/api/myarbs/sellall/preview":
+                    return self._json(200, scanner.seller.preview_all())
+                if path == "/api/myarbs/sellall/execute":
+                    res = scanner.seller.execute_all(str(body.get("plan_id") or ""), str(body.get("which") or ""))
+                    scanner.log(f"Sell all: {res['text']}")
+                    threading.Thread(target=scanner.refresh_balances, daemon=True).start()
+                    later = threading.Timer(myarbs.SALE_GRACE_SECS + 5, scanner.sync_positions)
+                    later.daemon = True
+                    later.start()
+                    return self._json(200, res)
                 if path == "/api/myarbs/delete":
                     scanner.my_arbs.delete(body.get("id", ""))
                     return self._json(200, {"ok": True})

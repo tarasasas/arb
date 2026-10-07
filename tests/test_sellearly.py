@@ -329,3 +329,105 @@ class BookkeepingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BookVenue(FakeVenue):
+    """A FakeVenue with a book (and open state) per market; sales on a market in `fail` raise."""
+
+    def __init__(self, books, shut=(), fail=()):
+        super().__init__({})
+        self.books, self.shut, self.fail = books, set(shut), set(fail)
+
+    def market_info(self, mid):
+        return {**super().market_info(mid), "open": mid not in self.shut}
+
+    def levels(self, mid):
+        return self.books[mid]
+
+    def sell(self, mid, side, qty, min_price, coef):
+        if mid in self.fail:
+            raise RuntimeError("refused")
+        return super().sell(mid, side, qty, min_price, coef)
+
+
+def pair_of(mid, game):
+    a = held()
+    a["game"] = game
+    for l in a["legs"]:
+        l["market_id"] = f"{l['market_id']}-{mid}"
+    return a
+
+
+@mock.patch.object(sellearly.config, "TRADES_LOG", Path(tempfile.gettempdir()) / "arb-test-sellearly-trades.jsonl")
+@mock.patch.object(sellearly.config, "SECOND_LEG_RETRY_PAUSE", 0)
+class SellAllTests(unittest.TestCase):
+    """Three arbs: "win" makes money on the first 60 pairs (as above), "lose" sells under cost (Kalshi bid 48c),
+    "shut" has a market that isn't trading."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        lose_k = {"yes": [(0.60, 100)], "no": [(0.52, 500)]}
+        k_books = {"KX-DAMON-win": KALSHI, "KX-DAMON-lose": lose_k, "KX-DAMON-shut": KALSHI}
+        p_books = {"oscar-damon-win": POLY, "oscar-damon-lose": POLY, "oscar-damon-shut": POLY}
+        self.k, self.p = BookVenue(k_books, shut={"KX-DAMON-shut"}), BookVenue(p_books)
+        self.s = Scanner(Path(self.dir.name) / "m.json", {"kalshi": self.k, "polymarket": self.p})
+        self.ids = {g: self.s.my_arbs.save(pair_of(g, g))["id"] for g in ("win", "lose", "shut")}
+        self.seller = sellearly.EarlySeller(self.s)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def arb(self, g):
+        return next(a for a in self.s.my_arbs.items if a["game"] == g)
+
+    def test_the_preview_totals_the_profitable_ones_and_everything(self):
+        b = self.seller.preview_all()
+        win = sellearly.sale_value(pair_of("win", "win"), {"kalshi": KALSHI, "polymarket": POLY},
+                                   {"kalshi": 0.07, "polymarket": 0.0695})
+        self.assertEqual((b["profitable"]["arbs"], b["profitable"]["pairs"]), (1, 60))
+        self.assertAlmostEqual(b["profitable"]["profit"], round(win["profit"], 2))
+        self.assertEqual((b["everything"]["arbs"], b["everything"]["pairs"], b["unsellable"]), (2, 200, 1))
+        self.assertLess(b["everything"]["profit"], 0)                     # "lose" sells under what it cost
+        self.assertEqual(b["everything"]["hold_profit"], 10.0)            # 200 pairs at 95c paying $1
+        shut = next(r for r in b["arbs"] if r["game"] == "shut")
+        self.assertIn("Kalshi market isn't open", shut["why"])
+
+    def test_selling_the_profitable_ones_leaves_the_rest(self):
+        b = self.seller.preview_all()
+        res = self.seller.execute_all(b["id"], "profitable")
+        self.assertEqual((res["status"], len(res["results"])), ("ok", 1))
+        self.assertEqual({o[1] for o in self.k.orders + self.p.orders}, {"KX-DAMON-win", "oscar-damon-win"})
+        self.assertEqual(self.arb("win")["legs"][0]["shares"], 40)
+        self.assertEqual(self.arb("lose")["legs"][0]["shares"], 100)
+        with self.assertRaisesRegex(TradeError, "already used"):
+            self.seller.execute_all(b["id"], "profitable")
+
+    def test_selling_everything_takes_the_loss_too(self):
+        res = self.seller.execute_all(self.seller.preview_all()["id"], "everything")
+        self.assertEqual([r["status"] for r in res["results"]], ["ok", "ok"])
+        lose = self.arb("lose")
+        self.assertTrue(lose["closed"])
+        self.assertLess(lose["closed"]["profit"], 0)
+        # Polymarket's book is the thinner one, so it went first; Kalshi's second leg (bid 48c) could go 5c under the
+        # preview instead of stopping at break-even, which a sale at a loss never reaches
+        self.assertEqual(next(o for o in self.p.orders if o[1] == "oscar-damon-lose")[4], 0.45)
+        self.assertEqual(next(o for o in self.k.orders if o[1] == "KX-DAMON-lose")[4], 0.43)
+        self.assertNotIn("closed", self.arb("shut"))
+
+    def test_one_arb_failing_does_not_stop_the_rest(self):
+        self.k.fail = {"KX-DAMON-win"}
+        res = self.seller.execute_all(self.seller.preview_all()["id"], "everything")
+        self.assertEqual(sorted(r["status"] for r in res["results"]), ["error", "ok"])
+        self.assertEqual(res["status"], "partial")
+        self.assertTrue(self.arb("lose")["closed"])
+
+    def test_the_list_has_the_totals_the_card_adds_up(self):
+        m = self.s.my_arbs
+        m._live = {(l["exchange"], l["market_id"]): {"state": "open"} for a in m.items for l in a["legs"]}
+        m._books = {("kalshi", k): v for k, v in self.k.books.items()} | {("polymarket", k): v for k, v in self.p.books.items()}
+        m.fee_coef = lambda ex, mid: 0.07 if ex == "kalshi" else 0.0695
+        rows = {r["game"]: r for r in m._rows([dict(a) for a in m.items])}
+        b = self.seller.preview_all()
+        self.assertAlmostEqual(rows["win"]["sell_profit"], b["profitable"]["profit"])
+        self.assertAlmostEqual(rows["win"]["sell_all_profit"] + rows["lose"]["sell_all_profit"], b["everything"]["profit"], 2)
+        self.assertEqual(rows["win"]["hold_all_profit"] + rows["lose"]["hold_all_profit"], b["everything"]["hold_profit"])

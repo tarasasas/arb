@@ -82,8 +82,8 @@ def floor_price(ex, need, qty, coef):
 class EarlySeller(ArbOrders):
     WHAT = "Selling early"
 
-    def preview(self, arb_id):
-        a = self._arb(arb_id)
+    def _read(self, a):
+        """Both legs' market details and order books, read now: (legs, info, levels, coef, step)."""
         if a.get("closed") or a.get("paid_out"):
             raise TradeError("That arb is already closed.")
         legs = {l["exchange"]: l for l in a["legs"]}
@@ -101,51 +101,128 @@ class EarlySeller(ArbOrders):
             for job in [pool.submit(read, ex) for ex in legs]:
                 job.result()
         coef = {ex: self._coef(ex, legs[ex]["market_id"], info[ex]) for ex in legs}
-        step = max(1.0, *(info[ex]["min_qty"] for ex in legs))
+        return legs, info, levels, coef, max(1.0, *(info[ex]["min_qty"] for ex in legs))
+
+    def _plans(self, a, legs, info, levels, coef, step):
+        """(best, everything): selling the pairs that make the most (offered only at a profit), and selling every pair
+        the books take whatever it makes (Sell all → everything). Each a plan for _run; best always has why/ok."""
         payout = float(a.get("payout") or 1.0)
-        plan = {"id": uuid.uuid4().hex, "created": time.time(), "arb_id": arb_id, "game": a.get("game"),
-                "closes": a.get("closes"), "payout": payout, "ok": False,
-                "extra": [{"exchange": NAMES[ex], "side": l["side"],
-                           "shares": round(l["shares"] - min(x["shares"] for x in legs.values()), 4)}
-                          for ex, l in legs.items() if l["shares"] - min(x["shares"] for x in legs.values()) > 0.005]}
+        held = min(x["shares"] for x in legs.values())
+        base = {"created": time.time(), "arb_id": a["id"], "game": a.get("game"), "closes": a.get("closes"),
+                "payout": payout, "ok": False,
+                "extra": [{"exchange": NAMES[ex], "side": l["side"], "shares": round(l["shares"] - held, 4)}
+                          for ex, l in legs.items() if l["shares"] - held > 0.005]}
         shut = [NAMES[ex] for ex in legs if not info[ex]["open"]]
         v = None if shut else sale_value(a, levels, coef, step)
-        if shut:
-            plan["why"] = f"the {' and '.join(shut)} market isn't open for trading"
-        elif v is None:
-            empty = [NAMES[ex] for ex in legs if not bids_for(levels[ex], legs[ex]["side"])]
-            plan["why"] = f"no buyers on {' or '.join(empty) or 'one site'} right now"
         if v is None:
-            self._keep(plan)
-            return plan
-        n = v["n"]
-        plan.update({"pairs": v["pairs"], "n": n, "kept": round(v["pairs"] - n, 4), "pair_cost": round(v["pair_cost"], 4),
-                     "proceeds": round(v["proceeds"], 2), "cost": round(v["cost"], 2), "profit": round(v["profit"], 2),
-                     "roi": v["profit"] / v["cost"] if v["cost"] else None,
-                     "hold_payout": round(payout * n, 2), "hold_profit": round(payout * n - v["cost"], 2),
-                     "all": {"n": v["all"]["n"], "proceeds": round(v["all"]["proceeds"], 2),
-                             "profit": round(v["all"]["profit"], 2)},
-                     "legs": {ex: {"exchange": ex, "market_id": legs[ex]["market_id"], "side": legs[ex]["side"],
-                                   "title": legs[ex].get("title"), "qty": n, "limit": o["limit"],
-                                   "amount": round(o["amount"], 4), "fee": round(o["fee"], 4), "fee_coef": coef[ex],
-                                   "min_qty": info[ex]["min_qty"]} for ex, o in v["legs"].items()}})
+            empty = [NAMES[ex] for ex in legs if not bids_for(levels[ex], legs[ex]["side"])]
+            why = (f"the {' and '.join(shut)} market isn't open for trading" if shut
+                   else f"no buyers on {' or '.join(empty) or 'one site'} right now")
+            return {**base, "id": uuid.uuid4().hex, "why": why}, None
+
+        def plan(sale, pick):
+            n = sale["n"]
+            out = {**base, "id": uuid.uuid4().hex, "pairs": v["pairs"], "n": n, "kept": round(v["pairs"] - n, 4),
+                   "pair_cost": round(v["pair_cost"], 4), "proceeds": round(sale["proceeds"], 2),
+                   "cost": round(sale["cost"], 2), "profit": round(sale["profit"], 2),
+                   "roi": sale["profit"] / sale["cost"] if sale["cost"] else None,
+                   "hold_payout": round(payout * n, 2), "hold_profit": round(payout * n - sale["cost"], 2), "pick": pick,
+                   "legs": {ex: {"exchange": ex, "market_id": legs[ex]["market_id"], "side": legs[ex]["side"],
+                                 "title": legs[ex].get("title"), "qty": n, "limit": o["limit"],
+                                 "amount": round(o["amount"], 4), "fee": round(o["fee"], 4), "fee_coef": coef[ex],
+                                 "min_qty": info[ex]["min_qty"]} for ex, o in sale["legs"].items()}}
+            # the thinner book first: if it doesn't sell, nothing has
+            spare = {ex: sum(q for p, q in bids_for(levels[ex], legs[ex]["side"]) if p >= o["limit"] - 1e-9) - n
+                     for ex, o in sale["legs"].items()}
+            out["first"] = min(spare, key=lambda ex: spare[ex])
+            return out
+        best, everything = plan(v, "best"), plan(v["all"], "everything")
+        best["all"] = {"n": everything["n"], "proceeds": everything["proceeds"], "profit": everything["profit"]}
         if v["profit"] < 0.01:
-            plan["why"] = (f"selling now would {'lose' if v['profit'] < 0 else 'make'} ${abs(v['profit']):.2f} "
+            best["why"] = (f"selling now would {'lose' if v['profit'] < 0 else 'make'} ${abs(v['profit']):.2f} "
                            f"against what the pairs cost (best bids: " + ", ".join(
-                               f"{NAMES[ex]} {legs[ex]['side'].upper()} {o['limit'] * 100:.1f}¢" for ex, o in v["legs"].items()) + ")")
+                               f"{NAMES[ex]} {legs[ex]['side'].upper()} {o['limit'] * 100:.1f}¢"
+                               for ex, o in v["legs"].items()) + ")")
         else:
-            plan["ok"] = True
-        # the thinner book first: if it doesn't sell, nothing has
-        spare = {ex: sum(q for p, q in bids_for(levels[ex], legs[ex]["side"]) if p >= o["limit"] - 1e-9) - n
-                 for ex, o in v["legs"].items()}
-        plan["first"] = min(spare, key=lambda ex: spare[ex])
-        self._keep(plan)
-        return plan
+            best["ok"] = True
+        everything["ok"] = True                     # chosen knowing what it makes or loses
+        return best, everything
+
+    def preview(self, arb_id):
+        a = self._arb(arb_id)
+        best, _ = self._plans(a, *self._read(a))
+        self._keep(best)
+        return best
 
     def execute(self, plan_id):
         plan = self._take_plan(plan_id, "Sell")
         if not plan.get("ok"):
             raise TradeError(f"Not selling: {plan.get('why') or 'not a profit right now'}.")
+        return self._run(plan)
+
+    # ---- Sell all ------------------------------------------------------------------------------------------
+
+    def preview_all(self):
+        """Every open arb priced on the live books: what selling the profitable ones would make, and what selling
+        everything would make or lose, against what those pairs cost and what holding them pays."""
+        mine = self.scanner.my_arbs
+        with mine.lock:
+            ids = [a["id"] for a in mine.items if not a.get("closed") and not a.get("paid_out")]
+        self._venues()
+
+        def one(arb_id):
+            try:
+                a = self._arb(arb_id)
+                best, everything = self._plans(a, *self._read(a))
+                return {"arb_id": arb_id, "game": a.get("game"), "best": best, "everything": everything,
+                        "why": None if everything else best.get("why")}
+            except Exception as e:
+                return {"arb_id": arb_id, "game": None, "best": None, "everything": None,
+                        "why": getattr(e, "detail", None) or str(e)}
+        with LanePool(min(4, max(1, len(ids)))) as pool:
+            rows = list(pool.map(one, ids))
+
+        def total(plans):
+            return {"arbs": len(plans), "pairs": round(sum(p["n"] for p in plans), 4),
+                    "proceeds": round(sum(p["proceeds"] for p in plans), 2), "cost": round(sum(p["cost"] for p in plans), 2),
+                    "profit": round(sum(p["profit"] for p in plans), 2),
+                    "hold_profit": round(sum(p["hold_profit"] for p in plans), 2)}
+        batch = {"id": uuid.uuid4().hex, "created": time.time(), "arbs": rows,
+                 "profitable": total([r["best"] for r in rows if r["best"] and r["best"]["ok"]]),
+                 "everything": total([r["everything"] for r in rows if r["everything"]]),
+                 "unsellable": sum(1 for r in rows if not r["everything"])}
+        self._keep(batch)
+        return batch
+
+    def execute_all(self, batch_id, which):
+        """Sell the arbs a Sell all preview priced: which = "profitable" (the ones that make money, as single Sell
+        would) or "everything" (every pair the books take). One arb at a time; one failing doesn't stop the rest."""
+        batch = self._take_plan(batch_id, "Sell all")
+        if which not in ("profitable", "everything"):
+            raise TradeError("Choose the profitable arbs or everything.")
+        plans = [r["best"] for r in batch["arbs"] if r["best"] and r["best"]["ok"]] if which == "profitable" else \
+            [r["everything"] for r in batch["arbs"] if r["everything"]]
+        if not plans:
+            raise TradeError("Nothing to sell.")
+        results = []
+        for plan in plans:
+            try:
+                res = self._run(plan)
+            except TradeError as e:
+                res = {"status": "error", "text": str(e)}
+            results.append({"game": plan["game"], **res})
+        sold = [r for r in results if r["status"] in ("ok", "partial")]
+        proceeds = round(sum(r.get("proceeds") or 0 for r in sold), 2)
+        profit = round(sum(r.get("profit") or 0 for r in sold if r["status"] == "ok"), 2)
+        bad = len(results) - len([r for r in results if r["status"] == "ok"])
+        return {"status": "ok" if not bad else "partial", "results": results, "proceeds": proceeds, "profit": profit,
+                "text": f"Sold {len(sold)} of {len(plans)} arbs for ${proceeds:.2f} after fees"
+                        + (f": {'+' if profit >= 0 else '-'}${abs(profit):.2f} against what they cost" if sold else "")
+                        + (f". {bad} didn't fully sell: see below." if bad else ".")}
+
+    # ---- the orders ----------------------------------------------------------------------------------------
+
+    def _run(self, plan):
         venues = self._venues()
         a_ex = plan["first"]
         b_ex = "polymarket" if a_ex == "kalshi" else "kalshi"
@@ -170,10 +247,11 @@ class EarlySeller(ArbOrders):
                     return {"status": "no_fill",
                             "text": f"Nothing sold on {NAMES[a_ex]} (the price moved). Nothing changed: press Sell again."}
                 sold[a_ex] = (fa.qty, fa.amount, fa.fee)
-                # The other leg, for exactly what sold: a little under its preview price if the book moved, never
-                # below where the whole sale still covers what these pairs cost.
+                # The other leg, for exactly what sold: down to SECOND_LEG_SLIP under its preview price if the book
+                # moved, and a sale that makes money never below where it still covers what these pairs cost.
                 need = fa.qty * plan["pair_cost"] - (fa.amount - fa.fee)
-                floor = max(floor_price(b_ex, need, fa.qty, lb["fee_coef"]), round(lb["limit"] - SECOND_LEG_SLIP, 2))
+                even, slip = floor_price(b_ex, need, fa.qty, lb["fee_coef"]), round(lb["limit"] - SECOND_LEG_SLIP, 2)
+                floor = max(even, slip) if even <= lb["limit"] + 1e-9 else max(0.01, slip)   # (a sale at a loss)
                 for attempt in range(1 + config.SECOND_LEG_RETRIES):
                     left = floor_to(fa.qty - got[0], lb["min_qty"])
                     if left <= 0:

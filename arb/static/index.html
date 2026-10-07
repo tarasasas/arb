@@ -1654,10 +1654,13 @@ function renderMyArbs() {
           style="${p < 0 ? "color:var(--critical)" : ""}">${ratio(p, c)}</div>
           <div class="sub">${p < 0 ? "−" : ""}${money(Math.abs(p))} profit on ${money(c)} spent${unknown
             ? ` · ${unknown} sold early by hand not counted (sale price not recorded)` : ""}</div></div>`; })()}
+      ${sellAllCard(open)}
     </div>
     ${payoutChartHtml(open)}
     <div class="toolrow"><button data-mine="sync">Sync now</button>
       <button data-mine="add" title="Positions on both sites are paired automatically. Anything else: Track this arb on an opportunity, or add it here.">Add by hand</button>
+      ${open.some(a => a.phase === "active" && a.sell_all_profit != null) ? `<button data-mine="sellall" class="trade" ${tradingOn() ? ""
+        : "disabled title='Needs both API keys'"} title="Price every active arb on the live books, then sell the ones that make money, or everything">Sell all…</button>` : ""}
       <span class="muted">${syncLine()}</span></div>
     <div class="table-wrap"><table>${head}<tbody>${rows(open) ||
       `<tr><td colspan="10" class="empty">No active arbs yet.</td></tr>`}</tbody></table></div>
@@ -1688,6 +1691,7 @@ document.getElementById("myarbs").addEventListener("click", async e => {
   if (b.dataset.mine === "edit" && a) openTrack(null, a);
   if (b.dataset.mine === "balance" && a) openBalance(a);
   if (b.dataset.mine === "sell" && a) openSell(a);
+  if (b.dataset.mine === "sellall") openSellAll();
   if (b.dataset.mine === "del" && a && confirm(`Remove "${a.game}" from My arbs?`)) {
     try { await post("/api/myarbs/delete", { id: a.id }); } catch (err) { alert(err.message); }
     loadMyArbs();
@@ -1784,6 +1788,80 @@ async function openBalance(a) {
         <div class="actions"><button onclick="closeModal()">Close</button></div>`);
     } catch (e) {
       showModal(`<h3>Balance</h3><div class="alert">${esc(e.message)}</div>
+        <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+    }
+    loadMyArbs();
+  });
+}
+
+// If sold early now: the active arbs' totals from Worth now (order books as last read): the ones that make money, and all.
+const signedMoney = v => `${v >= 0 ? "+" : "−"}${money(Math.abs(v))}`;
+function sellAllCard(open) {
+  const act = open.filter(a => a.phase === "active" && a.sell_all_profit != null);
+  if (!act.length) return "";
+  const win = act.filter(a => a.sell_profit >= 0.01), sum = (l, k) => l.reduce((s, a) => s + (a[k] || 0), 0);
+  const gain = sum(win, "sell_profit"), all = sum(act, "sell_all_profit");
+  return `<div class="sumcard" title="From Worth now: both order books as last read (about every 30 seconds), both sites' fees off. Sell all reads them again first.">
+    <div class="label">If sold early now ≈</div>
+    <div class="big ${gain > 0 ? "profit" : ""}">${win.length ? signedMoney(gain) : "–"}</div>
+    <div class="sub">${win.length ? `the ${win.length} that make money (held to the end: ${signedMoney(sum(win, "hold_profit_sold"))})`
+      : "none would make money right now"} · everything: <b style="${all < 0 ? "color:var(--critical)" : ""}">${signedMoney(all)}</b>
+      on ${act.length} (held: ${signedMoney(sum(act, "hold_all_profit"))})</div></div>`;
+}
+
+// Sell all: every active arb priced on the live books, then the ones that make money, or everything.
+async function openSellAll() {
+  showModal(`<h3>Sell all early</h3><div class="muted">Checking every active arb's order books…</div>`);
+  let b;
+  try { b = await post("/api/myarbs/sellall/preview", {}); }
+  catch (e) {
+    return showModal(`<h3>Sell all</h3><div class="alert">${esc(e.message)}</div>
+      <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+  }
+  const rows = b.arbs.filter(r => r.everything).sort((x, y) => y.everything.profit - x.everything.profit).map(r => {
+    const best = r.best, all = r.everything, makes = best && best.ok;
+    return `<tr><td>${esc(r.game || "")}</td>
+      <td class="num">${makes ? `${signedMoney(best.profit)}<div class="muted">${compact(best.n)} pairs for ${money(best.proceeds)}</div>`
+        : `<span class="muted">–</span>`}</td>
+      <td class="num"><span style="${all.profit < 0 ? "color:var(--critical)" : ""}">${signedMoney(all.profit)}</span>
+        <div class="muted">${compact(all.n)}${all.kept > 0 ? ` of ${compact(all.pairs)}` : ""} pairs for ${money(all.proceeds)}</div></td>
+      <td class="num">${signedMoney(all.hold_profit)}</td></tr>`;
+  }).join("");
+  const skip = b.arbs.filter(r => !r.everything).map(r => `<li>${esc(r.game || r.arb_id)}: ${esc(r.why || "can't be priced")}</li>`).join("");
+  const P = b.profitable, E = b.everything;
+  const opt = (k, t, title, note) => t.arbs ? `<div class="bal-opt${k === "profitable" ? " best" : ""}"><b>${title}</b>
+      <div>${t.arbs} arb${t.arbs === 1 ? "" : "s"}, ${compact(t.pairs)} pairs, for ${money(t.proceeds)} after fees. They cost ${money(t.cost)}:
+        <b class="${t.profit > 0 ? "profit" : ""}" style="${t.profit < 0 ? "color:var(--critical)" : ""}">${signedMoney(t.profit)}</b>.
+        Held to the end they'd make ${signedMoney(t.hold_profit)}.</div>
+      <div class="muted">${note}</div>
+      <button class="${k === "profitable" ? "trade" : ""}" data-sellall="${k}">${k === "profitable" ? "Sell these" : "Sell everything"}
+        (${signedMoney(t.profit)})</button></div>`
+    : `<div class="bal-opt off"><b>${title}</b><div class="muted">${k === "profitable" ? "None would make money right now." : "Nothing can be sold right now."}</div></div>`;
+  showModal(`<h3>Sell all early</h3>
+    <div class="table-wrap"><table><thead><tr><th>Arb</th><th class="num" title="The pairs that make the most, as Sell would">Sell the ones that make money</th>
+      <th class="num" title="Every pair the books take">Sell everything</th><th class="num" title="What those pairs make if held until they pay out">Held to the end</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="empty">No arb can be sold right now.</td></tr>`}</tbody></table></div>
+    ${opt("profitable", P, "Sell the ones that make money", "Each sells the pairs that make the most, the same as its own Sell button; the rest stay held.")}
+    ${opt("everything", E, "Sell everything", `Every pair the books take, including ${E.profit < P.profit ? "the ones that sell for less than they cost" : "all of them"}: you get the money back now${E.profit < 0 ? ", at a loss" : ""}.`)}
+    ${skip ? `<details><summary class="muted">${b.unsellable} can't be sold now</summary><ul class="muted">${skip}</ul></details>` : ""}
+    <div class="policy">One arb at a time, the same orders as Sell: the thinner book first, immediate-or-cancel at no less than the price shown,
+      then the other site for exactly what sold, at no less than 5¢ under its price shown (a sale that makes money: never below
+      break-even). If prices moved, fewer sell, never cheaper; anything left unpaired stays in My arbs for Balance. Extra shares that
+      aren't part of a pair stay. This preview is good for 30 seconds.</div>
+    <div class="actions"><button onclick="closeModal()">Cancel</button></div>`);
+  document.querySelectorAll("[data-sellall]").forEach(btn => btn.onclick = async () => {
+    const k = btn.dataset.sellall, t = b[k];
+    if (k === "everything" && !confirm(`Sell all ${t.arbs} arbs now for about ${money(t.proceeds)}?\n\nThat's ${signedMoney(t.profit)} against what they ` +
+        `cost; held to the end they'd make ${signedMoney(t.hold_profit)}.`)) return;
+    document.querySelectorAll("[data-sellall]").forEach(x => x.disabled = true);
+    btn.textContent = `Selling ${t.arbs} arb${t.arbs === 1 ? "" : "s"}…`;
+    try {
+      const res = await post("/api/myarbs/sellall/execute", { plan_id: b.id, which: k });
+      showModal(`<h3>Sell all</h3><div class="${res.status === "ok" ? "" : "alert"}">${esc(res.text)}</div>
+        <ul>${res.results.map(r => `<li><b>${esc(r.game || "")}</b>: ${esc(r.text)}</li>`).join("")}</ul>
+        <div class="actions"><button onclick="closeModal()">Close</button></div>`);
+    } catch (e) {
+      showModal(`<h3>Sell all</h3><div class="alert">${esc(e.message)}</div>
         <div class="actions"><button onclick="closeModal()">Close</button></div>`);
     }
     loadMyArbs();
